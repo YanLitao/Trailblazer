@@ -1,1 +1,1 @@
-# Search_Copilot
+# Search-Copilot
