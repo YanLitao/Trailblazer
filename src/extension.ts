@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
-import { getQuestion, getCodeContext, preProcessCodeLine, getAccurateLineNumber } from './codeContextUtils';
+import { getQuestion, getSurroundingCode, preProcessCodeLine, getAccurateLineNumber, getDestructuringAssignment } from './codeContextUtils';
+import { tool } from '@langchain/core/tools';
 
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
@@ -69,9 +70,11 @@ const task1JsonSchema = {
                         properties: {
                             file_uri: { type: "string" },
                             invoke_variable: { type: "string" },
-                            code_line: { type: "string" }  // Ensure code_line is a single line
+                            code_line: { type: "string" },  // Single line of the relevant code
+                            line_number: { type: "integer" },  // Accurate line number from the code context
+                            full_statement: { type: "string" }  // Full statement for more context
                         },
-                        required: ["file_uri", "invoke_variable", "code_line"]
+                        required: ["file_uri", "invoke_variable", "code_line", "full_statement"]
                     },
                     num_results: { type: "integer" }
                 },
@@ -92,17 +95,31 @@ const task2JsonSchema = {
                 type: "object",
                 properties: {
                     sub_question: { type: "string" },
+                    tool: { type: "integer" },
+                    code_context: {
+                        type: "object",
+                        properties: {
+                            file_uri: { type: "string" },
+                            invoke_variable: { type: "string" },
+                            code_line: { type: "string" },  // Single line where the result was found
+                            line_number: { type: "integer" },  // Accurate line number from Task 1
+                            full_statement: { type: "string" },  // Full statement for more context
+                        },
+                        required: ["file_uri", "invoke_variable", "code_line", "line_number", "full_statement"]
+                    },
+                    num_results: { type: "integer" },
                     filtered_results: {
                         type: "array",
                         items: {
                             type: "object",
                             properties: {
                                 file_uri: { type: "string" },
-                                line_number: { type: "integer" },
                                 code_line: { type: "string" },
+                                line_number: { type: "integer" },
+                                full_statement: { type: "string" },  // Full statement for more context
                                 explanation: { type: "string" }
                             },
-                            required: ["file_uri", "line_number", "code", "explanation"]
+                            required: ["file_uri", "code_line", "line_number", "full_statement", "explanation"]
                         }
                     },
                     status: { type: "string" },
@@ -122,9 +139,9 @@ const task2JsonSchema = {
 const task3JsonSchema = {
     type: "object",
     properties: {
-        final_decision_sufficient: { type: "boolean" }, // Changing to boolean
-        final_answer: { type: "string" }, // If insufficient, provide the reason
-        additional_requirements: { // If sufficient, this should be an empty array
+        final_decision_sufficient: { type: "boolean" },
+        final_answer: { type: "string" },
+        additional_requirements: {
             type: "array",
             items: {
                 type: "object",
@@ -136,15 +153,16 @@ const task3JsonSchema = {
                         properties: {
                             file_uri: { type: "string" },
                             invoke_variable: { type: "string" },
-                            code_line: { type: "string" },  // Ensure code_line is a single line
-                            line_number: { type: "integer" }  // Accurate line number from Task 1
+                            code_line: { type: "string" },  // Single line
+                            line_number: { type: "integer" },  // Accurate line number
+                            full_statement: { type: "string" }  // Full statement for more context
                         },
-                        required: ["file_uri", "invoke_variable", "code_line", "line_number"]
+                        required: ["file_uri", "invoke_variable", "code_line", "line_number", "full_statement"]
                     },
                     num_results: { type: "integer" },
                     reason: { type: "string" }
                 },
-                required: ["sub_question", "tool", "code_context", "num_results"]
+                required: ["sub_question", "tool", "code_context", "num_results", "reason"]
             }
         }
     },
@@ -219,21 +237,22 @@ class Agent {
 
     // Task 1: Refine question and break it into sub-problems
     async runTask1(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
-        const { contextText: codeContext, startContextLine } = await getCodeContext(uri, startLine, endLine);
+        const { contextText: surroundingCode, startContextLine } = await getSurroundingCode(uri, startLine, endLine); // Get surrounding code
+
         // Include the URI and line number in the input JSON
         const inputJson = {
             "task": 1,
             "question": question,
-            "code_context": codeContext,
+            "surrounding_code": surroundingCode,  // Include the surrounding code
             "file_uri": uri.toString(),  // Include the correct file path (URI)
-            "line_number": startLine,
-            "allowed_tools": allowedTools
+            "line_number": startLine,  // Original line number where the cursor is
+            "allowed_tools": allowedTools  // Allowed tools for agent to use
         };
 
         console.log(`Task 1 Input: ${JSON.stringify(inputJson)}`);
 
-        const response = await this._callAgentAPI(inputJson, 1, task1JsonSchema);
-        const task1Output = JSON.parse(response);
+        const response = await this._callAgentAPI(inputJson, 1, task1JsonSchema); // Make API call
+        const task1Output = JSON.parse(response); // Parse the response
 
         // Log Task 1 output
         console.log(`Task 1 Output: ${JSON.stringify(task1Output)}`);
@@ -244,21 +263,28 @@ class Agent {
         // Iterate over sub-problems to compute accurate line numbers for the selected symbols
         for (const subProblem of task1Output.sub_problems) {
             if (uri) {
-                subProblem.code_context.file_uri = uri.toString();
+                subProblem.code_context.file_uri = uri.toString();  // Ensure file_uri is set correctly
             }
+
             const invokeVariable = subProblem.code_context.invoke_variable;
-            const codeLine = preProcessCodeLine(subProblem);
+            const codeLine = preProcessCodeLine(subProblem);  // Preprocess the code line
 
             // If we found a valid line with the invoke_variable, proceed with finding the accurate line number
             if (codeLine) {
-                const accurateLineNumber = getAccurateLineNumber(codeContext, codeLine, startContextLine);
+                const accurateLineNumber = getAccurateLineNumber(surroundingCode, codeLine, startContextLine);  // Pass the correct parameters
 
                 if (accurateLineNumber !== null) {
-                    subProblem.code_context.line_number = accurateLineNumber;
+                    subProblem.code_context.line_number = accurateLineNumber;  // Set accurate line number
                     console.log(`Accurate line number for invoke_variable "${invokeVariable}" is: ${accurateLineNumber}`);
+
+                    // Get full statement for destructuring assignments
+                    const fullStatement = await getDestructuringAssignment(subProblem.code_context.file_uri, accurateLineNumber);  // Await if async
+                    subProblem.code_context.full_statement = fullStatement;  // Add full statement to the context
                 } else {
                     console.error(`Failed to find accurate line number for invoke_variable "${invokeVariable}" in code_line: ${codeLine}`);
                 }
+            } else {
+                console.error(`preProcessCodeLine failed for sub_problem "${subProblem.sub_question}".`);
             }
         }
 
@@ -304,18 +330,6 @@ class Agent {
                 const pos = new vscode.Position(accurateLineNumber, offset);
                 const loc = new vscode.Location(fileUri, pos);
 
-                // Create start and end positions, adjusting for the correct line and offset
-                const startPos = new vscode.Position(accurateLineNumber, offset); // Start position at the offset
-                const endPos = new vscode.Position(accurateLineNumber, offset + variableName.length); // End position covers the full variable
-
-                // Create a range covering the entire variable
-                const variableRange = new vscode.Range(startPos, endPos);
-                const document = await vscode.workspace.openTextDocument(fileUri);  // Open the document
-                const rangeText = document.getText(variableRange);  // Get the text from the range
-
-                // Log the calculated range and the corresponding text
-                console.log(`Double check whether ${rangeText} is the variable "${variableName}"`);
-
                 // Execute VSCode API commands based on the tool selected
                 let results = [];
                 if (subProblem.tool === allowedTools["Find References"]) {
@@ -324,14 +338,14 @@ class Agent {
                         'vscode.executeReferenceProvider', loc.uri, loc.range.start
                     );
                     console.log(`Reference locations found: ${JSON.stringify(referenceLocations)}`);
-                    results = this._prepareResults(referenceLocations as vscode.Location[] | vscode.LocationLink[], subProblem);
+                    results = await this._prepareResults(referenceLocations as vscode.Location[] | vscode.LocationLink[], subProblem);
                 } else if (subProblem.tool === allowedTools["Go to Definition"]) {
                     console.log(`Going to definition for "${variableName}"`);
                     const definitionLocations = await vscode.commands.executeCommand<vscode.Location[] | vscode.LocationLink[]>(
                         'vscode.executeDefinitionProvider', loc.uri, loc.range.start
                     );
                     console.log(`Definition locations found: ${JSON.stringify(definitionLocations)}`);
-                    results = this._prepareResults(definitionLocations, subProblem);
+                    results = await this._prepareResults(definitionLocations, subProblem);
                 }
 
                 if (results.length === 0) {
@@ -343,7 +357,7 @@ class Agent {
                     sub_question: subProblem.sub_question,
                     tool: subProblem.tool,
                     code_context: subProblem.code_context,
-                    num_results: subProblem.num_results, // Number of results to be selected by the agent
+                    num_results: results.length,
                     results: results
                 });
             } else {
@@ -366,26 +380,35 @@ class Agent {
         return task2Output;  // Return the filtered and ranked results
     }
 
-    _prepareResults(locations: vscode.Location[] | vscode.LocationLink[], subProblem: any) {
+    async _prepareResults(locations: vscode.Location[] | vscode.LocationLink[], subProblem: any) {
         const results: any[] = [];
         if (!locations || locations.length === 0) {
             console.warn(`No locations found for sub-problem: ${subProblem.sub_question}`);
             return results; // Return empty if no locations are found
         }
-        locations.forEach((location: vscode.Location | vscode.LocationLink) => {
+
+        for (const location of locations) {
             const lineNumber = location instanceof vscode.Location ? location.range.start.line : (location as vscode.LocationLink).targetRange.start.line;
-            const fileUri = location instanceof vscode.Location ? location.uri.toString() : (location as vscode.LocationLink).targetUri.toString(); // Handle multiple files here
+            const fileUri = location instanceof vscode.Location ? location.uri.toString() : (location as vscode.LocationLink).targetUri.toString();
+
+            // Open the document to retrieve the full statement
+            const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(fileUri));
+
+            // Use a helper to extract the full statement
+            const fullStatement = await getDestructuringAssignment(document, lineNumber);
 
             // Log result details
             console.log(`Result found at file: ${fileUri}, line: ${lineNumber}`);
+            console.log(`Full statement retrieved: ${fullStatement}`);
 
             // Prepare the results using the correct file path (Uri) and line number
             results.push({
                 file_uri: fileUri,  // Correct Uri for the result's file
                 line_number: lineNumber,  // Line number in the target file
-                code_line: fileUri
+                code_line: document.lineAt(lineNumber).text.trim(), // The specific line that matched the result
+                full_statement: fullStatement // The entire statement that includes this line
             });
-        });
+        }
 
         return results;
     }
@@ -444,7 +467,7 @@ class Agent {
             
                     When proposing sub-questions:
                     - For each sub-question, check the exploration history (provided in the input) to see if there are any starting points (code contexts) already identified in the history that can be used to explore the sub-question.
-                    - If a valid starting point is found, reuse it and include the file, invoke_variable, and code_line in the output.
+                    - If a valid starting point is found, reuse it and include the file, invoke_variable, code_line, and full_statement in the output.
                     - If no valid starting point exists in the exploration history, leave the code_context empty for that sub-question.
             
                     The output format must strictly follow the provided JSON schema:
@@ -467,7 +490,16 @@ class Agent {
         const systemMessage = new SystemMessage(`
             You are Agent 0, an assistant designed to help users explore and understand codebases by performing tasks using VSCode tools. 
             Your role depends on the task in the input, and you must carefully follow task-specific instructions and formats.
-    
+            
+            General Instructions:
+            - Understand the Input: Read the input carefully to determine which task to perform.
+            - Maintain Consistency: The refined_question should remain consistent across all tasks and throughout the entire exploration process.
+            - Ensure Thorough Exploration: Strive to explore the codebase deeply enough to fully answer the refined question. Consider related functions, classes, or files that may be necessary to examine. 
+            - Generate Additional Sub-Questions When Necessary: If initial explorations are insufficient, create further sub-questions to delve deeper into the code.
+            - Avoid Redundancy: Always consider the exploration_history to prevent redundant efforts.
+            - Professionalism: Use clear, concise, and professional language in your responses.
+            - Strict Formats: Adhere strictly to the output JSON schemas specified for each task.
+
             ${taskInstructions}
             
             Ensure that your output matches the provided JSON schema.

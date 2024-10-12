@@ -8,7 +8,7 @@ export async function getQuestion(code: string) {
 }
 
 // Helper function to get the code context (3 lines before and after the selection)
-export async function getCodeContext(uri: vscode.Uri, startLine: number, endLine: number): Promise<{ contextText: string, startContextLine: number }> {
+export async function getSurroundingCode(uri: vscode.Uri, startLine: number, endLine: number): Promise<{ contextText: string, startContextLine: number }> {
     const document = await vscode.workspace.openTextDocument(uri);
     const totalLines = document.lineCount;
 
@@ -78,4 +78,67 @@ export function preProcessCodeLine(subProblem: any): string | null {
     // If no line contains the invoke_variable, log an error and return null
     console.error(`No line containing invoke_variable "${invokeVariable}" found in code_line: ${codeLine}`);
     return null;
+}
+
+export async function getDestructuringAssignment(document: vscode.TextDocument, startLine: number): Promise<string> {
+    const totalLines = document.lineCount;
+    let start = startLine;
+    let end = startLine;
+
+    let openBracesCount = 0;
+    let foundStartBrace = false;
+
+    // Function to count open and close braces in a line
+    const countBraces = (lineText: string) => {
+        let open = 0, close = 0;
+        for (const char of lineText) {
+            if (char === '{') open++;
+            if (char === '}') close++;
+        }
+        return { open, close };
+    };
+
+    // Traverse upwards to find the start of the destructuring block
+    while (start >= 0) {
+        const lineText = document.lineAt(start).text;
+
+        const { open, close } = countBraces(lineText);
+
+        openBracesCount += open - close;  // Track the balance of open/close braces
+
+        // If we find the opening brace '{', stop moving upwards
+        if (openBracesCount > 0 && lineText.includes('{')) {
+            foundStartBrace = true;
+            break;
+        }
+
+        start--;  // Move up one line
+    }
+
+    // If no start brace was found, return just the current line as default
+    if (!foundStartBrace) {
+        return document.lineAt(startLine).text;
+    }
+
+    // Reset the brace count for downward traversal
+    openBracesCount = 0;
+
+    // Traverse downwards to find the end of the destructuring block
+    while (end < totalLines) {
+        const lineText = document.lineAt(end).text;
+
+        const { open, close } = countBraces(lineText);
+        openBracesCount += open - close;
+
+        // If the closing brace '}' is reached and all braces are balanced, stop
+        if (openBracesCount === 0 && lineText.includes('}')) {
+            break;
+        }
+
+        end++;  // Move down one line
+    }
+
+    // Extract the full destructuring block between start and end
+    const range = new vscode.Range(start, 0, end, document.lineAt(end).text.length);
+    return document.getText(range);
 }
