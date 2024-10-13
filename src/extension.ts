@@ -2,14 +2,13 @@ import * as vscode from 'vscode';
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
-import { getQuestion, getSurroundingCode, preProcessCodeLine, getAccurateLineNumber, getDestructuringAssignment } from './codeContextUtils';
-import { tool } from '@langchain/core/tools';
 
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
 
-// Maximum exploration steps to avoid infinite loop
-const MAX_STEPS = 30;
+if (!API_KEY) {
+    console.error("OpenAI API Key is missing. Please set the OPENAI_TOKEN environment variable.");
+}
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Extension "search-copilot" is now active!');
@@ -26,32 +25,181 @@ function askQuestionAboutCode() {
     }
     const selection = editor.selection;
 
-    // Get all selected lines, not just the start line
-    const selectedText = editor.document.getText(selection);
-    const startLine = selection.start.line;  // Use the start line for reference
-    const endLine = selection.end.line;  // Use the end line for reference
+    // Get all selected lines, fallback to the current line if no selection is made
+    let selectedText = editor.document.getText(selection);
+    if (selection.isEmpty) {
+        selectedText = editor.document.lineAt(selection.start.line).text;
+    }
+    const startLine = selection.start.line;
+    const endLine = selection.end.line;
 
     getQuestion(selectedText).then(query => {
         if (query === undefined) {
             return;
         }
-        // Start the workflow by running task 1
-        new Agent().runWorkflow(query, editor.document.uri, startLine, endLine);  // Pass the start line
+        new Agent().runWorkflow(query, editor.document.uri, startLine, endLine);
     });
 }
 
-// Define the allowed VSCode tools for Task 1 and Task 4
+export async function getQuestion(code: string) {
+    return vscode.window.showInputBox({
+        placeHolder: "What do you want to ask about this code?",
+        prompt: `The line of code is ${code}`
+    });
+}
+
+export async function getSurroundingCode(uri: vscode.Uri, startLine: number, endLine: number): Promise<{ contextText: string, startContextLine: number }> {
+    const document = await vscode.workspace.openTextDocument(uri);
+    const totalLines = document.lineCount;
+
+    const startContextLine = Math.max(0, startLine - 3);
+    const endContextLine = Math.min(totalLines - 1, endLine + 3);
+
+    const range = new vscode.Range(startContextLine, 0, endContextLine, document.lineAt(endContextLine).text.length);
+    const contextText = document.getText(range);
+
+    return {
+        contextText,
+        startContextLine
+    };
+}
+
+export function getAccurateLineNumber(context: string, selectedCodeLine: string, startLineOfContext: number): number | null {
+    const contextLines = context.split('\n');
+    console.log("Context: " + context);
+    console.log(`Start line of context: ${startLineOfContext}`);
+
+    for (let i = 0; i < contextLines.length; i++) {
+        const lineText = contextLines[i].trim();
+        if (lineText === selectedCodeLine.trim()) {
+            const accurateLineNumber = startLineOfContext + i;
+            console.log(`Selected code line found in context at line ${accurateLineNumber}`);
+            return accurateLineNumber;
+        }
+    }
+    console.error(`Code line "${selectedCodeLine}" not found in the provided context.`);
+    return null;
+}
+
+/**
+ * Searches for the offset of the variable name in the document around the specified line number.
+ * Handles the case where line numbers may be slightly off, or there are indentations.
+ * @param document - The document to search in.
+ * @param variableName - The name of the variable to search for.
+ * @param startLine - The line number to start searching from.
+ * @param range - How many lines before and after the start line to search.
+ * @returns An object containing the line number and offset of the variable, or null if not found.
+ */
+async function searchVariableOffset(
+    document: vscode.TextDocument,
+    variableName: string,
+    startLine: number,
+    range: number = 3
+): Promise<{ line: number, offset: number } | null> {
+    const totalLines = document.lineCount;
+
+    // Search around the startLine (above and below within the given range)
+    for (let i = -range; i <= range; i++) {
+        const currentLine = startLine + i;
+
+        // Ensure the line is within the document bounds
+        if (currentLine >= 0 && currentLine < totalLines) {
+            const lineText = document.lineAt(currentLine).text;
+
+            // Search for the variable name in the current line
+            const offset = lineText.indexOf(variableName);
+            if (offset !== -1) {
+                console.log(`Found variable "${variableName}" at line ${currentLine}, offset ${offset}`);
+                return { line: currentLine, offset: offset };
+            }
+        }
+    }
+
+    // If the variable wasn't found, return null
+    console.error(`Variable "${variableName}" not found in the document.`);
+    return null;
+}
+
+export function preProcessCodeLine(subProblem: any, surroundingCode: string): string | null {
+    const codeLine = subProblem.code_context.code_line;
+    const invokeVariable = subProblem.code_context.invoke_variable;
+
+    const codeLineParts = codeLine.split("\n").map((line: string) => line.trim()).filter((line: string) => line.length > 0);
+
+    for (const line of codeLineParts) {
+        if (line.includes(invokeVariable)) {
+            return line;
+        }
+    }
+
+    console.warn(`invoke_variable "${invokeVariable}" not found in code_line. Falling back to surrounding code.`);
+
+    const surroundingCodeParts = surroundingCode.split("\n").map((line: string) => line.trim()).filter((line: string) => line.length > 0);
+
+    for (const line of surroundingCodeParts) {
+        if (line.includes(invokeVariable)) {
+            console.log(`invoke_variable "${invokeVariable}" found in surrounding code.`);
+            return line;
+        }
+    }
+
+    console.error(`No line containing invoke_variable "${invokeVariable}" found in code_line or surrounding_code.`);
+    return null;
+}
+
+export async function getDestructuringAssignment(document: vscode.TextDocument, startLine: number): Promise<string> {
+    const totalLines = document.lineCount;
+    let start = startLine;
+    let end = startLine;
+
+    let openBracesCount = 0;
+    let foundStartBrace = false;
+
+    const countBraces = (lineText: string) => {
+        let open = 0, close = 0;
+        for (const char of lineText) {
+            if (char === '{') open++;
+            if (char === '}') close++;
+        }
+        return { open, close };
+    };
+
+    while (start >= 0) {
+        const lineText = document.lineAt(start).text;
+        const { open, close } = countBraces(lineText);
+        openBracesCount += open - close;
+
+        if (openBracesCount > 0 && lineText.includes('{')) {
+            foundStartBrace = true;
+            break;
+        }
+        start--;
+    }
+
+    if (!foundStartBrace) {
+        return document.lineAt(startLine).text;
+    }
+
+    openBracesCount = 0;
+
+    while (end < totalLines) {
+        const lineText = document.lineAt(end).text;
+        const { open, close } = countBraces(lineText);
+        openBracesCount += open - close;
+
+        if (openBracesCount === 0 && lineText.includes('}')) {
+            break;
+        }
+        end++;
+    }
+
+    const range = new vscode.Range(start, 0, end, document.lineAt(end).text.length);
+    return document.getText(range);
+}
+
 const allowedTools = {
     "Find References": 0,
-    "Go to Definition": 1,
-    //"Go to Type Definition": 2,
-    //"Go to Implementation": 3,
-    //"Go to Symbol": 4,
-    //"Open Symbol by Name": 5,
-    //"Peek": 6,
-    //"Find All References": 7,
-    //"Call Hierarchy": 8,
-    //"Search": 9
+    "Go to Definition": 1
 };
 
 const task1JsonSchema = {
@@ -70,9 +218,9 @@ const task1JsonSchema = {
                         properties: {
                             file_uri: { type: "string" },
                             invoke_variable: { type: "string" },
-                            code_line: { type: "string" },  // Single line of the relevant code
-                            line_number: { type: "integer" },  // Accurate line number from the code context
-                            full_statement: { type: "string" }  // Full statement for more context
+                            code_line: { type: "string" },
+                            line_number: { type: "integer" },
+                            full_statement: { type: "string" }
                         },
                         required: ["file_uri", "invoke_variable", "code_line", "full_statement"]
                     },
@@ -85,7 +233,6 @@ const task1JsonSchema = {
     required: ["refined_question", "sub_problems"]
 };
 
-// JSON Schema for Task 2 (Output)
 const task2JsonSchema = {
     type: "object",
     properties: {
@@ -101,9 +248,9 @@ const task2JsonSchema = {
                         properties: {
                             file_uri: { type: "string" },
                             invoke_variable: { type: "string" },
-                            code_line: { type: "string" },  // Single line where the result was found
-                            line_number: { type: "integer" },  // Accurate line number from Task 1
-                            full_statement: { type: "string" },  // Full statement for more context
+                            code_line: { type: "string" },
+                            line_number: { type: "integer" },
+                            full_statement: { type: "string" }
                         },
                         required: ["file_uri", "invoke_variable", "code_line", "line_number", "full_statement"]
                     },
@@ -116,7 +263,7 @@ const task2JsonSchema = {
                                 file_uri: { type: "string" },
                                 code_line: { type: "string" },
                                 line_number: { type: "integer" },
-                                full_statement: { type: "string" },  // Full statement for more context
+                                full_statement: { type: "string" },
                                 explanation: { type: "string" }
                             },
                             required: ["file_uri", "code_line", "line_number", "full_statement", "explanation"]
@@ -141,7 +288,7 @@ const task3JsonSchema = {
     properties: {
         final_decision_sufficient: { type: "boolean" },
         final_answer: { type: "string" },
-        additional_requirements: {
+        sub_problems: {
             type: "array",
             items: {
                 type: "object",
@@ -153,9 +300,9 @@ const task3JsonSchema = {
                         properties: {
                             file_uri: { type: "string" },
                             invoke_variable: { type: "string" },
-                            code_line: { type: "string" },  // Single line
-                            line_number: { type: "integer" },  // Accurate line number
-                            full_statement: { type: "string" }  // Full statement for more context
+                            code_line: { type: "string" },
+                            line_number: { type: "integer" },
+                            full_statement: { type: "string" }
                         },
                         required: ["file_uri", "invoke_variable", "code_line", "line_number", "full_statement"]
                     },
@@ -166,16 +313,14 @@ const task3JsonSchema = {
             }
         }
     },
-    required: ["final_decision_sufficient", "final_answer", "additional_requirements"]
+    required: ["final_decision_sufficient", "final_answer", "sub_problems"]
 };
 
-// The Agent class which interacts with the OpenAI API and handles the workflow
-// The Agent class which interacts with the OpenAI API and handles the workflow
 class Agent {
     private _model: ChatOpenAI;
-    private _explorationHistory: any[] = []; // Stack to store exploration steps
+    private _explorationHistory: any[] = [];
     private _stepCounter: number = 0;
-    private _refined_question: string | null = null;  // Store the refined question once it's generated
+    private _refined_question: string | null = null;
 
     constructor() {
         this._model = new ChatOpenAI({
@@ -184,8 +329,8 @@ class Agent {
         });
     }
 
-    // The main workflow that runs tasks sequentially
     async runWorkflow(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
+        const MAX_STEPS = 30;
         let sufficient = false;
         let refinedOutput;
 
@@ -193,13 +338,11 @@ class Agent {
 
         console.log(`Step ${this._stepCounter}: Running Task 1`);
 
-        // Task 1: Refine the question and break it into sub-problems
         refinedOutput = await this.runTask1(question, uri, startLine, endLine);
         if (!refinedOutput || !refinedOutput.sub_problems) {
             console.error("Error: Task 1 did not return sub-problems.");
         }
 
-        // Loop through until either sufficient result is found or max steps reached
         while (!sufficient && this._stepCounter < MAX_STEPS) {
             if (!refinedOutput || !refinedOutput.sub_problems) {
                 console.error("Error: Task 3 did not return sub-problems.");
@@ -207,7 +350,6 @@ class Agent {
 
             this._stepCounter++;
 
-            // Task 2: Process each sub-problem and explore with VSCode API
             console.log(`Step ${this._stepCounter}: Running Task 2`);
             const task2Output = await this.runTask2(refinedOutput.sub_problems);
             if (!task2Output) {
@@ -215,13 +357,11 @@ class Agent {
                 break;
             }
 
-            // Task 3: Decide if the answer is sufficient or requires more exploration
             console.log(`Step ${this._stepCounter}: Running Task 3`);
-            const task3Output = await this.runTask3();
+            const task3Output = await this.runTask3(uri);
             sufficient = task3Output.final_decision_sufficient === true;
-            refinedOutput = task3Output.additional_requirements;
+            refinedOutput = task3Output;
 
-            // Log task 3 output
             console.log(`Task 3 Output: ${JSON.stringify(task3Output, null, 2)}`);
 
             if (sufficient) {
@@ -235,51 +375,47 @@ class Agent {
         }
     }
 
-    // Task 1: Refine question and break it into sub-problems
     async runTask1(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
-        const { contextText: surroundingCode, startContextLine } = await getSurroundingCode(uri, startLine, endLine); // Get surrounding code
+        const { contextText: surroundingCode, startContextLine } = await getSurroundingCode(uri, startLine, endLine);
 
-        // Include the URI and line number in the input JSON
         const inputJson = {
             "task": 1,
             "question": question,
-            "surrounding_code": surroundingCode,  // Include the surrounding code
-            "file_uri": uri.toString(),  // Include the correct file path (URI)
-            "line_number": startLine,  // Original line number where the cursor is
-            "allowed_tools": allowedTools  // Allowed tools for agent to use
+            "surrounding_code": surroundingCode,
+            "file_uri": uri.toString(),
+            "line_number": startLine,
+            "allowed_tools": allowedTools
         };
 
         console.log(`Task 1 Input: ${JSON.stringify(inputJson)}`);
 
-        const response = await this._callAgentAPI(inputJson, 1, task1JsonSchema); // Make API call
-        const task1Output = JSON.parse(response); // Parse the response
+        const response = await this._callAgentAPI(inputJson, 1, task1JsonSchema);
+        const task1Output = JSON.parse(response);
 
-        // Log Task 1 output
         console.log(`Task 1 Output: ${JSON.stringify(task1Output)}`);
 
-        // Store the refined question in the private field
         this._refined_question = task1Output.refined_question;
 
-        // Iterate over sub-problems to compute accurate line numbers for the selected symbols
+        const document = await vscode.workspace.openTextDocument(uri);
+
         for (const subProblem of task1Output.sub_problems) {
             if (uri) {
-                subProblem.code_context.file_uri = uri.toString();  // Ensure file_uri is set correctly
+                subProblem.code_context.file_uri = uri.toString();
             }
 
             const invokeVariable = subProblem.code_context.invoke_variable;
-            const codeLine = preProcessCodeLine(subProblem);  // Preprocess the code line
 
-            // If we found a valid line with the invoke_variable, proceed with finding the accurate line number
+            const codeLine = preProcessCodeLine(subProblem, surroundingCode);
+
             if (codeLine) {
-                const accurateLineNumber = getAccurateLineNumber(surroundingCode, codeLine, startContextLine);  // Pass the correct parameters
+                const accurateLineNumber = getAccurateLineNumber(surroundingCode, codeLine, startContextLine);
 
                 if (accurateLineNumber !== null) {
-                    subProblem.code_context.line_number = accurateLineNumber;  // Set accurate line number
+                    subProblem.code_context.line_number = accurateLineNumber;
                     console.log(`Accurate line number for invoke_variable "${invokeVariable}" is: ${accurateLineNumber}`);
 
-                    // Get full statement for destructuring assignments
-                    const fullStatement = await getDestructuringAssignment(subProblem.code_context.file_uri, accurateLineNumber);  // Await if async
-                    subProblem.code_context.full_statement = fullStatement;  // Add full statement to the context
+                    const fullStatement = await getDestructuringAssignment(document, accurateLineNumber);
+                    subProblem.code_context.full_statement = fullStatement;
                 } else {
                     console.error(`Failed to find accurate line number for invoke_variable "${invokeVariable}" in code_line: ${codeLine}`);
                 }
@@ -298,8 +434,8 @@ class Agent {
             code_context: {
                 file_uri: string;
                 invoke_variable: string;
-                code_line: string; // Include the full code line from Task 1 response
-                line_number: number; // Accurate line number calculated previously
+                code_line: string;
+                line_number: number;
             };
             num_results: number;
             results: any[];
@@ -307,30 +443,34 @@ class Agent {
 
         const task2Input = {
             "task": 2,
-            "refined_question": this._refined_question,  // Use the stored refined question
+            "refined_question": this._refined_question,
             "sub_problems": [] as SubProblem[],
             "exploration_history": this._explorationHistory
         };
 
         for (const subProblem of subProblems) {
             const variableName = subProblem.code_context.invoke_variable;
-            const accurateLineNumber = subProblem.code_context.line_number; // Get the accurate line number
-            const fileUri = vscode.Uri.parse(subProblem.code_context.file_uri); // Ensure we're using the correct file
-            const codeLine = subProblem.code_context.code_line;  // Use the code line from the context
+            const initialLineNumber = subProblem.code_context.line_number;
+            const fileUri = vscode.Uri.parse(subProblem.code_context.file_uri);
 
             console.log(`Processing sub-problem: ${subProblem.sub_question} using variable "${variableName}"`);
-            console.log(`Code line: ${codeLine}`);
-            console.log(`Accurate line number for "${variableName}": ${accurateLineNumber}`);
+            console.log(`Initial line number for "${variableName}": ${initialLineNumber}`);
 
-            // Calculate the offset of the variable within the code line
-            const offset = codeLine.indexOf(variableName);
-            console.log(`Offset for "${variableName}" in the code line: ${offset}`);
+            // Open the document at the specified fileUri
+            const document = await vscode.workspace.openTextDocument(fileUri);
 
-            if (offset !== -1) {
-                const pos = new vscode.Position(accurateLineNumber, offset);
+            // Use the helper function to find the variable's offset in the document
+            const offsetResult = await searchVariableOffset(document, variableName, initialLineNumber);
+
+            if (offsetResult) {
+                const { line, offset } = offsetResult;
+                console.log(`Found variable "${variableName}" at line ${line}, offset ${offset}`);
+
+                // Create the position and location for further exploration
+                const pos = new vscode.Position(line, offset);
                 const loc = new vscode.Location(fileUri, pos);
 
-                // Execute VSCode API commands based on the tool selected
+                // Execute VSCode API commands based on the selected tool
                 let results = [];
                 if (subProblem.tool === allowedTools["Find References"]) {
                     console.log(`Finding references for "${variableName}"`);
@@ -361,64 +501,68 @@ class Agent {
                     results: results
                 });
             } else {
-                console.error(`Variable "${variableName}" not found in the code line: ${codeLine}`);
+                console.error(`Variable "${variableName}" not found near line ${initialLineNumber}.`);
             }
         }
 
         console.log(`Task 2 Input: ${JSON.stringify(task2Input, null, 2)}`);
 
-        // Call the agent to filter and rank the results
         const response = await this._callAgentAPI(task2Input, 2, task2JsonSchema);
         const task2Output = JSON.parse(response);
 
-        // Log task 2 output
         console.log(`Task 2 Output: ${JSON.stringify(task2Output, null, 2)}`);
 
-        // Update exploration history immediately after Task 2
-        this._explorationHistory.push(...task2Output.processed_results);
+        if (Array.isArray(task2Output.processed_results)) {
+            this._explorationHistory.push(...task2Output.processed_results);
+        } else if (typeof task2Output.processed_results === 'object') {
+            this._explorationHistory.push(task2Output.processed_results);
+        } else {
+            console.error("Processed results is neither an array nor an object:", task2Output.processed_results);
+        }
 
-        return task2Output;  // Return the filtered and ranked results
+        return task2Output;
     }
 
     async _prepareResults(locations: vscode.Location[] | vscode.LocationLink[], subProblem: any) {
         const results: any[] = [];
         if (!locations || locations.length === 0) {
             console.warn(`No locations found for sub-problem: ${subProblem.sub_question}`);
-            return results; // Return empty if no locations are found
+            return results;
         }
 
         for (const location of locations) {
             const lineNumber = location instanceof vscode.Location ? location.range.start.line : (location as vscode.LocationLink).targetRange.start.line;
             const fileUri = location instanceof vscode.Location ? location.uri.toString() : (location as vscode.LocationLink).targetUri.toString();
 
-            // Open the document to retrieve the full statement
             const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(fileUri));
 
-            // Use a helper to extract the full statement
             const fullStatement = await getDestructuringAssignment(document, lineNumber);
 
-            // Log result details
             console.log(`Result found at file: ${fileUri}, line: ${lineNumber}`);
             console.log(`Full statement retrieved: ${fullStatement}`);
 
-            // Prepare the results using the correct file path (Uri) and line number
             results.push({
-                file_uri: fileUri,  // Correct Uri for the result's file
-                line_number: lineNumber,  // Line number in the target file
-                code_line: document.lineAt(lineNumber).text.trim(), // The specific line that matched the result
-                full_statement: fullStatement // The entire statement that includes this line
+                file_uri: fileUri,
+                line_number: lineNumber,
+                code_line: document.lineAt(lineNumber).text.trim(),
+                full_statement: fullStatement
             });
         }
 
         return results;
     }
 
-    // Task 3: Decide if the question is sufficiently answered and propose new sub-questions if necessary
-    async runTask3() {
+    async runTask3(uri: vscode.Uri) {
+        // Fetch the entire file content
+        const document = await vscode.workspace.openTextDocument(uri);
+        const entireFileContent = document.getText();  // Get the full file content
+
+        // Prepare the input JSON for Task 3
         const inputJson = {
             "task": 3,
             "refined_question": this._refined_question ?? "",
-            "exploration_history": this._explorationHistory  // Include the exploration history for exploration purposes
+            "exploration_history": this._explorationHistory,  // Include the exploration history for context
+            "full_file_content": entireFileContent,  // Provide the entire file content as context
         };
 
         console.log("Task 3 Input:\n", JSON.stringify(inputJson));
@@ -426,8 +570,12 @@ class Agent {
         const response = await this._callAgentAPI(inputJson, 3, task3JsonSchema);
         const task3Output = JSON.parse(response);
 
-        // Log task 3 output
-        console.log("Task 3 Output:\n", JSON.stringify(task3Output, null, 2));
+        // Handle sub-problems that have no valid starting points
+        for (const subProblem of task3Output.sub_problems) {
+            if (Object.keys(subProblem.code_context).length === 0) {
+                console.log(`No starting point found for sub-question: ${subProblem.sub_question}`);
+            }
+        }
 
         return task3Output;
     }
@@ -435,12 +583,12 @@ class Agent {
     async _callAgentAPI(inputJson: any, taskNumber: number, selectedSchema: any): Promise<string> {
         let taskInstructions = "";
 
-        // Add task-specific instructions based on the task number
         switch (taskNumber) {
             case 1:
                 taskInstructions = `
                     Task 1: Refine the user's question and break it into actionable sub-questions using VSCode tools.
-                    Ensure that each sub-question can be answered using a single VSCode tool from the following list by providing the corresponding integer value:
+                    Ensure that each sub-question can be answered using a single VSCode tool on the invoke_variable. 
+                    And you can choose the tool from the following list by providing the corresponding integer value:
                     - 0: Find References
                     - 1: Go to Definition
                     
@@ -462,18 +610,19 @@ class Agent {
                     Task 3: Assess whether the refined question has been sufficiently answered based on the processed results.
                     If the question is sufficiently answered, set "final_decision_sufficient" to true.
                     Provide an insightful and beginner-friendly explanation in the "final_answer" to help the user understand how the question was addressed.
-            
+
                     If the question is not sufficiently answered, set "final_decision_sufficient" to false and propose additional sub-questions that can further explore the question.
-            
+
                     When proposing sub-questions:
-                    - For each sub-question, check the exploration history (provided in the input) to see if there are any starting points (code contexts) already identified in the history that can be used to explore the sub-question.
-                    - If a valid starting point is found, reuse it and include the file, invoke_variable, code_line, and full_statement in the output.
-                    - If no valid starting point exists in the exploration history, leave the code_context empty for that sub-question.
-            
+                    - First, check the exploration history (provided in the input) to see if there are any starting points (code contexts) already identified in the history that can be used to explore the sub-question. 
+                    - If no valid starting point is found from the exploration history, use the full file content (provided in the input) to search for relevant code areas that may help explore the sub-question.
+                    - Include the file, invoke_variable, code_line, and full_statement in the output for each sub-question with a valid starting point.
+                    - If no relevant code is found in the file, leave the code_context empty for that sub-question.
+
                     The output format must strictly follow the provided JSON schema:
                     - "final_decision_sufficient" should be a boolean indicating whether the question was fully answered.
                     - "final_answer" should be a clear explanation if the question was sufficiently answered.
-                    - "additional_requirements" should contain any sub-questions and code contexts for further exploration if the question was not sufficiently answered.
+                    - "sub_problems" should contain any sub-questions and code contexts for further exploration if the question was not sufficiently answered.
                 `;
                 break;
             case 5:
@@ -486,7 +635,6 @@ class Agent {
                 throw new Error("Unknown task number provided.");
         }
 
-        // Incorporating the prompt with task-specific instructions
         const systemMessage = new SystemMessage(`
             You are Agent 0, an assistant designed to help users explore and understand codebases by performing tasks using VSCode tools. 
             Your role depends on the task in the input, and you must carefully follow task-specific instructions and formats.
@@ -505,19 +653,18 @@ class Agent {
             Ensure that your output matches the provided JSON schema.
         `);
 
-        const prompt = JSON.stringify(inputJson); // Create a JSON-based prompt
+        const prompt = JSON.stringify(inputJson);
         const messages = [
-            systemMessage, // Include the system message for the agent's role
-            new HumanMessage(prompt)  // Pass the task-specific JSON as a HumanMessage
+            systemMessage,
+            new HumanMessage(prompt)
         ];
 
-        // Call the OpenAI model with response_format included, and wrap the schema inside the `schema` field
         const result = await this._model.invoke(messages, {
             response_format: {
                 type: "json_schema",
                 json_schema: {
-                    name: `task_${taskNumber}_schema`, // Name the schema based on the task number
-                    schema: selectedSchema  // Wrap the schema inside the `schema` field
+                    name: `task_${taskNumber}_schema`,
+                    schema: selectedSchema
                 }
             }
         });
@@ -525,9 +672,8 @@ class Agent {
         const parser = new StringOutputParser();
         const response = await parser.invoke(result);
 
-        return response;  // Return the raw response as string
+        return response;
     }
 }
 
-// Deactivate the extension
 export function deactivate() { }
