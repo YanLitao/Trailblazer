@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
+import { SidebarView } from './SideBarView';
 
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
@@ -12,39 +13,55 @@ if (!API_KEY) {
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Extension "search-copilot" is now active!');
+
+    // Register the command to ask a question about code
     const disposable = vscode.commands.registerCommand('search-copilot.helloWorld', () => {
-        askQuestionAboutCode();
+        askQuestionAboutCode(context);
     });
     context.subscriptions.push(disposable);
-}
-
-function askQuestionAboutCode() {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor) {
-        return;
-    }
-    const selection = editor.selection;
-
-    // Get all selected lines, fallback to the current line if no selection is made
-    let selectedText = editor.document.getText(selection);
-    if (selection.isEmpty) {
-        selectedText = editor.document.lineAt(selection.start.line).text;
-    }
-    const startLine = selection.start.line;
-    const endLine = selection.end.line;
-
-    getQuestion(selectedText).then(query => {
-        if (query === undefined) {
-            return;
-        }
-        new Agent().runWorkflow(query, editor.document.uri, startLine, endLine);
-    });
 }
 
 export async function getQuestion(code: string) {
     return vscode.window.showInputBox({
         placeHolder: "What do you want to ask about this code?",
         prompt: `The line of code is ${code}`
+    });
+}
+
+async function askQuestionAboutCode(context: vscode.ExtensionContext) {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+        return;
+    }
+
+    const selection = editor.selection;
+
+    // Get the selected lines, fallback to the current line if no selection is made
+    let selectedText = editor.document.getText(selection);
+    if (selection.isEmpty) {
+        selectedText = editor.document.lineAt(selection.start.line).text;
+    }
+
+    const startLine = selection.start.line;
+    const endLine = selection.end.line;
+
+    // Call getQuestion to display input box to the user
+    const query = await getQuestion(selectedText); // The input box appears here
+
+    if (query === undefined) {
+        return; // User canceled the input box
+    }
+
+    // Initialize the SidebarView only when the user submits a question
+    const sidebarViewProvider = new SidebarView(context, query, selectedText);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(SidebarView.viewType, sidebarViewProvider)
+    );
+
+    // Show the sidebar automatically once the question is received
+    vscode.commands.executeCommand('workbench.view.extension.search-copilot-sidebar').then(() => {
+        // Start the agent to handle exploration
+        new Agent(sidebarViewProvider).runWorkflow(query, editor.document.uri, startLine, endLine);
     });
 }
 
@@ -94,7 +111,7 @@ async function searchVariableOffset(
     document: vscode.TextDocument,
     variableName: string,
     startLine: number,
-    range: number = 3
+    range: number = 10
 ): Promise<{ line: number, offset: number } | null> {
     const totalLines = document.lineCount;
 
@@ -152,6 +169,11 @@ export async function getDestructuringAssignment(document: vscode.TextDocument, 
     let start = startLine;
     let end = startLine;
 
+    // If the line contains ";", return the range of the line as is
+    if (document.lineAt(startLine).text.includes(';')) {
+        return document.lineAt(startLine).text;
+    }
+
     let openBracesCount = 0;
     let foundStartBrace = false;
 
@@ -198,8 +220,8 @@ export async function getDestructuringAssignment(document: vscode.TextDocument, 
 }
 
 const allowedTools = {
-    "Find References": 0,
-    "Go to Definition": 1
+    0: "Go to Definition",
+    1: "Find References"
 };
 
 const task1JsonSchema = {
@@ -236,7 +258,7 @@ const task1JsonSchema = {
 const task2JsonSchema = {
     type: "object",
     properties: {
-        processed_results: {
+        questions_and_results: {
             type: "array",
             items: {
                 type: "object",
@@ -268,19 +290,13 @@ const task2JsonSchema = {
                             },
                             required: ["file_uri", "code_line", "line_number", "full_statement", "explanation"]
                         }
-                    },
-                    status: { type: "string" },
-                    message: { type: "string" },
-                    suggestions: {
-                        type: "array",
-                        items: { type: "string" }
                     }
                 },
-                required: ["sub_question", "filtered_results", "status", "message", "suggestions"]
+                required: ["sub_question", "filtered_results"]
             }
         }
     },
-    required: ["processed_results"]
+    required: ["questions_and_results"]
 };
 
 const task3JsonSchema = {
@@ -321,14 +337,17 @@ class Agent {
     private _explorationHistory: any[] = [];
     private _stepCounter: number = 0;
     private _refined_question: string | null = null;
+    private _sidebarViewProvider: SidebarView; // Add a reference to the SidebarView
 
-    constructor() {
+    constructor(sidebarViewProvider: SidebarView) { // Pass in the sidebar view provider
         this._model = new ChatOpenAI({
             model: "gpt-4o-mini",
             apiKey: API_KEY,
         });
+        this._sidebarViewProvider = sidebarViewProvider;
     }
 
+    // Main workflow method to run all tasks
     async runWorkflow(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
         const MAX_STEPS = 30;
         let sufficient = false;
@@ -336,13 +355,18 @@ class Agent {
 
         console.log(`Starting workflow with question: "${question}" at ${uri.toString()} on line ${startLine}` + (startLine !== endLine ? ` to ${endLine}` : ""));
 
+        // Start Task 1 and update the sidebar with the results
         console.log(`Step ${this._stepCounter}: Running Task 1`);
-
         refinedOutput = await this.runTask1(question, uri, startLine, endLine);
-        if (!refinedOutput || !refinedOutput.sub_problems) {
+
+        // Update sidebar after Task 1 completes
+        if (refinedOutput) {
+            this._sidebarViewProvider.addTask1Results(refinedOutput);
+        } else {
             console.error("Error: Task 1 did not return sub-problems.");
         }
 
+        // Continue with Task 2 and Task 3 if necessary
         while (!sufficient && this._stepCounter < MAX_STEPS) {
             if (!refinedOutput || !refinedOutput.sub_problems) {
                 console.error("Error: Task 3 did not return sub-problems.");
@@ -350,15 +374,17 @@ class Agent {
 
             this._stepCounter++;
 
+            // Start Task 2
             console.log(`Step ${this._stepCounter}: Running Task 2`);
-            const task2Output = await this.runTask2(refinedOutput.sub_problems);
-            if (!task2Output) {
-                console.error("Error: Task 2 did not return filtered results.");
-                break;
-            }
+            await this.runTask2(refinedOutput.sub_problems);
 
+            // Start Task 3
             console.log(`Step ${this._stepCounter}: Running Task 3`);
             const task3Output = await this.runTask3(uri);
+            if (this._sidebarViewProvider) {
+                this._sidebarViewProvider.addTask3Results(task3Output);
+            }
+
             sufficient = task3Output.final_decision_sufficient === true;
             refinedOutput = task3Output;
 
@@ -404,7 +430,6 @@ class Agent {
             }
 
             const invokeVariable = subProblem.code_context.invoke_variable;
-
             const codeLine = preProcessCodeLine(subProblem, surroundingCode);
 
             if (codeLine) {
@@ -422,6 +447,11 @@ class Agent {
             } else {
                 console.error(`preProcessCodeLine failed for sub_problem "${subProblem.sub_question}".`);
             }
+        }
+
+        // Update the sidebar view with Task 1 results after processing
+        if (this._sidebarViewProvider) {
+            this._sidebarViewProvider.addTask1Results(task1Output);  // Add the Task 1 results to the sidebar
         }
 
         return task1Output;
@@ -444,9 +474,10 @@ class Agent {
         const task2Input = {
             "task": 2,
             "refined_question": this._refined_question,
-            "sub_problems": [] as SubProblem[],
-            "exploration_history": this._explorationHistory
+            "questions_and_results": [] as SubProblem[]
         };
+
+        const task2Results: any[] = []; // A unified structure to store all results
 
         for (const subProblem of subProblems) {
             const variableName = subProblem.code_context.invoke_variable;
@@ -472,14 +503,14 @@ class Agent {
 
                 // Execute VSCode API commands based on the selected tool
                 let results = [];
-                if (subProblem.tool === allowedTools["Find References"]) {
+                if (subProblem.tool === 1) {
                     console.log(`Finding references for "${variableName}"`);
                     const referenceLocations = await vscode.commands.executeCommand(
                         'vscode.executeReferenceProvider', loc.uri, loc.range.start
                     );
                     console.log(`Reference locations found: ${JSON.stringify(referenceLocations)}`);
                     results = await this._prepareResults(referenceLocations as vscode.Location[] | vscode.LocationLink[], subProblem);
-                } else if (subProblem.tool === allowedTools["Go to Definition"]) {
+                } else if (subProblem.tool === 0) {
                     console.log(`Going to definition for "${variableName}"`);
                     const definitionLocations = await vscode.commands.executeCommand<vscode.Location[] | vscode.LocationLink[]>(
                         'vscode.executeDefinitionProvider', loc.uri, loc.range.start
@@ -492,35 +523,55 @@ class Agent {
                     console.warn(`No results were found for sub-problem "${subProblem.sub_question}" and variable "${variableName}".`);
                 }
 
-                // Add the exploration results to the task input
-                task2Input.sub_problems.push({
+                // Define the structure of eachSubProblem
+                const eachSubProblem: any = {
                     sub_question: subProblem.sub_question,
                     tool: subProblem.tool,
                     code_context: subProblem.code_context,
-                    num_results: results.length,
-                    results: results
-                });
+                    num_results: subProblem.num_results,
+                };
+
+                // Store results in the final unified structure for the sidebar
+                if (results.length > subProblem.num_results && subProblem.num_results > 0) {
+                    // Add "results" key if more results need to be processed by the agent
+                    eachSubProblem["results"] = results;
+                    task2Input.questions_and_results.push(eachSubProblem);  // Add to task2Input for agent processing
+                } else {
+                    // Add "filtered_results" key otherwise and push directly to task2Results
+                    eachSubProblem["filtered_results"] = results;
+                    task2Results.push(eachSubProblem);
+                }
             } else {
                 console.error(`Variable "${variableName}" not found near line ${initialLineNumber}.`);
             }
         }
 
-        console.log(`Task 2 Input: ${JSON.stringify(task2Input, null, 2)}`);
+        // Process sub-problems with the agent if necessary
+        if (task2Input.questions_and_results.length > 0) {
+            console.log(`Task 2 Input for agent processing: ${JSON.stringify(task2Input, null, 2)}`);
 
-        const response = await this._callAgentAPI(task2Input, 2, task2JsonSchema);
-        const task2Output = JSON.parse(response);
+            const response = await this._callAgentAPI(task2Input, 2, task2JsonSchema);
+            const task2Output = JSON.parse(response);
 
-        console.log(`Task 2 Output: ${JSON.stringify(task2Output, null, 2)}`);
+            console.log(`Task 2 Output from agent: ${JSON.stringify(task2Output, null, 2)}`);
 
-        if (Array.isArray(task2Output.processed_results)) {
-            this._explorationHistory.push(...task2Output.processed_results);
-        } else if (typeof task2Output.processed_results === 'object') {
-            this._explorationHistory.push(task2Output.processed_results);
-        } else {
-            console.error("Processed results is neither an array nor an object:", task2Output.processed_results);
+            // Add agent-processed results to the final structure
+            if (Array.isArray(task2Output.questions_and_results)) {
+                task2Results.push(...task2Output.questions_and_results);
+            } else if (typeof task2Output.questions_and_results === 'object') {
+                task2Results.push(task2Output.questions_and_results);
+            } else {
+                console.error("questions_and_results is neither an array nor an object:", task2Output.questions_and_results);
+            }
         }
 
-        return task2Output;
+        // Once all results are gathered, add them to the exploration history and update the sidebar
+        this._explorationHistory.push(...task2Results);
+
+        // Update the sidebar with the full Task 2 results
+        if (this._sidebarViewProvider) {
+            this._sidebarViewProvider.addTask2Results({ questions_and_results: task2Results });  // Update sidebar with Task 2 results
+        }
     }
 
     async _prepareResults(locations: vscode.Location[] | vscode.LocationLink[], subProblem: any) {
@@ -553,16 +604,25 @@ class Agent {
     }
 
     async runTask3(uri: vscode.Uri) {
-        // Fetch the entire file content
-        const document = await vscode.workspace.openTextDocument(uri);
-        const entireFileContent = document.getText();  // Get the full file content
+        // Create a clean exploration history without explanations for Task 3 input
+        const cleanExplorationHistory = this._explorationHistory.map((entry: any) => {
+            // For each sub-problem, map the filtered results and remove the explanation
+            return {
+                sub_question: entry.sub_question,
+                filtered_results: entry.filtered_results.map((result: any) => ({
+                    file_uri: result.file_uri,
+                    code_line: result.code_line,
+                    line_number: result.line_number,
+                    full_statement: result.full_statement
+                }))
+            };
+        });
 
-        // Prepare the input JSON for Task 3
+        // Prepare the input JSON for Task 3, using the cleaned exploration history
         const inputJson = {
             "task": 3,
             "refined_question": this._refined_question ?? "",
-            "exploration_history": this._explorationHistory,  // Include the exploration history for context
-            "full_file_content": entireFileContent,  // Provide the entire file content as context
+            "exploration_history": cleanExplorationHistory  // Include the cleaned exploration history
         };
 
         console.log("Task 3 Input:\n", JSON.stringify(inputJson));
@@ -589,8 +649,8 @@ class Agent {
                     Task 1: Refine the user's question and break it into actionable sub-questions using VSCode tools.
                     Ensure that each sub-question can be answered using a single VSCode tool on the invoke_variable. 
                     And you can choose the tool from the following list by providing the corresponding integer value:
-                    - 0: Find References
-                    - 1: Go to Definition
+                    - 0: Go to Definition
+                    - 1: Find References
                     
                     When specifying the 'code_line', only include the specific line of code that contains the 'invoke_variable'. 
                     The 'code_line' should not span multiple lines, and must include the exact line that contains the 'invoke_variable' being explored.
@@ -602,22 +662,23 @@ class Agent {
                 taskInstructions = `
                     Task 2: Filter and rank the exploration results for each sub-question.
                     Pick the most relevant results (up to num_results) for each sub-question based on their usefulness in answering the refined question.
-                    Ensure that the output follows the provided JSON schema for processed results, which should include file uri, line number, code, and explanation.
+                    Ensure that the output follows the provided JSON schema for questions_and_results, which should include file uri, line number, code, and explanation.
                 `;
                 break;
             case 3:
                 taskInstructions = `
-                    Task 3: Assess whether the refined question has been sufficiently answered based on the processed results.
+                    Task 3: Assess whether the refined question has been sufficiently answered based on the questions_and_results.
                     If the question is sufficiently answered, set "final_decision_sufficient" to true.
                     Provide an insightful and beginner-friendly explanation in the "final_answer" to help the user understand how the question was addressed.
 
                     If the question is not sufficiently answered, set "final_decision_sufficient" to false and propose additional sub-questions that can further explore the question.
 
                     When proposing sub-questions:
-                    - First, check the exploration history (provided in the input) to see if there are any starting points (code contexts) already identified in the history that can be used to explore the sub-question. 
+                    - **Do not generate hypothetical code contexts.** You must use existing code contexts from the exploration history or real code from the provided file.
+                    - First, check the exploration history (provided in the input) to see if there are any starting points (code contexts) already identified in the history that can be used to explore the sub-question.
                     - If no valid starting point is found from the exploration history, use the full file content (provided in the input) to search for relevant code areas that may help explore the sub-question.
                     - Include the file, invoke_variable, code_line, and full_statement in the output for each sub-question with a valid starting point.
-                    - If no relevant code is found in the file, leave the code_context empty for that sub-question.
+                    - If no relevant code is found in the file, leave the code_context empty for that sub-question. 
 
                     The output format must strictly follow the provided JSON schema:
                     - "final_decision_sufficient" should be a boolean indicating whether the question was fully answered.

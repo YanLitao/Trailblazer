@@ -9,7 +9,9 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onView:search-copilot.sidebarView"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -17,6 +19,30 @@
         "command": "search-copilot.helloWorld",
         "title": "Hello World"
       }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "search-copilot-sidebar",
+          "title": "Search Copilot",
+          "icon": ""
+        }
+      ]
+    },
+    "views": {
+      "search-copilot-sidebar": [
+        {
+          "type": "webview",
+          "id": "search-copilot.sidebarView",
+          "name": "Exploration"
+        }
+      ]
+    }
+  },
+  "assets": {
+    "media": [
+      "media/sidebar.css",
+      "media/sidebar.js"
     ]
   },
   "scripts": {
