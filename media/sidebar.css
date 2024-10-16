@@ -1,33 +1,25 @@
 body {
-    font-family: Arial, sans-serif;
+    font-family: "Lato", Arial, sans-serif;
     margin: 0;
     padding: 0;
     background-color: #f5f5f5;
 }
 
-h2,
-h3,
-h4 {
-    margin: 0;
-    padding: 10px 15px;
-    background-color: #007acc;
-    color: white;
-    font-weight: normal;
-    border-bottom: 1px solid #007acc;
-}
-
 h2 {
-    font-size: 1.5em;
+    font-size: 1.3em;
+    font-weight: 700;
+    margin: 10px;
 }
 
 h3 {
+    font-weight: 700;
     font-size: 1.2em;
 }
 
 h4 {
+    margin: 0;
     font-size: 1em;
-    cursor: pointer;
-    color: #007acc;
+    font-weight: 300;
 }
 
 #exploration-steps {
@@ -35,32 +27,30 @@ h4 {
 }
 
 .sub-question {
-    margin-bottom: 20px;
     border: 1px solid #ddd;
     border-radius: 4px;
     background-color: white;
     padding: 10px;
+    padding-top: 0;
 }
 
 .task {
     margin-bottom: 30px;
 }
 
+.code-info {
+    font-size: 0.8em;
+}
+
 .code-box {
-    margin-top: 10px;
-    background-color: #282c34;
-    padding: 10px;
+    padding: 0 10px;
     border-radius: 5px;
     overflow-x: auto;
-    color: white;
 }
 
 .code-title {
-    background-color: #222;
     padding: 5px;
     font-size: 0.9em;
-    color: #9cdcfe;
-    border-bottom: 1px solid #007acc;
     cursor: pointer;
 }
 
@@ -68,11 +58,4 @@ pre,
 code {
     margin: 0;
     padding: 0;
-}
-
-/* Highlight the line numbers */
-.line-number {
-    color: #888;
-    font-size: 0.9em;
-    margin-right: 10px;
 }

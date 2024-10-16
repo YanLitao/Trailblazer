@@ -12,7 +12,7 @@ if (!API_KEY) {
 }
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('Extension "search-copilot" is now active!');
+    //console.log('Extension "search-copilot" is now active!');
 
     // Register the command to ask a question about code
     const disposable = vscode.commands.registerCommand('search-copilot.helloWorld', () => {
@@ -83,14 +83,14 @@ export async function getSurroundingCode(uri: vscode.Uri, startLine: number, end
 
 export function getAccurateLineNumber(context: string, selectedCodeLine: string, startLineOfContext: number): number | null {
     const contextLines = context.split('\n');
-    console.log("Context: " + context);
-    console.log(`Start line of context: ${startLineOfContext}`);
+    //console.log("Context: " + context);
+    //console.log(`Start line of context: ${startLineOfContext}`);
 
     for (let i = 0; i < contextLines.length; i++) {
         const lineText = contextLines[i].trim();
         if (lineText === selectedCodeLine.trim()) {
             const accurateLineNumber = startLineOfContext + i;
-            console.log(`Selected code line found in context at line ${accurateLineNumber}`);
+            //console.log(`Selected code line found in context at line ${accurateLineNumber}`);
             return accurateLineNumber;
         }
     }
@@ -126,7 +126,7 @@ async function searchVariableOffset(
             // Search for the variable name in the current line
             const offset = lineText.indexOf(variableName);
             if (offset !== -1) {
-                console.log(`Found variable "${variableName}" at line ${currentLine}, offset ${offset}`);
+                //console.log(`Found variable "${variableName}" at line ${currentLine}, offset ${offset}`);
                 return { line: currentLine, offset: offset };
             }
         }
@@ -155,7 +155,7 @@ export function preProcessCodeLine(subProblem: any, surroundingCode: string): st
 
     for (const line of surroundingCodeParts) {
         if (line.includes(invokeVariable)) {
-            console.log(`invoke_variable "${invokeVariable}" found in surrounding code.`);
+            //console.log(`invoke_variable "${invokeVariable}" found in surrounding code.`);
             return line;
         }
     }
@@ -353,16 +353,14 @@ class Agent {
         let sufficient = false;
         let refinedOutput;
 
-        console.log(`Starting workflow with question: "${question}" at ${uri.toString()} on line ${startLine}` + (startLine !== endLine ? ` to ${endLine}` : ""));
+        //console.log(`Starting workflow with question: "${question}" at ${uri.toString()} on line ${startLine}` + (startLine !== endLine ? ` to ${endLine}` : ""));
 
         // Start Task 1 and update the sidebar with the results
-        console.log(`Step ${this._stepCounter}: Running Task 1`);
+        //console.log(`Step ${this._stepCounter}: Running Task 1`);
         refinedOutput = await this.runTask1(question, uri, startLine, endLine);
 
         // Update sidebar after Task 1 completes
-        if (refinedOutput) {
-            this._sidebarViewProvider.addTask1Results(refinedOutput);
-        } else {
+        if (!refinedOutput) {
             console.error("Error: Task 1 did not return sub-problems.");
         }
 
@@ -375,33 +373,31 @@ class Agent {
             this._stepCounter++;
 
             // Start Task 2
-            console.log(`Step ${this._stepCounter}: Running Task 2`);
+            //console.log(`Step ${this._stepCounter}: Running Task 2`);
             await this.runTask2(refinedOutput.sub_problems);
 
             // Start Task 3
-            console.log(`Step ${this._stepCounter}: Running Task 3`);
+            //console.log(`Step ${this._stepCounter}: Running Task 3`);
             const task3Output = await this.runTask3(uri);
-            if (this._sidebarViewProvider) {
-                this._sidebarViewProvider.addTask3Results(task3Output);
-            }
 
             sufficient = task3Output.final_decision_sufficient === true;
             refinedOutput = task3Output;
 
-            console.log(`Task 3 Output: ${JSON.stringify(task3Output, null, 2)}`);
+            //console.log(`Task 3 Output: ${JSON.stringify(task3Output, null, 2)}`);
 
             if (sufficient) {
-                console.log(`Final Answer:\n${task3Output.final_answer}`);
+                //console.log(`Final Answer:\n${task3Output.final_answer}`);
                 break;
             }
         }
 
         if (this._stepCounter >= MAX_STEPS) {
-            console.log("Reached the maximum steps of exploration.");
+            //console.log("Reached the maximum steps of exploration.");
         }
     }
 
     async runTask1(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
+        console.warn("Running Task 1");
         const { contextText: surroundingCode, startContextLine } = await getSurroundingCode(uri, startLine, endLine);
 
         const inputJson = {
@@ -413,12 +409,12 @@ class Agent {
             "allowed_tools": allowedTools
         };
 
-        console.log(`Task 1 Input: ${JSON.stringify(inputJson)}`);
+        //console.log(`Task 1 Input: ${JSON.stringify(inputJson)}`);
 
         const response = await this._callAgentAPI(inputJson, 1, task1JsonSchema);
         const task1Output = JSON.parse(response);
 
-        console.log(`Task 1 Output: ${JSON.stringify(task1Output)}`);
+        //console.log(`Task 1 Output: ${JSON.stringify(task1Output)}`);
 
         this._refined_question = task1Output.refined_question;
 
@@ -437,7 +433,7 @@ class Agent {
 
                 if (accurateLineNumber !== null) {
                     subProblem.code_context.line_number = accurateLineNumber;
-                    console.log(`Accurate line number for invoke_variable "${invokeVariable}" is: ${accurateLineNumber}`);
+                    //console.log(`Accurate line number for invoke_variable "${invokeVariable}" is: ${accurateLineNumber}`);
 
                     const fullStatement = await getDestructuringAssignment(document, accurateLineNumber);
                     subProblem.code_context.full_statement = fullStatement;
@@ -449,6 +445,8 @@ class Agent {
             }
         }
 
+        console.log(`Task 1 Results: ${JSON.stringify(task1Output, null, 2)}`);
+
         // Update the sidebar view with Task 1 results after processing
         if (this._sidebarViewProvider) {
             this._sidebarViewProvider.addTask1Results(task1Output);  // Add the Task 1 results to the sidebar
@@ -458,6 +456,7 @@ class Agent {
     }
 
     async runTask2(subProblems: any[]) {
+        console.warn("Running Task 2");
         interface SubProblem {
             sub_question: string;
             tool: number;
@@ -484,8 +483,8 @@ class Agent {
             const initialLineNumber = subProblem.code_context.line_number;
             const fileUri = vscode.Uri.parse(subProblem.code_context.file_uri);
 
-            console.log(`Processing sub-problem: ${subProblem.sub_question} using variable "${variableName}"`);
-            console.log(`Initial line number for "${variableName}": ${initialLineNumber}`);
+            //console.log(`Processing sub-problem: ${subProblem.sub_question} using variable "${variableName}"`);
+            //console.log(`Initial line number for "${variableName}": ${initialLineNumber}`);
 
             // Open the document at the specified fileUri
             const document = await vscode.workspace.openTextDocument(fileUri);
@@ -495,7 +494,7 @@ class Agent {
 
             if (offsetResult) {
                 const { line, offset } = offsetResult;
-                console.log(`Found variable "${variableName}" at line ${line}, offset ${offset}`);
+                //console.log(`Found variable "${variableName}" at line ${line}, offset ${offset}`);
 
                 // Create the position and location for further exploration
                 const pos = new vscode.Position(line, offset);
@@ -504,18 +503,18 @@ class Agent {
                 // Execute VSCode API commands based on the selected tool
                 let results = [];
                 if (subProblem.tool === 1) {
-                    console.log(`Finding references for "${variableName}"`);
+                    //console.log(`Finding references for "${variableName}"`);
                     const referenceLocations = await vscode.commands.executeCommand(
                         'vscode.executeReferenceProvider', loc.uri, loc.range.start
                     );
-                    console.log(`Reference locations found: ${JSON.stringify(referenceLocations)}`);
+                    //console.log(`Reference locations found: ${JSON.stringify(referenceLocations)}`);
                     results = await this._prepareResults(referenceLocations as vscode.Location[] | vscode.LocationLink[], subProblem);
                 } else if (subProblem.tool === 0) {
-                    console.log(`Going to definition for "${variableName}"`);
+                    //console.log(`Going to definition for "${variableName}"`);
                     const definitionLocations = await vscode.commands.executeCommand<vscode.Location[] | vscode.LocationLink[]>(
                         'vscode.executeDefinitionProvider', loc.uri, loc.range.start
                     );
-                    console.log(`Definition locations found: ${JSON.stringify(definitionLocations)}`);
+                    //console.log(`Definition locations found: ${JSON.stringify(definitionLocations)}`);
                     results = await this._prepareResults(definitionLocations, subProblem);
                 }
 
@@ -548,12 +547,12 @@ class Agent {
 
         // Process sub-problems with the agent if necessary
         if (task2Input.questions_and_results.length > 0) {
-            console.log(`Task 2 Input for agent processing: ${JSON.stringify(task2Input, null, 2)}`);
+            //console.log(`Task 2 Input for agent processing: ${JSON.stringify(task2Input, null, 2)}`);
 
             const response = await this._callAgentAPI(task2Input, 2, task2JsonSchema);
             const task2Output = JSON.parse(response);
 
-            console.log(`Task 2 Output from agent: ${JSON.stringify(task2Output, null, 2)}`);
+            //console.log(`Task 2 Output from agent: ${JSON.stringify(task2Output, null, 2)}`);
 
             // Add agent-processed results to the final structure
             if (Array.isArray(task2Output.questions_and_results)) {
@@ -567,6 +566,8 @@ class Agent {
 
         // Once all results are gathered, add them to the exploration history and update the sidebar
         this._explorationHistory.push(...task2Results);
+
+        console.log(`Task 2 Results: ${JSON.stringify(task2Results, null, 2)}`);
 
         // Update the sidebar with the full Task 2 results
         if (this._sidebarViewProvider) {
@@ -589,8 +590,8 @@ class Agent {
 
             const fullStatement = await getDestructuringAssignment(document, lineNumber);
 
-            console.log(`Result found at file: ${fileUri}, line: ${lineNumber}`);
-            console.log(`Full statement retrieved: ${fullStatement}`);
+            //console.log(`Result found at file: ${fileUri}, line: ${lineNumber}`);
+            //console.log(`Full statement retrieved: ${fullStatement}`);
 
             results.push({
                 file_uri: fileUri,
@@ -604,6 +605,7 @@ class Agent {
     }
 
     async runTask3(uri: vscode.Uri) {
+        console.warn("Running Task 3");
         // Create a clean exploration history without explanations for Task 3 input
         const cleanExplorationHistory = this._explorationHistory.map((entry: any) => {
             // For each sub-problem, map the filtered results and remove the explanation
@@ -625,16 +627,22 @@ class Agent {
             "exploration_history": cleanExplorationHistory  // Include the cleaned exploration history
         };
 
-        console.log("Task 3 Input:\n", JSON.stringify(inputJson));
+        //console.log("Task 3 Input:\n", JSON.stringify(inputJson));
 
         const response = await this._callAgentAPI(inputJson, 3, task3JsonSchema);
         const task3Output = JSON.parse(response);
+
+        console.log(`Task 3 Results: ${JSON.stringify(task3Output, null, 2)}`);
 
         // Handle sub-problems that have no valid starting points
         for (const subProblem of task3Output.sub_problems) {
             if (Object.keys(subProblem.code_context).length === 0) {
                 console.log(`No starting point found for sub-question: ${subProblem.sub_question}`);
             }
+        }
+
+        if (this._sidebarViewProvider) {
+            this._sidebarViewProvider.addTask3Results(task3Output);
         }
 
         return task3Output;

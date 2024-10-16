@@ -5,8 +5,6 @@ const vscode = acquireVsCodeApi(); // This gives us access to the VSCode API
 window.addEventListener('message', event => {
     const message = event.data;
 
-    console.warn('Received message from extension:', message);
-
     switch (message.command) {
         case 'appendHtml':
             appendHtml(message.html);
