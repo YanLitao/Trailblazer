@@ -23,7 +23,71 @@ h4 {
 }
 
 #exploration-steps {
-    margin: 10px 15px;
+    margin: 0 10px;
+}
+
+/* Style for the step-circle */
+.step-circle {
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background-color: white;
+    /* Green background */
+    color: #002060;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-weight: bold;
+    margin-right: 10px;
+    /* Space between the circle and the heading */
+}
+
+/* Flexbox container to align circle and heading */
+.task-header {
+    display: flex;
+    align-items: center;
+    /* Vertically center the circle and heading */
+}
+
+/* Ensure content is aligned with the heading text */
+.task-content {
+    margin-left: 40px;
+    /* Adjust this value to match the width of the circle + margin */
+}
+
+/* Optional styles for spacing and presentation */
+.task-content p {
+    margin-top: 0;
+    margin-bottom: 10px;
+}
+
+/* Triangle button */
+.toggle-button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    display: inline-block;
+    font-size: 16px;
+    padding: 0;
+    margin-right: 10px;
+    transform: rotate(0deg);
+    /* Initial state */
+    transition: transform 0.3s ease;
+}
+
+.toggle-button.active {
+    transform: rotate(90deg);
+    /* Rotates to point downward when active */
+}
+
+.task-details {
+    margin-top: 10px;
+    display: none;
+    /* Hidden by default */
+}
+
+.task {
+    margin-bottom: 30px;
 }
 
 .sub-question {
@@ -34,16 +98,12 @@ h4 {
     padding-top: 0;
 }
 
-.task {
-    margin-bottom: 30px;
-}
-
 .code-info {
     font-size: 0.8em;
 }
 
 .code-box {
-    padding: 0 10px;
+    padding: 0;
     border-radius: 5px;
     overflow-x: auto;
 }
@@ -58,4 +118,9 @@ pre,
 code {
     margin: 0;
     padding: 0;
+    font-size: 0.9em;
+}
+
+.filtered-results {
+    border-top: lightgray 1px solid;
 }
