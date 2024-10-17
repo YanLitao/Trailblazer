@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getDestructuringAssignment, getSurroundingCode } from './extension';
+import { getSurroundingCode } from './extension';
 
 const allowedTools = {
     0: "Go to Definition",
@@ -8,19 +8,18 @@ const allowedTools = {
 
 export class SidebarView implements vscode.WebviewViewProvider {
     public static readonly viewType = 'search-copilot.sidebarView';
-
     private _view?: vscode.WebviewView;
+    private _question: string = '';
+    private _selectedCode: string = '';
 
     constructor(
-        private readonly _context: vscode.ExtensionContext,
-        private _question: string,
-        private _selectedCode: string
+        private readonly _context: vscode.ExtensionContext
     ) { }
 
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
         context: vscode.WebviewViewResolveContext,
-        _token: vscode.CancellationToken
+        _token: vscode.CancellationToken,
     ): void {
         this._view = webviewView;
 
@@ -32,6 +31,39 @@ export class SidebarView implements vscode.WebviewViewProvider {
 
         // Initial content for the sidebar
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+
+        // Register message handler to handle messages from the webview
+        webviewView.webview.onDidReceiveMessage((message) => {
+            if (message.command === 'openFileAtLine') {
+                const fileUri = vscode.Uri.parse(message.fileUri);
+                const lineNumber = message.lineNumber;
+                this.openFileAtLine(fileUri, lineNumber);
+            }
+        });
+    }
+
+    // Function to open the file and jump to the specific line
+    private async openFileAtLine(fileUri: vscode.Uri, lineNumber: number) {
+        try {
+            const document = await vscode.workspace.openTextDocument(fileUri);
+            const editor = await vscode.window.showTextDocument(document);
+
+            const position = new vscode.Position(lineNumber, 0);
+            const range = new vscode.Range(position, position);
+            editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+            editor.selection = new vscode.Selection(position, position);
+        } catch (error) {
+            console.error(`Error opening file at line ${lineNumber}: `, error);
+        }
+    }
+
+    // Public method to update the content dynamically with the user question and selected code
+    public updateWebviewContent(question: string, selectedCode: string) {
+        this._question = question;
+        this._selectedCode = selectedCode;
+        if (this._view) {
+            this._view.webview.html = this._getHtmlForWebview(this._view.webview);
+        }
     }
 
     private _stripSingleLineIndentation(code: string): string {
@@ -59,13 +91,13 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 <link rel="preconnect" href="https://fonts.googleapis.com">
                 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
                 <link href="https://fonts.googleapis.com/css2?family=Lato:ital,wght@0,100;0,300;0,400;0,700;0,900;1,100;1,300;1,400;1,700;1,900&display=swap" rel="stylesheet">
-                <link href="${prismCSS}">
+                <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/9000.0.1/themes/prism.min.css" />
             </head>
             <body>
                 <div id="user-question">
                     <h2>User Question: ${this._question}</h2>
                     <div class="code-box">
-                        <pre class="language-javascript line-numbers"><code>${this._stripSingleLineIndentation(this._selectedCode)}</code></pre>
+                        <pre class="line-numbers"><code class="language-ts">${this._stripSingleLineIndentation(this._selectedCode)}</code></pre>
                     </div>
                 </div>
                 <div id="exploration-steps"></div> <!-- This div will hold all exploration steps -->
@@ -102,11 +134,11 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     <p class="code-info">
                         Going to use <strong>${allowedTools[subProblem.tool as keyof typeof allowedTools]}</strong> to explore <strong>${subProblem.invoke_variable}</strong> in  <strong>${fileName}, 
                         <a href="#" class="line-link" data-file-uri="${codeContext.file_uri}" data-line="${codeContext.line_number}">
-                            line ${codeContext.line_number}
+                            line ${codeContext.line_number + 1}
                         </a></strong>:
                     </p>
                     <div class="code-box">
-                        <pre class="language-typescript line-numbers"><code>${this.escapeHtml(this._stripSingleLineIndentation(codeContext.full_statement))}</code></pre>
+                        <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(this._stripSingleLineIndentation(codeContext.full_statement))}</code></pre>
                     </div>
                 </div>
             `;
@@ -134,7 +166,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     <p><strong>Sub-question:</strong> ${result.sub_question}</p>
                     <p class="code-info">Used <strong>${allowedTools[result.tool as keyof typeof allowedTools]}</strong> to explore <strong>${result.invoke_variable}</strong> in:</p>
                     <div class="code-box">
-                        <pre class="language-typescript line-numbers"><code>${this.escapeHtml(this._stripSingleLineIndentation(result.code_context.code_line))}</code></pre>
+                        <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(this._stripSingleLineIndentation(result.code_context.code_line))}</code></pre>
                     </div>
                     <p class="code-info">Find <strong>${result.filtered_results.length}</strong> results:</p>
                     <div id="filtered-results">
@@ -151,11 +183,11 @@ export class SidebarView implements vscode.WebviewViewProvider {
                         <p class="code-info">
                             In <strong>${fileName}, 
                             <a href="#" class="line-link" data-file-uri="${filteredResult.file_uri}" data-line="${filteredResult.line_number}">
-                                Line ${filteredResult.line_number}
+                                Line ${filteredResult.line_number + 1}
                             </a></strong>:
                         </p>
                         <div class="code-box">
-                            <pre class="language-typescript line-numbers" data-line="${filteredResult.line_number}"><code>${this.escapeHtml(contextText)}</code></pre>
+                            <pre class="line-numbers" data-line="${filteredResult.line_number}"><code class="language-ts">${this.escapeHtml(contextText)}</code></pre>
                         </div>
                     </div>
                 `;
@@ -202,11 +234,11 @@ export class SidebarView implements vscode.WebviewViewProvider {
                         <p class="code-info">
                             Going to use <strong>${allowedTools[subProblem.tool as keyof typeof allowedTools]}</strong> to explore <strong>${subProblem.invoke_variable}</strong> in <strong>${fileName}, 
                             <a href="#" class="line-link" data-file-uri="${codeContext.file_uri}" data-line="${codeContext.line_number}">
-                                Line ${codeContext.line_number}
+                                Line ${codeContext.line_number + 1}
                             </a></strong>:
                         </p>
                         <div class="code-box">
-                            <pre class="language-typescript line-numbers"><code>${this.escapeHtml(this._stripSingleLineIndentation(codeContext.full_statement))}}</code></pre>
+                            <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(this._stripSingleLineIndentation(codeContext.full_statement))}}</code></pre>
                         </div>
                     </div>
                     `;

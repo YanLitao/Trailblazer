@@ -22,10 +22,10 @@ function appendHtml(html) {
 
 // Add click event listeners to the titles that contain line numbers
 function setupJumpToLine() {
-    document.querySelectorAll('.code-title').forEach(element => {
+    document.querySelectorAll('.line-link').forEach(element => {
         element.addEventListener('click', () => {
             const fileUri = element.getAttribute('data-file-uri');
-            const lineNumber = parseInt(element.getAttribute('data-line-number'));
+            const lineNumber = parseInt(element.getAttribute('data-line'));
 
             // Send a message to VSCode to jump to the line in the given file
             vscode.postMessage({

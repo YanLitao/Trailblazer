@@ -12,11 +12,18 @@ if (!API_KEY) {
 }
 
 export function activate(context: vscode.ExtensionContext) {
-    //console.log('Extension "search-copilot" is now active!');
+    // Register the command to ask a question about code
+    // Initialize the SidebarView with only the context
+    const sidebarViewProvider = new SidebarView(context);
+
+    // Register the webview provider for the sidebar
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(SidebarView.viewType, sidebarViewProvider)
+    );
 
     // Register the command to ask a question about code
     const disposable = vscode.commands.registerCommand('search-copilot.helloWorld', () => {
-        askQuestionAboutCode(context);
+        askQuestionAboutCode(context, sidebarViewProvider); // Pass the SidebarView instance
     });
     context.subscriptions.push(disposable);
 }
@@ -28,7 +35,7 @@ export async function getQuestion(code: string) {
     });
 }
 
-async function askQuestionAboutCode(context: vscode.ExtensionContext) {
+async function askQuestionAboutCode(context: vscode.ExtensionContext, sidebarViewProvider: SidebarView) {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
         return;
@@ -52,11 +59,8 @@ async function askQuestionAboutCode(context: vscode.ExtensionContext) {
         return; // User canceled the input box
     }
 
-    // Initialize the SidebarView only when the user submits a question
-    const sidebarViewProvider = new SidebarView(context, query, selectedText);
-    context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider(SidebarView.viewType, sidebarViewProvider)
-    );
+    // Update the sidebar view content with the user question and selected code
+    sidebarViewProvider.updateWebviewContent(query, selectedText);
 
     // Show the sidebar automatically once the question is received
     vscode.commands.executeCommand('workbench.view.extension.search-copilot-sidebar').then(() => {
@@ -94,7 +98,7 @@ export function getAccurateLineNumber(context: string, selectedCodeLine: string,
             return accurateLineNumber;
         }
     }
-    console.error(`Code line "${selectedCodeLine}" not found in the provided context.`);
+    console.error(`Code line "${selectedCodeLine}" not found in the provided context: ${context}`);
     return null;
 }
 
