@@ -357,6 +357,8 @@ class Agent {
         let sufficient = false;
         let refinedOutput;
 
+        this._sidebarViewProvider.agentIsRunning();
+
         //console.log(`Starting workflow with question: "${question}" at ${uri.toString()} on line ${startLine}` + (startLine !== endLine ? ` to ${endLine}` : ""));
 
         // Start Task 1 and update the sidebar with the results
@@ -394,6 +396,8 @@ class Agent {
                 break;
             }
         }
+
+        this._sidebarViewProvider.agentIsDone();
 
         if (this._stepCounter >= MAX_STEPS) {
             //console.log("Reached the maximum steps of exploration.");

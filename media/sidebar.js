@@ -6,18 +6,24 @@ window.addEventListener('message', event => {
     const message = event.data;
     switch (message.command) {
         case 'appendHtml':
-            appendHtml(message.html, message.id);
+            appendHtml(message.html, message.id, message.num);
+            break;
+        case 'updateStatus':
+            updateStatus(message.status);
             break;
     }
 });
 
 // Function to append HTML content dynamically
-function appendHtml(html, id) {
+function appendHtml(html, id, num) {
     const explorationSteps = document.getElementById('exploration-steps');
     explorationSteps.insertAdjacentHTML('beforeend', html);
     Prism.highlightAll(); // Highlight the newly added code using Prism.js
     setupJumpToLine(); // Set up the jump-to-line functionality
-    setupToggleDetails(id); // Set up the toggle details functionality
+    if (num >= 0) {
+        setupToggleDetails(id, num); // Set up the toggle details functionality
+    }
+
 }
 
 // Add click event listeners to the titles that contain line numbers
@@ -37,20 +43,26 @@ function setupJumpToLine() {
     });
 }
 
-function setupToggleDetails(id) {
-    document.getElementById(id + "-btn").addEventListener('click', function () {
-        const targetId = this.getAttribute('data-target'); // 'this' refers to the clicked button
-        const targetElement = document.getElementById(targetId);
+function setupToggleDetails(id, num) {
+    for (let i = 0; i <= num; i++) {
+        document.getElementById(id + "-btn-" + i).addEventListener('click', function () {
+            const targetId = this.getAttribute('data-target'); // 'this' refers to the clicked button
+            const targetElement = document.getElementById(targetId);
+            const triangle = this.querySelector('.triangle-right, .triangle-down'); // Select the triangle
 
-        console.log("Finding target element with id: " + targetId + " and found:");
-        console.log(targetElement);
+            if (targetElement.style.display === 'none') {
+                targetElement.style.display = 'block';
+                triangle.classList.remove('triangle-right');
+                triangle.classList.add('triangle-down'); // Change to down-pointing triangle
+            } else {
+                targetElement.style.display = 'none';
+                triangle.classList.remove('triangle-down');
+                triangle.classList.add('triangle-right'); // Change to right-pointing triangle
+            }
+        });
+    }
+}
 
-        if (targetElement.style.display === 'none') {
-            targetElement.style.display = 'block';
-            this.innerHTML = '&#9660;'; // Change the triangle to point downwards
-        } else {
-            targetElement.style.display = 'none';
-            this.innerHTML = '&#9654;'; // Change the triangle to point rightwards
-        }
-    });
+function updateStatus(status) {
+    document.getElementById('agent-status-text').innerText = status;
 }
