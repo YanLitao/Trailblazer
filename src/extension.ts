@@ -3,6 +3,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
+import { tool } from '@langchain/core/tools';
 
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
@@ -219,6 +220,10 @@ export async function getDestructuringAssignment(document: vscode.TextDocument, 
         end++;
     }
 
+    // Ensure the start and end lines are within the document bounds
+    start = Math.max(0, start);
+    end = Math.min(totalLines - 1, end);
+
     const range = new vscode.Range(start, 0, end, document.lineAt(end).text.length);
     return document.getText(range);
 }
@@ -342,11 +347,15 @@ class Agent {
     private _stepCounter: number = 0;
     private _refined_question: string | null = null;
     private _sidebarViewProvider: SidebarView; // Add a reference to the SidebarView
+    private _exploredVariables: any[] = [];
 
     constructor(sidebarViewProvider: SidebarView) { // Pass in the sidebar view provider
         this._model = new ChatOpenAI({
             model: "gpt-4o-mini",
             apiKey: API_KEY,
+            maxTokens: 16384,
+            temperature: 0.1,
+            topP: 1,
         });
         this._sidebarViewProvider = sidebarViewProvider;
     }
@@ -393,6 +402,9 @@ class Agent {
 
             if (sufficient) {
                 //console.log(`Final Answer:\n${task3Output.final_answer}`);
+                break;
+            } else if (task3Output.sub_problems.length === 0) {
+                console.log("No sub-questions to explore further.");
                 break;
             }
         }
@@ -500,9 +512,29 @@ class Agent {
             // Use the helper function to find the variable's offset in the document
             const offsetResult = await searchVariableOffset(document, variableName, initialLineNumber);
 
+            // Define the structure of eachSubProblem
+            const eachSubProblem: any = {
+                sub_question: subProblem.sub_question,
+                tool: subProblem.tool,
+                code_context: subProblem.code_context,
+                num_results: subProblem.num_results,
+            };
+
             if (offsetResult) {
                 const { line, offset } = offsetResult;
                 //console.log(`Found variable "${variableName}" at line ${line}, offset ${offset}`);
+
+                // find whether the variable has been explored before
+                const exploredVariable = this._exploredVariables.find((variable: any) => variable.invoke_variable === variableName);
+                // match the line number and file uri
+                const match = exploredVariable?.line_number === line && exploredVariable?.file_uri === fileUri.toString();
+                // if the variable has been explored before, use the results from the exploration history
+                if (exploredVariable && match) {
+                    //console.log(`Using results from previous exploration for variable "${variableName}"`);
+                    eachSubProblem["results"] = exploredVariable.results;
+                    task2Results.push(eachSubProblem);
+                    continue;
+                }
 
                 // Create the position and location for further exploration
                 const pos = new vscode.Position(line, offset);
@@ -528,15 +560,16 @@ class Agent {
 
                 if (results.length === 0) {
                     console.warn(`No results were found for sub-problem "${subProblem.sub_question}" and variable "${variableName}".`);
+                } else {
+                    const exploredVariable: any = {
+                        invoke_variable: variableName,
+                        line_number: line,
+                        file_uri: fileUri.toString(),
+                        tool: subProblem.tool,
+                        results: results
+                    }
+                    this._exploredVariables.push(exploredVariable);
                 }
-
-                // Define the structure of eachSubProblem
-                const eachSubProblem: any = {
-                    sub_question: subProblem.sub_question,
-                    tool: subProblem.tool,
-                    code_context: subProblem.code_context,
-                    num_results: subProblem.num_results,
-                };
 
                 // Store results in the final unified structure for the sidebar
                 if (results.length > subProblem.num_results && subProblem.num_results > 0) {
@@ -550,6 +583,8 @@ class Agent {
                 }
             } else {
                 console.error(`Variable "${variableName}" not found near line ${initialLineNumber}.`);
+                eachSubProblem["filtered_results"] = [];
+                task2Results.push(eachSubProblem);
             }
         }
 
@@ -561,11 +596,20 @@ class Agent {
             const task2Output = JSON.parse(response);
 
             //console.log(`Task 2 Output from agent: ${JSON.stringify(task2Output, null, 2)}`);
-
             // Add agent-processed results to the final structure
             if (Array.isArray(task2Output.questions_and_results)) {
-                task2Results.push(...task2Output.questions_and_results);
-            } else if (typeof task2Output.questions_and_results === 'object') {
+                for (const subProblem of task2Output.questions_and_results) {
+                    if ("results" in subProblem) {
+                        subProblem.filtered_results = subProblem.results;
+                        delete subProblem.results;
+                    }
+                    task2Results.push(subProblem);
+                }
+            } else if (task2Output.questions_and_results && typeof task2Output.questions_and_results === 'object') {
+                if ("results" in task2Output.questions_and_results) {
+                    task2Output.questions_and_results.filtered_results = task2Output.questions_and_results.results;
+                    delete task2Output.questions_and_results.results;
+                }
                 task2Results.push(task2Output.questions_and_results);
             } else {
                 console.error("questions_and_results is neither an array nor an object:", task2Output.questions_and_results);
@@ -615,11 +659,12 @@ class Agent {
     async runTask3(uri: vscode.Uri) {
         console.warn("Running Task 3");
         // Create a clean exploration history without explanations for Task 3 input
+        console.log(`Exploration History: ${JSON.stringify(this._explorationHistory, null, 2)}`);
         const cleanExplorationHistory = this._explorationHistory.map((entry: any) => {
-            // For each sub-problem, map the filtered results and remove the explanation
+            const results = entry.results || entry.filtered_results || [];
             return {
                 sub_question: entry.sub_question,
-                filtered_results: entry.filtered_results.map((result: any) => ({
+                filtered_results: results.map((result: any) => ({
                     file_uri: result.file_uri,
                     code_line: result.code_line,
                     line_number: result.line_number,
@@ -643,8 +688,10 @@ class Agent {
         console.log(`Task 3 Results: ${JSON.stringify(task3Output, null, 2)}`);
 
         // Handle sub-problems that have no valid starting points
-        for (const subProblem of task3Output.sub_problems) {
-            if (Object.keys(subProblem.code_context).length === 0) {
+        for (let i = task3Output.sub_problems.length - 1; i >= 0; i--) {
+            const subProblem = task3Output.sub_problems[i];
+            if (subProblem == null || !("code_context" in subProblem) || Object.keys(subProblem.code_context).length === 0) {
+                task3Output.sub_problems.splice(i, 1);
                 console.log(`No starting point found for sub-question: ${subProblem.sub_question}`);
             }
         }
