@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getSurroundingCode } from './extension';
+import { getSurroundingCode, stripSingleLineIndentation } from './extension';
 
 const allowedTools = {
     0: "Go to Definition",
@@ -97,14 +97,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
         }
     }
 
-    private _stripSingleLineIndentation(code: string): string {
-        // decide if the code is single line
-        if (code.includes('\n')) {
-            return code;
-        }
-        return code.replace(/\s+/g, ' ').trim();
-    }
-
     // Function to update agent status
     private _updateAgentStatus(status: string) {
         if (this._view) {
@@ -148,7 +140,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 <div id="user-question">
                     <h2>User Question: ${this._question}</h2>
                     <div class="code-box">
-                        <pre class="line-numbers"><code class="language-ts">${this._stripSingleLineIndentation(this._selectedCode)}</code></pre>
+                        <pre class="line-numbers"><code class="language-ts">${stripSingleLineIndentation(this._selectedCode)}</code></pre>
                     </div>
                 </div>
                 <div id="exploration-steps"></div> <!-- This div will hold all exploration steps -->
@@ -203,7 +195,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                                 </a></strong>:
                             </p>
                             <div class="code-box">
-                                <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(this._stripSingleLineIndentation(codeContext.full_statement))}</code></pre>
+                                <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(codeContext.full_statement))}</code></pre>
                             </div>
                         </div>
                     </div>
@@ -251,7 +243,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     <div id="${uniqueId}-sub-question-${i}" class="task-details" style="display: none">
                         <p class="code-info">Explored <strong>${result.code_context.invoke_variable}</strong> using <strong>${allowedTools[result.tool as keyof typeof allowedTools]}</strong>:</p>
                         <div class="code-box">
-                            <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(this._stripSingleLineIndentation(result.code_context.code_line))}</code></pre>
+                            <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(result.code_context.code_line))}</code></pre>
                         </div>
                         <p class="code-info">Found <strong>${result.filtered_results.length}</strong> results:</p>
                         <div class="filtered-results">
@@ -341,7 +333,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                                 </a></strong>:
                             </p>
                             <div class="code-box">
-                                <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(this._stripSingleLineIndentation(codeContext.full_statement))}</code></pre>
+                                <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(codeContext.full_statement))}</code></pre>
                             </div>
                         </div>
                     </div>

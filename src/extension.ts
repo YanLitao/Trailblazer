@@ -3,7 +3,6 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
-import { tool } from '@langchain/core/tools';
 
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
@@ -86,21 +85,43 @@ export async function getSurroundingCode(uri: vscode.Uri, startLine: number, end
     };
 }
 
+export function stripSingleLineIndentation(code: string): string {
+    // decide if the code is single line
+    if (code.includes('\n')) {
+        return code;
+    }
+    return code.replace(/\s+/g, ' ').trim();
+}
+
 export function getAccurateLineNumber(context: string, selectedCodeLine: string, startLineOfContext: number): number | null {
     const contextLines = context.split('\n');
-    //console.log("Context: " + context);
-    //console.log(`Start line of context: ${startLineOfContext}`);
+    let closestMatch = -1;
+    let distance = contextLines.length + 1;
 
+    // Loop through all the lines in the context and find matches
     for (let i = 0; i < contextLines.length; i++) {
         const lineText = contextLines[i].trim();
-        if (lineText === selectedCodeLine.trim()) {
-            const accurateLineNumber = startLineOfContext + i;
-            //console.log(`Selected code line found in context at line ${accurateLineNumber}`);
-            return accurateLineNumber;
+
+        if (lineText.trim() !== '' && (lineText.includes(selectedCodeLine.trim()) || selectedCodeLine.includes(lineText))) {
+            console.log(`Found ${selectedCodeLine} at line ${i + 1}: ${lineText}`);
+            // Calculate the distance of this match from the start line of the context
+            const d = Math.abs(startLineOfContext - i);
+
+            // Check if this match is closer than any previous matches
+            if (!closestMatch || distance > d) {
+                closestMatch = i + 1;
+                distance = d;
+            }
         }
     }
-    console.error(`Code line "${selectedCodeLine}" not found in the provided context: ${context}`);
-    return null;
+
+    // Return the closest match if any, otherwise return null
+    if (closestMatch >= 0) {
+        return closestMatch;
+    } else {
+        console.error(`Code line "${selectedCodeLine}" not found in the provided context: ${context}`);
+        return null;
+    }
 }
 
 /**
@@ -119,10 +140,12 @@ async function searchVariableOffset(
     range: number = 10
 ): Promise<{ line: number, offset: number } | null> {
     const totalLines = document.lineCount;
+    const start = Math.max(0, startLine - range);
+    const end = Math.min(totalLines - 1, startLine + range);
 
     // Search around the startLine (above and below within the given range)
-    for (let i = -range; i <= range; i++) {
-        const currentLine = startLine + i;
+    for (let i = 0; i < end - start + 1; i++) {
+        const currentLine = start + i;
 
         // Ensure the line is within the document bounds
         if (currentLine >= 0 && currentLine < totalLines) {
@@ -138,7 +161,7 @@ async function searchVariableOffset(
     }
 
     // If the variable wasn't found, return null
-    console.error(`Variable "${variableName}" not found in the document.`);
+    console.error(`Variable "${variableName}" not found in around the line ${startLine} in the document between line ${start} and ${end}.`);
     return null;
 }
 
@@ -327,9 +350,10 @@ const task3JsonSchema = {
                             invoke_variable: { type: "string" },
                             code_line: { type: "string" },
                             line_number: { type: "integer" },
-                            full_statement: { type: "string" }
+                            full_statement: { type: "string" },
+                            from_results: { type: "boolean" }
                         },
-                        required: ["file_uri", "invoke_variable", "code_line", "line_number", "full_statement"]
+                        required: ["file_uri", "invoke_variable", "code_line", "line_number", "full_statement", "from_results"]
                     },
                     num_results: { type: "integer" },
                     reason: { type: "string" }
@@ -346,10 +370,13 @@ class Agent {
     private _explorationHistory: any[] = [];
     private _stepCounter: number = 0;
     private _refined_question: string | null = null;
-    private _sidebarViewProvider: SidebarView; // Add a reference to the SidebarView
+    private _sidebarViewProvider: SidebarView;
     private _exploredVariables: any[] = [];
+    private _exploredFiles: { file_uri: string, file_content: string }[] = []; // Simplified _exploredFiles
+    private _exploredSubQuestions: string[] = [];
+    private _exploredCodeLines: { file_uri: string, start_line: number, end_line: number, code_snippet: string }[] = [];
 
-    constructor(sidebarViewProvider: SidebarView) { // Pass in the sidebar view provider
+    constructor(sidebarViewProvider: SidebarView) {
         this._model = new ChatOpenAI({
             model: "gpt-4o-mini",
             apiKey: API_KEY,
@@ -360,51 +387,56 @@ class Agent {
         this._sidebarViewProvider = sidebarViewProvider;
     }
 
-    // Main workflow method to run all tasks
     async runWorkflow(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
         const MAX_STEPS = 30;
         let sufficient = false;
         let refinedOutput;
 
-        this._sidebarViewProvider.agentIsRunning();
+        // Fetch the file content and add it to _exploredFiles if not already present
+        const document = await vscode.workspace.openTextDocument(uri);
+        const fileUriString = uri.toString();
+        const fileContent = document.getText();
 
-        //console.log(`Starting workflow with question: "${question}" at ${uri.toString()} on line ${startLine}` + (startLine !== endLine ? ` to ${endLine}` : ""));
-
-        // Start Task 1 and update the sidebar with the results
-        //console.log(`Step ${this._stepCounter}: Running Task 1`);
-        refinedOutput = await this.runTask1(question, uri, startLine, endLine);
-
-        // Update sidebar after Task 1 completes
-        if (!refinedOutput) {
-            console.error("Error: Task 1 did not return sub-problems.");
+        // Add the file content only if it hasn't been explored before
+        if (!this._exploredFiles.some(file => file.file_uri === fileUriString)) {
+            this._exploredFiles.push({
+                file_uri: fileUriString,
+                file_content: fileContent
+            });
         }
 
-        // Continue with Task 2 and Task 3 if necessary
+        // Add the selected code into _exploredCodeLines
+        const selectedCodeSnippet = document.getText(new vscode.Range(startLine, 0, endLine, document.lineAt(endLine).range.end.character));
+        this._exploredCodeLines.push({
+            file_uri: fileUriString,
+            start_line: startLine,
+            end_line: endLine,
+            code_snippet: selectedCodeSnippet
+        });
+
+        this._sidebarViewProvider.agentIsRunning();
+
+        // Task 1: Refine the question and identify sub-problems
+        refinedOutput = await this.runTask1(question, uri, startLine, endLine);
+
+        // Loop to explore sub-problems
         while (!sufficient && this._stepCounter < MAX_STEPS) {
             if (!refinedOutput || !refinedOutput.sub_problems) {
-                console.error("Error: Task 3 did not return sub-problems.");
+                console.error("Error: No sub-problems returned.");
+                break;
             }
 
             this._stepCounter++;
 
-            // Start Task 2
-            //console.log(`Step ${this._stepCounter}: Running Task 2`);
+            // Task 2: Explore sub-problems
             await this.runTask2(refinedOutput.sub_problems);
 
-            // Start Task 3
-            //console.log(`Step ${this._stepCounter}: Running Task 3`);
-            const task3Output = await this.runTask3(uri);
-
-            sufficient = task3Output.final_decision_sufficient === true;
+            // Task 3: Evaluate if the question is sufficiently answered
+            const task3Output = await this.runTask3();
+            sufficient = task3Output.final_decision_sufficient;
             refinedOutput = task3Output;
 
-            //console.log(`Task 3 Output: ${JSON.stringify(task3Output, null, 2)}`);
-
-            if (sufficient) {
-                //console.log(`Final Answer:\n${task3Output.final_answer}`);
-                break;
-            } else if (task3Output.sub_problems.length === 0) {
-                console.log("No sub-questions to explore further.");
+            if (sufficient || task3Output.sub_problems.length === 0) {
                 break;
             }
         }
@@ -412,7 +444,7 @@ class Agent {
         this._sidebarViewProvider.agentIsDone();
 
         if (this._stepCounter >= MAX_STEPS) {
-            //console.log("Reached the maximum steps of exploration.");
+            console.log("Reached maximum exploration steps.");
         }
     }
 
@@ -477,153 +509,196 @@ class Agent {
 
     async runTask2(subProblems: any[]) {
         console.warn("Running Task 2");
-        interface SubProblem {
-            sub_question: string;
-            tool: number;
-            code_context: {
-                file_uri: string;
-                invoke_variable: string;
-                code_line: string;
-                line_number: number;
-            };
-            num_results: number;
-            results: any[];
-        }
 
-        const task2Input = {
-            "task": 2,
-            "refined_question": this._refined_question,
-            "questions_and_results": [] as SubProblem[]
+        const task2Input: any = {
+            task: 2,
+            refined_question: this._refined_question,
+            questions_and_results: [] // Only includes sub-problems that need further filtering by the agent
         };
 
-        const task2Results: any[] = []; // A unified structure to store all results
+        const task2Results: any[] = []; // Stores final results to display in the sidebar
 
         for (const subProblem of subProblems) {
             const variableName = subProblem.code_context.invoke_variable;
-            const initialLineNumber = subProblem.code_context.line_number;
+            let initialLineNumber = subProblem.code_context.line_number;
             const fileUri = vscode.Uri.parse(subProblem.code_context.file_uri);
-
-            //console.log(`Processing sub-problem: ${subProblem.sub_question} using variable "${variableName}"`);
-            //console.log(`Initial line number for "${variableName}": ${initialLineNumber}`);
 
             // Open the document at the specified fileUri
             const document = await vscode.workspace.openTextDocument(fileUri);
 
-            // Use the helper function to find the variable's offset in the document
+            // Ensure the file is added to _exploredFiles if not already added
+            this._addToExploredFiles(fileUri, document);
+
+            // Get code of the line
+            const codeLine = document.lineAt(initialLineNumber).text.trim();
+
+            if (!codeLine.includes(variableName)) {
+                const accurateLineNumber = getAccurateLineNumber(document.getText(), variableName, initialLineNumber);
+                console.log(`Accurate line number for invoke_variable "${variableName}" is: ${accurateLineNumber}`);
+                if (!accurateLineNumber) {
+                    continue;
+                } else {
+                    subProblem.code_context.line_number = accurateLineNumber;
+                    initialLineNumber = accurateLineNumber;
+                }
+            }
+            // Find the variable's offset in the document
             const offsetResult = await searchVariableOffset(document, variableName, initialLineNumber);
 
-            // Define the structure of eachSubProblem
-            const eachSubProblem: any = {
-                sub_question: subProblem.sub_question,
-                tool: subProblem.tool,
-                code_context: subProblem.code_context,
-                num_results: subProblem.num_results,
-            };
-
-            if (offsetResult) {
-                const { line, offset } = offsetResult;
-                //console.log(`Found variable "${variableName}" at line ${line}, offset ${offset}`);
-
-                // find whether the variable has been explored before
-                const exploredVariable = this._exploredVariables.find((variable: any) => variable.invoke_variable === variableName);
-                // match the line number and file uri
-                const match = exploredVariable?.line_number === line && exploredVariable?.file_uri === fileUri.toString();
-                // if the variable has been explored before, use the results from the exploration history
-                if (exploredVariable && match) {
-                    //console.log(`Using results from previous exploration for variable "${variableName}"`);
-                    eachSubProblem["results"] = exploredVariable.results;
-                    task2Results.push(eachSubProblem);
-                    continue;
-                }
-
-                // Create the position and location for further exploration
-                const pos = new vscode.Position(line, offset);
-                const loc = new vscode.Location(fileUri, pos);
-
-                // Execute VSCode API commands based on the selected tool
-                let results = [];
-                if (subProblem.tool === 1) {
-                    //console.log(`Finding references for "${variableName}"`);
-                    const referenceLocations = await vscode.commands.executeCommand(
-                        'vscode.executeReferenceProvider', loc.uri, loc.range.start
-                    );
-                    //console.log(`Reference locations found: ${JSON.stringify(referenceLocations)}`);
-                    results = await this._prepareResults(referenceLocations as vscode.Location[] | vscode.LocationLink[], subProblem);
-                } else if (subProblem.tool === 0) {
-                    //console.log(`Going to definition for "${variableName}"`);
-                    const definitionLocations = await vscode.commands.executeCommand<vscode.Location[] | vscode.LocationLink[]>(
-                        'vscode.executeDefinitionProvider', loc.uri, loc.range.start
-                    );
-                    //console.log(`Definition locations found: ${JSON.stringify(definitionLocations)}`);
-                    results = await this._prepareResults(definitionLocations, subProblem);
-                }
-
-                if (results.length === 0) {
-                    console.warn(`No results were found for sub-problem "${subProblem.sub_question}" and variable "${variableName}".`);
-                } else {
-                    const exploredVariable: any = {
-                        invoke_variable: variableName,
-                        line_number: line,
-                        file_uri: fileUri.toString(),
-                        tool: subProblem.tool,
-                        results: results
-                    }
-                    this._exploredVariables.push(exploredVariable);
-                }
-
-                // Store results in the final unified structure for the sidebar
-                if (results.length > subProblem.num_results && subProblem.num_results > 0) {
-                    // Add "results" key if more results need to be processed by the agent
-                    eachSubProblem["results"] = results;
-                    task2Input.questions_and_results.push(eachSubProblem);  // Add to task2Input for agent processing
-                } else {
-                    // Add "filtered_results" key otherwise and push directly to task2Results
-                    eachSubProblem["filtered_results"] = results;
-                    task2Results.push(eachSubProblem);
-                }
-            } else {
+            if (!offsetResult) {
                 console.error(`Variable "${variableName}" not found near line ${initialLineNumber}.`);
-                eachSubProblem["filtered_results"] = [];
-                task2Results.push(eachSubProblem);
+                task2Results.push({
+                    sub_question: subProblem.sub_question,
+                    tool: subProblem.tool,
+                    code_context: subProblem.code_context,
+                    filtered_results: [],
+                    reason: "Variable not found in code"
+                });
+                continue;
             }
-        }
 
-        // Process sub-problems with the agent if necessary
-        if (task2Input.questions_and_results.length > 0) {
-            //console.log(`Task 2 Input for agent processing: ${JSON.stringify(task2Input, null, 2)}`);
+            const { line, offset } = offsetResult;
 
-            const response = await this._callAgentAPI(task2Input, 2, task2JsonSchema);
-            const task2Output = JSON.parse(response);
+            // Check if the variable has already been explored
+            const existingVariable = this._exploredVariables.find(
+                v => v.invoke_variable === variableName && v.line_number === line && v.file_uri === fileUri.toString()
+            );
 
-            //console.log(`Task 2 Output from agent: ${JSON.stringify(task2Output, null, 2)}`);
-            // Add agent-processed results to the final structure
-            if (Array.isArray(task2Output.questions_and_results)) {
-                for (const subProblem of task2Output.questions_and_results) {
-                    if ("results" in subProblem) {
-                        subProblem.filtered_results = subProblem.results;
-                        delete subProblem.results;
-                    }
-                    task2Results.push(subProblem);
-                }
-            } else if (task2Output.questions_and_results && typeof task2Output.questions_and_results === 'object') {
-                if ("results" in task2Output.questions_and_results) {
-                    task2Output.questions_and_results.filtered_results = task2Output.questions_and_results.results;
-                    delete task2Output.questions_and_results.results;
-                }
-                task2Results.push(task2Output.questions_and_results);
+            if (existingVariable && existingVariable.results.length > 0) {
+                task2Results.push({
+                    sub_question: subProblem.sub_question,
+                    tool: subProblem.tool,
+                    code_context: subProblem.code_context,
+                    filtered_results: existingVariable.results
+                });
+                continue;
+            }
+
+            // Perform the selected tool action (Go to Definition or Find References)
+            const results = await this._runTool(subProblem.tool, fileUri, line, offset, subProblem);
+
+            if (results.length === 0) {
+                console.warn(`No results were found for sub-problem "${subProblem.sub_question}".`);
+                task2Results.push({
+                    sub_question: subProblem.sub_question,
+                    tool: subProblem.tool,
+                    code_context: subProblem.code_context,
+                    filtered_results: [],
+                    reason: "No results found"
+                });
+                continue;
+            }
+
+            // Add the variable and results to _exploredVariables
+            this._exploredVariables.push({
+                invoke_variable: variableName,
+                line_number: line,
+                file_uri: fileUri.toString(),
+                results: results
+            });
+
+            // Track explored sub-questions and code lines
+            this._exploredSubQuestions.push(subProblem.sub_question);
+            this._addOrUpdateExploredCodeLines(fileUri.toString(), line, results[0].full_statement);
+
+            // Check if the number of results exceeds the threshold for agent involvement
+            if (results.length > subProblem.num_results) {
+                task2Input.questions_and_results.push({
+                    sub_question: subProblem.sub_question,
+                    tool: subProblem.tool,
+                    code_context: subProblem.code_context,
+                    num_results: subProblem.num_results,
+                    results: results
+                });
             } else {
-                console.error("questions_and_results is neither an array nor an object:", task2Output.questions_and_results);
+                // If no agent involvement is needed, add the filtered results directly
+                task2Results.push({
+                    sub_question: subProblem.sub_question,
+                    tool: subProblem.tool,
+                    code_context: subProblem.code_context,
+                    num_results: results.length,
+                    filtered_results: results
+                });
             }
         }
 
-        // Once all results are gathered, add them to the exploration history and update the sidebar
-        this._explorationHistory.push(...task2Results);
+        // If any sub-questions need agent filtering, call the agent
+        if (task2Input.questions_and_results.length > 0) {
+            const agentResults = await this._callAgentAPI(task2Input, 2, task2JsonSchema);
+            this._processAgentResults(JSON.parse(agentResults), task2Results);
+        }
 
-        console.log(`Task 2 Results: ${JSON.stringify(task2Results, null, 2)}`);
+        // Update the sidebar with the final Task 2 results
+        this._sidebarViewProvider.addTask2Results({ questions_and_results: task2Results });
+    }
 
-        // Update the sidebar with the full Task 2 results
-        if (this._sidebarViewProvider) {
-            this._sidebarViewProvider.addTask2Results({ questions_and_results: task2Results });  // Update sidebar with Task 2 results
+    // Helper function to add document content to _exploredFiles if not already present
+    private _addToExploredFiles(fileUri: vscode.Uri, document: vscode.TextDocument) {
+        const fileUriString = fileUri.toString();
+        if (!this._exploredFiles.some(file => file.file_uri === fileUriString)) {
+            this._exploredFiles.push({
+                file_uri: fileUriString,
+                file_content: document.getText()
+            });
+        }
+    }
+
+    // Helper function to run the selected tool and get results
+    private async _runTool(tool: number, fileUri: vscode.Uri, line: number, offset: number, subProblem: any): Promise<any[]> {
+        const pos = new vscode.Position(line, offset);
+        const loc = new vscode.Location(fileUri, pos);
+        let results = [];
+
+        if (tool === 0) { // Go to Definition
+            const definitionLocations = await vscode.commands.executeCommand<vscode.Location[] | vscode.LocationLink[]>(
+                'vscode.executeDefinitionProvider', loc.uri, loc.range.start
+            );
+            results = await this._prepareResults(definitionLocations, subProblem);
+        } else if (tool === 1) { // Find References
+            const referenceLocations = await vscode.commands.executeCommand(
+                'vscode.executeReferenceProvider', loc.uri, loc.range.start
+            );
+            results = await this._prepareResults(referenceLocations as vscode.Location[] | vscode.LocationLink[], subProblem);
+        }
+
+        return results;
+    }
+
+    // Helper function to process agent results and integrate them into task2Results
+    private _processAgentResults(agentResults: any, task2Results: any[]) {
+        if (Array.isArray(agentResults.questions_and_results)) {
+            for (const subProblem of agentResults.questions_and_results) {
+                if ("results" in subProblem) {
+                    subProblem.filtered_results = subProblem.results;
+                    delete subProblem.results;
+                }
+                task2Results.push(subProblem);
+            }
+        } else if (agentResults.questions_and_results && typeof agentResults.questions_and_results === 'object') {
+            if ("results" in agentResults.questions_and_results) {
+                agentResults.questions_and_results.filtered_results = agentResults.questions_and_results.results;
+                delete agentResults.questions_and_results.results;
+            }
+            task2Results.push(agentResults.questions_and_results);
+        }
+    }
+
+    // Helper function to add or update explored code lines
+    private _addOrUpdateExploredCodeLines(fileUri: string, lineNumber: number, fullStatement: string) {
+        const existingCode = this._exploredCodeLines.find(
+            code => code.file_uri === fileUri && code.start_line <= lineNumber && code.end_line >= lineNumber
+        );
+        if (!existingCode) {
+            this._exploredCodeLines.push({
+                file_uri: fileUri,
+                start_line: lineNumber,
+                end_line: lineNumber + fullStatement.split('\n').length - 1,
+                code_snippet: fullStatement
+            });
+        } else {
+            existingCode.start_line = Math.min(existingCode.start_line, lineNumber);
+            existingCode.end_line = Math.max(existingCode.end_line, lineNumber + fullStatement.split('\n').length - 1);
+            existingCode.code_snippet += '\n' + fullStatement;
         }
     }
 
@@ -656,28 +731,20 @@ class Agent {
         return results;
     }
 
-    async runTask3(uri: vscode.Uri) {
+    async runTask3() {
         console.warn("Running Task 3");
         // Create a clean exploration history without explanations for Task 3 input
         console.log(`Exploration History: ${JSON.stringify(this._explorationHistory, null, 2)}`);
-        const cleanExplorationHistory = this._explorationHistory.map((entry: any) => {
-            const results = entry.results || entry.filtered_results || [];
-            return {
-                sub_question: entry.sub_question,
-                filtered_results: results.map((result: any) => ({
-                    file_uri: result.file_uri,
-                    code_line: result.code_line,
-                    line_number: result.line_number,
-                    full_statement: result.full_statement
-                }))
-            };
-        });
+        const cleanExplorationHistory = {
+            exploredSubQuestions: this._exploredSubQuestions,
+            exploredCodeLines: this._exploredCodeLines,
+            exploredFiles: this._exploredFiles // Now includes only URI and file content
+        };
 
-        // Prepare the input JSON for Task 3, using the cleaned exploration history
         const inputJson = {
-            "task": 3,
-            "refined_question": this._refined_question ?? "",
-            "exploration_history": cleanExplorationHistory  // Include the cleaned exploration history
+            task: 3,
+            refined_question: this._refined_question ?? "",
+            exploration_history: cleanExplorationHistory
         };
 
         //console.log("Task 3 Input:\n", JSON.stringify(inputJson));
@@ -687,18 +754,7 @@ class Agent {
 
         console.log(`Task 3 Results: ${JSON.stringify(task3Output, null, 2)}`);
 
-        // Handle sub-problems that have no valid starting points
-        for (let i = task3Output.sub_problems.length - 1; i >= 0; i--) {
-            const subProblem = task3Output.sub_problems[i];
-            if (subProblem == null || !("code_context" in subProblem) || Object.keys(subProblem.code_context).length === 0) {
-                task3Output.sub_problems.splice(i, 1);
-                console.log(`No starting point found for sub-question: ${subProblem.sub_question}`);
-            }
-        }
-
-        if (this._sidebarViewProvider) {
-            this._sidebarViewProvider.addTask3Results(task3Output);
-        }
+        this._sidebarViewProvider.addTask3Results(task3Output);
 
         return task3Output;
     }
@@ -717,7 +773,7 @@ class Agent {
                     
                     When specifying the 'code_line', only include the specific line of code that contains the 'invoke_variable'. 
                     The 'code_line' should not span multiple lines, and must include the exact line that contains the 'invoke_variable' being explored.
-
+    
                     The output format should strictly follow the JSON schema provided, where the tool should be represented as an integer.
                 `;
                 break;
@@ -730,23 +786,23 @@ class Agent {
                 break;
             case 3:
                 taskInstructions = `
-                    Task 3: Assess whether the refined question has been sufficiently answered based on the questions_and_results.
+                    Task 3: Assess whether the refined question has been sufficiently answered based on the explored sub-questions and explored code lines.
                     If the question is sufficiently answered, set "final_decision_sufficient" to true.
                     Provide an insightful and beginner-friendly explanation in the "final_answer" to help the user understand how the question was addressed.
-
+    
                     If the question is not sufficiently answered, set "final_decision_sufficient" to false and propose additional sub-questions that can further explore the question.
-
+    
                     When proposing sub-questions:
-                    - **Do not generate hypothetical code contexts.** You must use existing code contexts from the exploration history or real code from the provided file.
-                    - First, check the exploration history (provided in the input) to see if there are any starting points (code contexts) already identified in the history that can be used to explore the sub-question.
-                    - If no valid starting point is found from the exploration history, use the full file content (provided in the input) to search for relevant code areas that may help explore the sub-question.
-                    - Include the file, invoke_variable, code_line, and full_statement in the output for each sub-question with a valid starting point.
-                    - If no relevant code is found in the file, leave the code_context empty for that sub-question. 
-
+                    - Search through the exploredCodeLines first to check if any of the existing invoke_variables have already been explored.
+                    - If an invoke_variable is found within exploredCodeLines, set the "from_results" field in code_context to true.
+                    - If no invoke_variable is found in exploredCodeLines, search the entire file content (exploredFiles) to identify relevant code areas for exploration. Set the "from_results" field to false in this case.
+                    - Include the file_uri, invoke_variable, code_line, line_number, and full_statement in the output for each sub-question with a valid starting point. Ensure all these properties are filled in every case.
+                    
                     The output format must strictly follow the provided JSON schema:
                     - "final_decision_sufficient" should be a boolean indicating whether the question was fully answered.
                     - "final_answer" should be a clear explanation if the question was sufficiently answered.
                     - "sub_problems" should contain any sub-questions and code contexts for further exploration if the question was not sufficiently answered.
+                    - The "code_context" should never be left empty and must contain all fields.
                 `;
                 break;
             case 5:
@@ -771,7 +827,7 @@ class Agent {
             - Avoid Redundancy: Always consider the exploration_history to prevent redundant efforts.
             - Professionalism: Use clear, concise, and professional language in your responses.
             - Strict Formats: Adhere strictly to the output JSON schemas specified for each task.
-
+    
             ${taskInstructions}
             
             Ensure that your output matches the provided JSON schema.
@@ -796,7 +852,63 @@ class Agent {
         const parser = new StringOutputParser();
         const response = await parser.invoke(result);
 
+        if (taskNumber === 3) {
+            await this.postProcessResults(response);
+        }
+
         return response;
+    }
+
+    private async postProcessResults(response: string) {
+        // Post-process the result for task 3
+
+        const task3Output = JSON.parse(response);
+
+        // For each sub_problem, fill in code_context from exploredCodeLines or exploredFiles
+        task3Output.sub_problems = await Promise.all(task3Output.sub_problems.map(async (subProblem: any) => {
+            const invokeVariable = subProblem.code_context.invoke_variable;
+
+            // Search exploredCodeLines for a match
+            const matchingCodeLine = this._exploredCodeLines.find(
+                code => code.code_snippet.includes(invokeVariable)
+            );
+
+            if (matchingCodeLine) {
+                // Found the invoke_variable in exploredCodeLines
+                subProblem.code_context.file_uri = matchingCodeLine.file_uri;
+                subProblem.code_context.code_line = stripSingleLineIndentation(matchingCodeLine.code_snippet);
+                subProblem.code_context.line_number = matchingCodeLine.start_line;
+                subProblem.code_context.full_statement = matchingCodeLine.code_snippet;
+                subProblem.code_context.from_results = true;
+            } else {
+                // If not found, search in exploredFiles
+                const matchingFile = this._exploredFiles.find(file =>
+                    file.file_content.includes(invokeVariable)
+                );
+
+                if (matchingFile) {
+                    const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(matchingFile.file_uri));
+                    const startLineOfContext = 0; // Assuming full document context
+
+                    // We need to get the accurate line number for the invoke_variable
+                    const lineNumber = getAccurateLineNumber(matchingFile.file_content, invokeVariable, startLineOfContext);
+
+                    if (lineNumber !== null) {
+                        const fullStatement = await getDestructuringAssignment(document, lineNumber);
+
+                        subProblem.code_context.file_uri = matchingFile.file_uri;
+                        subProblem.code_context.code_line = stripSingleLineIndentation(document.lineAt(lineNumber).text);
+                        subProblem.code_context.line_number = lineNumber;
+                        subProblem.code_context.full_statement = fullStatement;
+                        subProblem.code_context.from_results = false;
+                    }
+                }
+            }
+
+            return subProblem;
+        }));
+
+        return JSON.stringify(task3Output);
     }
 }
 
