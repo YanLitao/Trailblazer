@@ -3,6 +3,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
+import { getFileNameFromUri, getSurroundingCode, stripSingleLineIndentation, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, getDestructuringAssignment } from './codeContextUtils';
 
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
@@ -67,188 +68,6 @@ async function askQuestionAboutCode(context: vscode.ExtensionContext, sidebarVie
         // Start the agent to handle exploration
         new Agent(sidebarViewProvider).runWorkflow(query, editor.document.uri, startLine, endLine);
     });
-}
-
-export async function getSurroundingCode(uri: vscode.Uri, startLine: number, endLine: number): Promise<{ contextText: string, startContextLine: number }> {
-    const document = await vscode.workspace.openTextDocument(uri);
-    const totalLines = document.lineCount;
-
-    const startContextLine = Math.max(0, startLine - 3);
-    const endContextLine = Math.min(totalLines - 1, endLine + 3);
-
-    const range = new vscode.Range(startContextLine, 0, endContextLine, document.lineAt(endContextLine).text.length);
-    const contextText = document.getText(range);
-
-    return {
-        contextText,
-        startContextLine
-    };
-}
-
-export function stripSingleLineIndentation(code: string): string {
-    // decide if the code is single line
-    if (code.includes('\n')) {
-        return code;
-    }
-    return code.replace(/\s+/g, ' ').trim();
-}
-
-export function getAccurateLineNumber(context: string, selectedCodeLine: string, startLineOfContext: number): number | null {
-    const contextLines = context.split('\n');
-    let closestMatch = -1;
-    let distance = contextLines.length + 1;
-
-    // Loop through all the lines in the context and find matches
-    for (let i = 0; i < contextLines.length; i++) {
-        const lineText = contextLines[i].trim();
-
-        if (lineText.trim() !== '' && (lineText.includes(selectedCodeLine.trim()) || selectedCodeLine.includes(lineText))) {
-            console.log(`Found ${selectedCodeLine} at line ${i + 1}: ${lineText}`);
-            // Calculate the distance of this match from the start line of the context
-            const d = Math.abs(startLineOfContext - i);
-
-            // Check if this match is closer than any previous matches
-            if (!closestMatch || distance > d) {
-                closestMatch = i + 1;
-                distance = d;
-            }
-        }
-    }
-
-    // Return the closest match if any, otherwise return null
-    if (closestMatch >= 0) {
-        return closestMatch;
-    } else {
-        console.error(`Code line "${selectedCodeLine}" not found in the provided context: ${context}`);
-        return null;
-    }
-}
-
-/**
- * Searches for the offset of the variable name in the document around the specified line number.
- * Handles the case where line numbers may be slightly off, or there are indentations.
- * @param document - The document to search in.
- * @param variableName - The name of the variable to search for.
- * @param startLine - The line number to start searching from.
- * @param range - How many lines before and after the start line to search.
- * @returns An object containing the line number and offset of the variable, or null if not found.
- */
-async function searchVariableOffset(
-    document: vscode.TextDocument,
-    variableName: string,
-    startLine: number,
-    range: number = 10
-): Promise<{ line: number, offset: number } | null> {
-    const totalLines = document.lineCount;
-    const start = Math.max(0, startLine - range);
-    const end = Math.min(totalLines - 1, startLine + range);
-
-    // Search around the startLine (above and below within the given range)
-    for (let i = 0; i < end - start + 1; i++) {
-        const currentLine = start + i;
-
-        // Ensure the line is within the document bounds
-        if (currentLine >= 0 && currentLine < totalLines) {
-            const lineText = document.lineAt(currentLine).text;
-
-            // Search for the variable name in the current line
-            const offset = lineText.indexOf(variableName);
-            if (offset !== -1) {
-                //console.log(`Found variable "${variableName}" at line ${currentLine}, offset ${offset}`);
-                return { line: currentLine, offset: offset };
-            }
-        }
-    }
-
-    // If the variable wasn't found, return null
-    console.error(`Variable "${variableName}" not found in around the line ${startLine} in the document between line ${start} and ${end}.`);
-    return null;
-}
-
-export function preProcessCodeLine(subProblem: any, surroundingCode: string): string | null {
-    const codeLine = subProblem.code_context.code_line;
-    const invokeVariable = subProblem.code_context.invoke_variable;
-
-    const codeLineParts = codeLine.split("\n").map((line: string) => line.trim()).filter((line: string) => line.length > 0);
-
-    for (const line of codeLineParts) {
-        if (line.includes(invokeVariable)) {
-            return line;
-        }
-    }
-
-    console.warn(`invoke_variable "${invokeVariable}" not found in code_line. Falling back to surrounding code.`);
-
-    const surroundingCodeParts = surroundingCode.split("\n").map((line: string) => line.trim()).filter((line: string) => line.length > 0);
-
-    for (const line of surroundingCodeParts) {
-        if (line.includes(invokeVariable)) {
-            //console.log(`invoke_variable "${invokeVariable}" found in surrounding code.`);
-            return line;
-        }
-    }
-
-    console.error(`No line containing invoke_variable "${invokeVariable}" found in code_line or surrounding_code.`);
-    return null;
-}
-
-export async function getDestructuringAssignment(document: vscode.TextDocument, startLine: number): Promise<string> {
-    const totalLines = document.lineCount;
-    let start = startLine;
-    let end = startLine;
-
-    // If the line contains ";", return the range of the line as is
-    if (document.lineAt(startLine).text.includes(';')) {
-        return document.lineAt(startLine).text;
-    }
-
-    let openBracesCount = 0;
-    let foundStartBrace = false;
-
-    const countBraces = (lineText: string) => {
-        let open = 0, close = 0;
-        for (const char of lineText) {
-            if (char === '{') open++;
-            if (char === '}') close++;
-        }
-        return { open, close };
-    };
-
-    while (start >= 0) {
-        const lineText = document.lineAt(start).text;
-        const { open, close } = countBraces(lineText);
-        openBracesCount += open - close;
-
-        if (openBracesCount > 0 && lineText.includes('{')) {
-            foundStartBrace = true;
-            break;
-        }
-        start--;
-    }
-
-    if (!foundStartBrace) {
-        return document.lineAt(startLine).text;
-    }
-
-    openBracesCount = 0;
-
-    while (end < totalLines) {
-        const lineText = document.lineAt(end).text;
-        const { open, close } = countBraces(lineText);
-        openBracesCount += open - close;
-
-        if (openBracesCount === 0 && lineText.includes('}')) {
-            break;
-        }
-        end++;
-    }
-
-    // Ensure the start and end lines are within the document bounds
-    start = Math.max(0, start);
-    end = Math.min(totalLines - 1, end);
-
-    const range = new vscode.Range(start, 0, end, document.lineAt(end).text.length);
-    return document.getText(range);
 }
 
 const allowedTools = {
@@ -381,7 +200,7 @@ class Agent {
             model: "gpt-4o-mini",
             apiKey: API_KEY,
             maxTokens: 16384,
-            temperature: 0.1,
+            temperature: 0.5,
             topP: 1,
         });
         this._sidebarViewProvider = sidebarViewProvider;
@@ -534,7 +353,6 @@ class Agent {
 
             if (!codeLine.includes(variableName)) {
                 const accurateLineNumber = getAccurateLineNumber(document.getText(), variableName, initialLineNumber);
-                console.log(`Accurate line number for invoke_variable "${variableName}" is: ${accurateLineNumber}`);
                 if (!accurateLineNumber) {
                     continue;
                 } else {
@@ -559,9 +377,12 @@ class Agent {
 
             const { line, offset } = offsetResult;
 
+            // Track explored sub-questions
+            this._exploredSubQuestions.push(subProblem.sub_question);
+
             // Check if the variable has already been explored
             const existingVariable = this._exploredVariables.find(
-                v => v.invoke_variable === variableName && v.line_number === line && v.file_uri === fileUri.toString()
+                v => v.invoke_variable === variableName && v.line_number === line && v.file_uri === fileUri.toString() && v.tool === subProblem.tool
             );
 
             if (existingVariable && existingVariable.results.length > 0) {
@@ -594,12 +415,9 @@ class Agent {
                 invoke_variable: variableName,
                 line_number: line,
                 file_uri: fileUri.toString(),
-                results: results
+                results: results,
+                tool: subProblem.tool
             });
-
-            // Track explored sub-questions and code lines
-            this._exploredSubQuestions.push(subProblem.sub_question);
-            this._addOrUpdateExploredCodeLines(fileUri.toString(), line, results[0].full_statement);
 
             // Check if the number of results exceeds the threshold for agent involvement
             if (results.length > subProblem.num_results) {
@@ -720,6 +538,11 @@ class Agent {
             //console.log(`Result found at file: ${fileUri}, line: ${lineNumber}`);
             //console.log(`Full statement retrieved: ${fullStatement}`);
 
+            // Add or update the explored code lines
+            this._addOrUpdateExploredCodeLines(fileUri, lineNumber, fullStatement);
+            // Add or update the explored files
+            this._addToExploredFiles(vscode.Uri.parse(fileUri), document);
+
             results.push({
                 file_uri: fileUri,
                 line_number: lineNumber,
@@ -734,12 +557,14 @@ class Agent {
     async runTask3() {
         console.warn("Running Task 3");
         // Create a clean exploration history without explanations for Task 3 input
-        console.log(`Exploration History: ${JSON.stringify(this._explorationHistory, null, 2)}`);
         const cleanExplorationHistory = {
             exploredSubQuestions: this._exploredSubQuestions,
             exploredCodeLines: this._exploredCodeLines,
             exploredFiles: this._exploredFiles // Now includes only URI and file content
         };
+
+        // log all file uris
+        console.log("Explored Files: ", this._exploredFiles.map(file => file.file_uri));
 
         const inputJson = {
             task: 3,
@@ -796,13 +621,18 @@ class Agent {
                     - Search through the exploredCodeLines first to check if any of the existing invoke_variables have already been explored.
                     - If an invoke_variable is found within exploredCodeLines, set the "from_results" field in code_context to true.
                     - If no invoke_variable is found in exploredCodeLines, search the entire file content (exploredFiles) to identify relevant code areas for exploration. Set the "from_results" field to false in this case.
-                    - Include the file_uri, invoke_variable, code_line, line_number, and full_statement in the output for each sub-question with a valid starting point. Ensure all these properties are filled in every case.
+                    - Ensure that each sub-question can be answered using a single VSCode tool on the invoke_variable. 
+                    - Ensure that each sub-question is unique and similar questions have not been explored before (please refer to exploredSubQuestions).
+                    - And you can choose the tool to explore the sub-question from the following list by providing the corresponding integer value and add it in the output:
+                        -- 0: Go to Definition
+                        -- 1: Find References
+                    - Include the file_uri, invoke_variable, code_line, line_number, and full_statement in the code context output for each sub-question with a valid starting point. Ensure all these properties are filled in every case.
                     
                     The output format must strictly follow the provided JSON schema:
                     - "final_decision_sufficient" should be a boolean indicating whether the question was fully answered.
                     - "final_answer" should be a clear explanation if the question was sufficiently answered.
                     - "sub_problems" should contain any sub-questions and code contexts for further exploration if the question was not sufficiently answered.
-                    - The "code_context" should never be left empty and must contain all fields.
+                    - If there is any new sub_problems, the corresponding "code_context" should never be left empty and must contain all fields.
                 `;
                 break;
             case 5:
@@ -822,9 +652,9 @@ class Agent {
             General Instructions:
             - Understand the Input: Read the input carefully to determine which task to perform.
             - Maintain Consistency: The refined_question should remain consistent across all tasks and throughout the entire exploration process.
-            - Ensure Thorough Exploration: Strive to explore the codebase deeply enough to fully answer the refined question. Consider related functions, classes, or files that may be necessary to examine. 
+            - Ensure Thorough Exploration: Explore the codebase deeply enough to fully answer the refined question. Consider related functions, classes, or files that may be necessary to examine. 
             - Generate Additional Sub-Questions When Necessary: If initial explorations are insufficient, create further sub-questions to delve deeper into the code.
-            - Avoid Redundancy: Always consider the exploration_history to prevent redundant efforts.
+            - Avoid Redundancy: Always consider the explored sub-questions to prevent redundant efforts.
             - Professionalism: Use clear, concise, and professional language in your responses.
             - Strict Formats: Adhere strictly to the output JSON schemas specified for each task.
     
@@ -852,61 +682,89 @@ class Agent {
         const parser = new StringOutputParser();
         const response = await parser.invoke(result);
 
+        let processedResponse;
         if (taskNumber === 3) {
-            await this.postProcessResults(response);
+            processedResponse = await this.postProcessResults(response);
+        } else {
+            processedResponse = response;
         }
-
-        return response;
+        return processedResponse;
     }
 
     private async postProcessResults(response: string) {
         // Post-process the result for task 3
 
         const task3Output = JSON.parse(response);
-
-        // For each sub_problem, fill in code_context from exploredCodeLines or exploredFiles
+        // For each sub_problem, validate and complete code_context
         task3Output.sub_problems = await Promise.all(task3Output.sub_problems.map(async (subProblem: any) => {
             const invokeVariable = subProblem.code_context.invoke_variable;
+            const { file_uri, code_line } = subProblem.code_context;
 
-            // Search exploredCodeLines for a match
-            const matchingCodeLine = this._exploredCodeLines.find(
-                code => code.code_snippet.includes(invokeVariable)
-            );
+            // Step 1: Match by file name (fuzzy matching)
+            const inputFileName = getFileNameFromUri(file_uri); // Extract file name from provided file_uri
+            let matchingFiles = this._exploredFiles.filter(file => getFileNameFromUri(file.file_uri) === inputFileName);
 
-            if (matchingCodeLine) {
-                // Found the invoke_variable in exploredCodeLines
-                subProblem.code_context.file_uri = matchingCodeLine.file_uri;
-                subProblem.code_context.code_line = stripSingleLineIndentation(matchingCodeLine.code_snippet);
-                subProblem.code_context.line_number = matchingCodeLine.start_line;
-                subProblem.code_context.full_statement = matchingCodeLine.code_snippet;
-                subProblem.code_context.from_results = true;
-            } else {
-                // If not found, search in exploredFiles
-                const matchingFile = this._exploredFiles.find(file =>
-                    file.file_content.includes(invokeVariable)
-                );
-
-                if (matchingFile) {
+            if (matchingFiles.length > 0) {
+                // Iterate through matching files to find the one that contains the correct variable and code line
+                for (const matchingFile of matchingFiles) {
                     const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(matchingFile.file_uri));
-                    const startLineOfContext = 0; // Assuming full document context
+                    const fileContent = matchingFile.file_content;
 
-                    // We need to get the accurate line number for the invoke_variable
-                    const lineNumber = getAccurateLineNumber(matchingFile.file_content, invokeVariable, startLineOfContext);
+                    // Step 2: Preprocess and check if the code_line includes the invokeVariable
+                    let preprocessedCodeLine = preProcessCodeLine(subProblem, fileContent);
+                    if (!preprocessedCodeLine || !preprocessedCodeLine.includes(invokeVariable)) {
+                        console.warn(`Code line "${preprocessedCodeLine}" does not include invoke variable "${invokeVariable}". Searching for a better match...`);
 
-                    if (lineNumber !== null) {
-                        const fullStatement = await getDestructuringAssignment(document, lineNumber);
+                        // Step 3: Fallback to searching for the invokeVariable in the entire file using getAccurateLineNumber
+                        const lineNumber = getAccurateLineNumber(fileContent, invokeVariable, 0); // Search entire file
 
-                        subProblem.code_context.file_uri = matchingFile.file_uri;
-                        subProblem.code_context.code_line = stripSingleLineIndentation(document.lineAt(lineNumber).text);
-                        subProblem.code_context.line_number = lineNumber;
-                        subProblem.code_context.full_statement = fullStatement;
+                        if (lineNumber !== null) {
+                            const fullStatement = await getDestructuringAssignment(document, lineNumber);
+                            preprocessedCodeLine = document.lineAt(lineNumber).text;
+
+                            // Update the subProblem's code_context with the new details
+                            subProblem.code_context.file_uri = matchingFile.file_uri;
+                            subProblem.code_context.code_line = stripSingleLineIndentation(preprocessedCodeLine);
+                            subProblem.code_context.line_number = lineNumber;
+                            subProblem.code_context.full_statement = fullStatement;
+                        } else {
+                            console.error(`Variable "${invokeVariable}" not found in the file "${matchingFile.file_uri}". Moving to next file...`);
+                            continue; // Move to the next matching file if no valid match is found in this one
+                        }
+                    }
+
+                    // Step 4: Check if this line exists in _exploredCodeLines
+                    const matchingCodeLine = this._exploredCodeLines.find(
+                        code => code.file_uri === matchingFile.file_uri && code.start_line === subProblem.code_context.line_number
+                    );
+
+                    if (matchingCodeLine) {
+                        // Found in exploredCodeLines
+                        subProblem.code_context.file_uri = matchingCodeLine.file_uri;
+                        subProblem.code_context.code_line = stripSingleLineIndentation(matchingCodeLine.code_snippet);
+                        subProblem.code_context.line_number = matchingCodeLine.start_line;
+                        subProblem.code_context.full_statement = matchingCodeLine.code_snippet;
+                        subProblem.code_context.from_results = true;
+                    } else {
+                        // Not found in exploredCodeLines, but found in exploredFiles
                         subProblem.code_context.from_results = false;
                     }
-                }
-            }
 
-            return subProblem;
+                    // Exit the loop once a valid file has been found and processed
+                    return subProblem;
+                }
+
+                // If no valid file was found, log an error and remove the sub-problem
+                console.error(`No matching file containing invoke variable "${invokeVariable}" was found. Removing sub-problem.`);
+                return null; // Remove sub-problem if no valid file was found
+            } else {
+                console.error(`File URI "${file_uri}" not found in explored files. Removing sub-problem.`);
+                return null; // Remove sub-problem if file is not found
+            }
         }));
+
+        // Filter out any subProblems that were removed (null)
+        task3Output.sub_problems = task3Output.sub_problems.filter((subProblem: any) => subProblem !== null);
 
         return JSON.stringify(task3Output);
     }

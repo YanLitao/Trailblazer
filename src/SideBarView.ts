@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getSurroundingCode, stripSingleLineIndentation } from './extension';
+import { getSurroundingCode, stripSingleLineIndentation } from './codeContextUtils';
 
 const allowedTools = {
     0: "Go to Definition",
@@ -119,6 +119,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
         const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', 'sidebar.css'));
         const prismCSS = webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', 'prism.css'));
         const prismJS = webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', 'prism.js'));
+        const html2pdfJS = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js'; // Use external CDN
 
         return `
             <!DOCTYPE html>
@@ -134,8 +135,11 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/9000.0.1/themes/prism.min.css" />
             </head>
             <body>
-                <div id="agent-status" style="padding: 10px; border-bottom: 1px solid #ccc;">
-                    <strong>Status:</strong> <span id="agent-status-text">Idle</span>
+                <div id="header" style="display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #ccc;">
+                    <div id="agent-status" style="padding: 10px; border-bottom: 1px solid #ccc;">
+                        <strong>Status:</strong> <span id="agent-status-text">Idle</span>
+                    </div>
+                    <button id="save-pdf" style="padding: 5px 10px; background-color: #4CAF50; color: white; border: none; cursor: pointer;">Save as PDF</button>
                 </div>
                 <div id="user-question">
                     <h2>User Question: ${this._question}</h2>
@@ -146,8 +150,15 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 <div id="exploration-steps"></div> <!-- This div will hold all exploration steps -->
                 <script src="${scriptUri}"></script>
                 <script src="${prismJS}"></script>
+                <script src="${html2pdfJS}"></script>
                 <script>
                     Prism.highlightAll();
+
+                    // Save as PDF function
+                    document.getElementById('save-pdf').addEventListener('click', function () {
+                        var element = document.body;
+                        html2pdf().from(element).save('search-copilot.pdf');
+                    });
                 </script>
             </body>
             </html>
@@ -169,7 +180,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 </div>
             `;
             if (task1Output.sub_problems.length > 0) {
-                task1Html += `
+                /* task1Html += `
                 <div class="task-content">
                 <p>
                     Going to explore <strong>${task1Output.sub_problems.length}</strong> sub-questions:
@@ -202,7 +213,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     `;
                 }
 
-                task1Html += `</div></div>`; // Close all divs correctly
+                task1Html += `</div></div>`; // Close all divs correctly */
             } else {
                 task1Html += `<div class="task-content"><p>No sub-questions found.</p></div></div>`;
             }
@@ -232,16 +243,22 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 for (const result of task2Output.questions_and_results) {
                     i++;
                     task2Html += `
-                <div class="sub-question">
+                <div class="sub-question
+                `;
+                    if (!result.code_context.from_results) {
+                        task2Html += ` uncertain`;
+                    }
+                    const invokeFileName = this.getFileNameFromUri(result.code_context.file_uri);
+                    task2Html += `">
                     <div class="sub-question-header">
                         <button id="${uniqueId}-btn-${i}" class="toggle-button" data-target="${uniqueId}-sub-question-${i}">
                             <span class="triangle-right"></span>
                         </button>
-                        <p class="before-hide"><strong>Sub-question:</strong> ${result.sub_question}</p>
+                        <p class="code-info">Explored <strong>${result.code_context.invoke_variable}</strong> in ${invokeFileName}: line <a href="#" class="line-link" data-file-uri="${invokeFileName}" data-line="${result.code_context.line_number}">${result.code_context.line_number}</a>, using <strong>${allowedTools[result.tool as keyof typeof allowedTools]}</strong>:</p>
                     </div>
                     
                     <div id="${uniqueId}-sub-question-${i}" class="task-details" style="display: none">
-                        <p class="code-info">Explored <strong>${result.code_context.invoke_variable}</strong> using <strong>${allowedTools[result.tool as keyof typeof allowedTools]}</strong>:</p>
+                        <p class="before-hide"><strong>Sub-question:</strong> ${result.sub_question}</p>
                         <div class="code-box">
                             <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(result.code_context.code_line))}</code></pre>
                         </div>

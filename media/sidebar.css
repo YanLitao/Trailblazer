@@ -165,3 +165,7 @@ code {
     /* Space between icon and text */
     font-size: 1.2em;
 }
+
+.uncertain {
+    border: gray 1px dashed;
+}
