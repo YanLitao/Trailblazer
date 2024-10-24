@@ -22,9 +22,105 @@ h4 {
     font-weight: 300;
 }
 
+/* Header and Agent Status */
+#header {
+    padding: 15px;
+    background-color: #ffffff;
+    border-bottom: 1px solid #ddd;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+#agent-status-text {
+    font-weight: bold;
+    color: #ffcc00;
+    /* Example color for idle status */
+}
+
+.title-question {
+    font-style: italic;
+}
+
+button#save-pdf {
+    padding: 8px 12px;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9em;
+}
+
+button#save-pdf:hover {
+    background-color: #45a049;
+}
+
+/* Current Task Section */
+#current-task {
+    padding: 15px;
+    background-color: #ffffff;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    margin: 15px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+#current-task h3 {
+    margin-bottom: 10px;
+    font-weight: bold;
+    font-size: 1.1em;
+}
+
+#current-task-invoke,
+#current-task-question {
+    margin-bottom: 10px;
+    font-size: 0.9em;
+}
+
+.current-task-code-box {
+    background-color: #f5f2f0;
+    padding: 10px;
+    border-radius: 4px;
+    overflow-x: auto;
+    margin-top: 10px;
+}
+
+/* Action Buttons */
+#actions {
+    display: flex;
+    justify-content: space-around;
+    padding: 10px;
+    margin-top: 10px;
+    background-color: #f9f9f9;
+    border-top: 1px solid #ddd;
+}
+
+button.action-btn {
+    padding: 8px 15px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9em;
+    transition: background-color 0.3s ease;
+}
+
+button.action-btn:hover {
+    background-color: #0056b3;
+}
+
 #exploration-steps {
     margin: 0 10px;
 }
+
+#exploration-steps.collapsed {
+    display: none;
+}
+
+#exploration-steps.expanded {
+    display: block;
+}
+
 
 /* Style for the step-circle */
 .step-circle {
@@ -59,9 +155,11 @@ h4 {
 .task-content p {
     margin-top: 0;
     margin-bottom: 10px;
+    font-size: 0.9em;
 }
 
-.task {
+.task,
+current-task {
     margin-bottom: 30px;
 }
 

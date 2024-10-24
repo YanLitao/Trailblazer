@@ -61,7 +61,7 @@ async function askQuestionAboutCode(context: vscode.ExtensionContext, sidebarVie
     }
 
     // Update the sidebar view content with the user question and selected code
-    sidebarViewProvider.updateWebviewContent(query, selectedText);
+    sidebarViewProvider.updateWebviewContent(query, selectedText, getFileNameFromUri(editor.document.uri.toString()), startLine);
 
     // Show the sidebar automatically once the question is received
     vscode.commands.executeCommand('workbench.view.extension.search-copilot-sidebar').then(() => {
@@ -154,7 +154,7 @@ const task3JsonSchema = {
     type: "object",
     properties: {
         final_decision_sufficient: { type: "boolean" },
-        final_answer: { type: "string" },
+        answer: { type: "string" },
         sub_problems: {
             type: "array",
             items: {
@@ -181,7 +181,7 @@ const task3JsonSchema = {
             }
         }
     },
-    required: ["final_decision_sufficient", "final_answer", "sub_problems"]
+    required: ["final_decision_sufficient", "answer", "sub_problems"]
 };
 
 class Agent {
@@ -612,27 +612,29 @@ class Agent {
             case 3:
                 taskInstructions = `
                     Task 3: Assess whether the refined question has been sufficiently answered based on the explored sub-questions and explored code lines.
-                    If the question is sufficiently answered, set "final_decision_sufficient" to true.
-                    Provide an insightful and beginner-friendly explanation in the "final_answer" to help the user understand how the question was addressed.
-    
-                    If the question is not sufficiently answered, set "final_decision_sufficient" to false and propose additional sub-questions that can further explore the question.
-    
+                    
+                    - Always provide an **answer** in the "answer" field. If the question is sufficiently answered, this will be the final answer. If not, provide a short **preliminary answer** summarizing the progress made from the current exploration (one or two sentences).
+                    
+                    - If the question is sufficiently answered, set "final_decision_sufficient" to true and provide an insightful, beginner-friendly explanation in the "answer" field that helps the user understand how the question was addressed.
+                    
+                    - If the question is not sufficiently answered, set "final_decision_sufficient" to false and include the **preliminary answer** in the "answer" field. Then, propose additional sub-questions that can further explore the question.
+            
                     When proposing sub-questions:
                     - Search through the exploredCodeLines first to check if any of the existing invoke_variables have already been explored.
                     - If an invoke_variable is found within exploredCodeLines, set the "from_results" field in code_context to true.
                     - If no invoke_variable is found in exploredCodeLines, search the entire file content (exploredFiles) to identify relevant code areas for exploration. Set the "from_results" field to false in this case.
-                    - Ensure that each sub-question can be answered using a single VSCode tool on the invoke_variable. 
+                    - Ensure that each sub-question can be answered using a single VSCode tool on the invoke_variable.
                     - Ensure that each sub-question is unique and similar questions have not been explored before (please refer to exploredSubQuestions).
-                    - And you can choose the tool to explore the sub-question from the following list by providing the corresponding integer value and add it in the output:
+                    - Choose the tool to explore the sub-question from the following list by providing the corresponding integer value and add it in the output:
                         -- 0: Go to Definition
                         -- 1: Find References
                     - Include the file_uri, invoke_variable, code_line, line_number, and full_statement in the code context output for each sub-question with a valid starting point. Ensure all these properties are filled in every case.
-                    
+            
                     The output format must strictly follow the provided JSON schema:
                     - "final_decision_sufficient" should be a boolean indicating whether the question was fully answered.
-                    - "final_answer" should be a clear explanation if the question was sufficiently answered.
+                    - "answer" should always contain either the final answer (if sufficiently answered) or a **preliminary answer** (if more exploration is needed).
                     - "sub_problems" should contain any sub-questions and code contexts for further exploration if the question was not sufficiently answered.
-                    - If there is any new sub_problems, the corresponding "code_context" should never be left empty and must contain all fields.
+                    - If there are any new sub-problems, the corresponding "code_context" should never be left empty and must contain all fields.
                 `;
                 break;
             case 5:

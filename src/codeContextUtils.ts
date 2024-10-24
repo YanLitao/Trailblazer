@@ -186,3 +186,33 @@ export async function getDestructuringAssignment(document: vscode.TextDocument, 
     const range = new vscode.Range(start, 0, end, document.lineAt(end).text.length);
     return document.getText(range);
 }
+
+export function alignCodeLeft(code: string): string {
+    // Split the code into lines
+    const lines = code.split('\n');
+
+    // Find the minimum indent by looking for the non-empty line with the least leading whitespace
+    let minIndent = Infinity;
+    for (let line of lines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine.length > 0) {
+            const match = line.match(/^\s*/);
+            const leadingWhitespace = match ? match[0].length : 0;
+            minIndent = Math.min(minIndent, leadingWhitespace);
+        }
+    }
+
+    // If there is no indent, we return the code as it is
+    if (minIndent === Infinity) {
+        return code;
+    }
+
+    // Remove the indent from each line
+    const alignedLines = lines.map(line => line.startsWith(' '.repeat(minIndent)) || line.startsWith('\t'.repeat(minIndent))
+        ? line.slice(minIndent)
+        : line
+    );
+
+    // Join the lines back into a single string
+    return alignedLines.join('\n');
+}
