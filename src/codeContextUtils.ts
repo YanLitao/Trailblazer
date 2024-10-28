@@ -35,18 +35,25 @@ export function getAccurateLineNumber(context: string, selectedCodeLine: string,
     let closestMatch = -1;
     let distance = contextLines.length + 1;
 
-    // Loop through all the lines in the context and find matches
+    // Break down the selected code line into components
+    const selectedComponents = selectedCodeLine.replace(/[,;]/g, '').split(/\s+/).filter(Boolean); // Remove commas/semicolons and split by whitespace
+
+    // Loop through all the lines in the context and find matches based on components
     for (let i = 0; i < contextLines.length; i++) {
         const lineText = contextLines[i].trim();
 
-        if (lineText.trim() !== '' && (lineText.includes(selectedCodeLine.trim()) || selectedCodeLine.includes(lineText))) {
-            // Calculate the distance of this match from the start line of the context
-            const d = Math.abs(startLineOfContext - i);
+        if (lineText) {
+            // Check if all components of the selected line exist in the current line
+            const isMatch = selectedComponents.every(component => lineText.includes(component));
+            if (isMatch) {
+                // Calculate the distance of this match from the start line of the context
+                const d = Math.abs(startLineOfContext - i);
 
-            // Check if this match is closer than any previous matches
-            if (!closestMatch || distance > d) {
-                closestMatch = i + 1;
-                distance = d;
+                // Check if this match is closer than any previous matches
+                if (closestMatch === -1 || distance > d) {
+                    closestMatch = i + 1;
+                    distance = d;
+                }
             }
         }
     }
@@ -55,7 +62,7 @@ export function getAccurateLineNumber(context: string, selectedCodeLine: string,
     if (closestMatch >= 0) {
         return closestMatch;
     } else {
-        console.error(`Code line "${selectedCodeLine}" not found in the provided context.`);
+        console.error(`Code line ${startLineOfContext}: "${selectedCodeLine}" not found in ${context}.`);
         return null;
     }
 }
@@ -112,8 +119,6 @@ export function preProcessCodeLine(subProblem: any, surroundingCode: string): st
             return line;
         }
     }
-
-    console.warn(`invoke_variable "${invokeVariable}" not found in code_line. Falling back to surrounding code.`);
 
     const surroundingCodeParts = surroundingCode.split("\n").map((line: string) => line.trim()).filter((line: string) => line.length > 0);
 

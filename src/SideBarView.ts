@@ -14,6 +14,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
     private _stepCounter: number = 1;
     private _initialFileUri: string = '';
     private _initialLineNumber: number = 0;
+    private _displayQueue: Array<{ answer: string, taskContentHtml: string }> = [];
+    private _isDisplaying: boolean = false;
+    private _stayingTime: number = 15; // seconds
 
     constructor(
         private readonly _context: vscode.ExtensionContext
@@ -45,6 +48,41 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 this.agentIsDone();
             }
         });
+    }
+
+    // Enqueue new content
+    public enqueueTask3ResultUpdate(answer: string, taskContentHtml: string) {
+        this._displayQueue.push({ answer, taskContentHtml });
+        this.processQueue(); // Start processing the queue if not already in progress
+    }
+
+    // Process queue to display each item for at least 30 seconds
+    private async processQueue() {
+        if (this._isDisplaying || this._displayQueue.length === 0) {
+            return; // Exit if already displaying or queue is empty
+        }
+
+        this._isDisplaying = true;
+
+        // Dequeue and display the next item
+        const { answer, taskContentHtml } = this._displayQueue.shift()!;
+
+        // Send message to update preliminary answer and current task content
+        this._view?.webview.postMessage({
+            command: 'updatePreliminaryAnswer',
+            answer: answer
+        });
+
+        this._view?.webview.postMessage({
+            command: 'updateCurrentTaskContent',
+            html: taskContentHtml
+        });
+
+        // Wait 30 seconds before allowing the next update
+        await new Promise(resolve => setTimeout(resolve, this._stayingTime * 1000));
+
+        this._isDisplaying = false;
+        this.processQueue(); // Process the next item in the queue
     }
 
     // Function to open the file and jump to the specific line
@@ -216,126 +254,82 @@ export class SidebarView implements vscode.WebviewViewProvider {
     public async addTask2Results(task2Output: any) {
         if (this._view) {
             const webview = this._view.webview;
-            const explorationUniqueId = `exploration-task2-results-${this._stepCounter}`; // Unique ID for exploration steps
-            const currentTaskUniqueId = `current-task2-results-${this._stepCounter}`; // Unique ID for current task
+            const uniqueId = `task2-results-${this._stepCounter}`; // Generate unique ID for Task 2
             var i = -1;
 
-            // Function to generate HTML with uniqueId
-            const generateTaskHtml = async (uniqueId: string, isCurrentTask: boolean = false) => {
-                let taskHtml = '';
-
-                if (isCurrentTask) {
-                    // Create a list of variables and files being explored
-                    const exploringSummary = task2Output.questions_and_results.map((result: { code_context: { file_uri: string; invoke_variable: string }; }) => {
-                        const invokeFileName = this.getFileNameFromUri(result.code_context.file_uri);
-                        return `<strong>${result.code_context.invoke_variable}</strong> in ${invokeFileName}`;
-                    }).join(', ');
-
-                    // Set the current task header for summary
-                    taskHtml = `
-                        <div class="task-header">
-                            <h3>Exploring ${exploringSummary}.</h3>
-                        </div>
-                    `;
-                } else {
-                    taskHtml = `
-                        <div class="task-header">
-                            <div class="step-circle">${this._stepCounter}</div> <!-- Circle with step count -->
-                            <h3>Explored ${task2Output.questions_and_results.length} sub-questions.</h3>
-                        </div>
-                    `;
-                }
-
-                if (task2Output.questions_and_results.length > 0) {
-                    taskHtml += `
-                        <div class="task-content">
-                    `;
-                    for (const result of task2Output.questions_and_results) {
-                        i++;
-                        taskHtml += `<div class="sub-question `;
-                        if (!result.code_context.from_results) {
-                            taskHtml += ` uncertain`;
-                        }
-                        const invokeFileName = this.getFileNameFromUri(result.code_context.file_uri);
-                        taskHtml += `">
-                            <div class="sub-question-header">
-                                <button id="${uniqueId}-btn-${i}" class="toggle-button" data-target="${uniqueId}-sub-question-${i}">
-                                    <span class="triangle-right"></span>
-                                </button>
-                                <p class="code-info">Explored <strong>${result.code_context.invoke_variable}</strong> in ${invokeFileName}: line 
-                                    <a href="#" class="line-link" data-file-uri="${invokeFileName}" data-line="${result.code_context.line_number}">${result.code_context.line_number}</a>, 
-                                    using <strong>${allowedTools[result.tool as keyof typeof allowedTools]}</strong>:
-                                </p>
-                            </div>
-                        `;
-
-                        if (isCurrentTask) {
-                            // For currentTaskHtml, show sub-question and invoke code immediately
-                            taskHtml += `
-                                <p class="before-hide"><strong>Sub-question:</strong> ${result.sub_question}</p>
-                                <div class="code-box">
-                                    <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(result.code_context.code_line))}</code></pre>
-                                </div>
-                            `;
-                        }
-
-                        taskHtml += `
-                                <p class="code-info">Found <strong>${result.filtered_results.length}</strong> results:</p>
-                                <div class="filtered-results">
-                                    <div id="${uniqueId}-sub-question-${i}" class="task-details" style="display: none">
-                                        <div class="filtered-results-content">
-                            `;
-
-                        for (const filteredResult of result.filtered_results) {
-                            const fileName = this.getFileNameFromUri(filteredResult.file_uri);
-                            const { contextText } = await getSurroundingCode(vscode.Uri.parse(filteredResult.file_uri), filteredResult.line_number, filteredResult.line_number);
-                            const alignedCode = alignCodeLeft(contextText);
-
-                            taskHtml += `
-                                <div class="result">
-                                    <p class="code-info">
-                                        In <strong>${fileName}, 
-                                        <a href="#" class="line-link" data-file-uri="${filteredResult.file_uri}" data-line="${filteredResult.line_number}">
-                                            Line ${filteredResult.line_number + 1}
-                                        </a></strong>:
-                                    </p>
-                                    <div class="code-box">
-                                        <pre class="line-numbers" data-line="${filteredResult.line_number}"><code class="language-ts">${this.escapeHtml(alignedCode)}</code></pre>
-                                    </div>
-                                </div>
-                            `;
-                        }
-
-                        taskHtml += `</div></div></div></div>`;
+            let task2Html = `
+            <div class="task">
+                <div class="task-header">
+                    <div class="step-circle">${this._stepCounter}</div> <!-- Circle with step count -->
+                    <h3>Explored ${task2Output.questions_and_results.length} sub-questions.</h3>
+                </div>
+            `;
+            if (task2Output.questions_and_results.length > 0) {
+                task2Html += `
+                <div class="task-content">
+                `;
+                for (const result of task2Output.questions_and_results) {
+                    i++;
+                    task2Html += `<div class="sub-question `;
+                    if (!result.code_context.from_results) {
+                        task2Html += ` uncertain`;
                     }
-
-                    taskHtml += `</div></div>`;
-
-                } else {
-                    taskHtml += `
-                        <div class="task-content">
-                            <p class="warning-text">
-                                <span class="warning-icon">&#9888;</span>
-                                No sub-questions explored.
+                    const invokeFileName = this.getFileNameFromUri(result.code_context.file_uri);
+                    task2Html += `">
+                        <div class="sub-question-header">
+                            <button id="${uniqueId}-btn-${i}" class="toggle-button" data-target="${uniqueId}-sub-question-${i}">
+                                <span class="triangle-right"></span>
+                            </button>
+                            <p class="code-info">Explored <strong>${result.code_context.invoke_variable}</strong> in ${invokeFileName}: line 
+                                <a href="#" class="line-link" data-file-uri="${invokeFileName}" data-line="${result.code_context.line_number}">${result.code_context.line_number}</a>, 
+                                using <strong>${allowedTools[result.tool as keyof typeof allowedTools]}</strong>:
                             </p>
                         </div>
-                    </div>`;
+                        <div id="${uniqueId}-sub-question-${i}" class="task-details" style="display: none">
+                            <p class="before-hide"><strong>Sub-question:</strong> ${result.sub_question}</p>
+                            <div class="code-box">
+                                <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(result.code_context.code_line))}</code></pre>
+                            </div>
+                            <p class="code-info">Found <strong>${result.filtered_results.length}</strong> results:</p>
+                            <div class="filtered-results">
+                    `;
+
+                    for (const filteredResult of result.filtered_results) {
+                        const fileName = this.getFileNameFromUri(filteredResult.file_uri);
+                        const { contextText } = await getSurroundingCode(vscode.Uri.parse(filteredResult.file_uri), filteredResult.line_number, filteredResult.line_number);
+                        const alignedCode = alignCodeLeft(contextText);
+
+                        task2Html += `
+                        <div class="result">
+                            <p class="code-info">
+                                In <strong>${fileName}, 
+                                <a href="#" class="line-link" data-file-uri="${filteredResult.file_uri}" data-line="${filteredResult.line_number}">
+                                    Line ${filteredResult.line_number + 1}
+                                </a></strong>:
+                            </p>
+                            <div class="code-box">
+                                <pre class="line-numbers" data-line="${filteredResult.line_number}"><code class="language-ts">${this.escapeHtml(alignedCode)}</code></pre>
+                            </div>
+                        </div>
+                        `;
+                    }
+
+                    task2Html += `</div></div></div>`;
                 }
 
-                return taskHtml;
-            };
+                task2Html += `</div></div>`;
 
-            // Generate separate HTML content for `exploration-steps` and `current-task-content`
-            const explorationStepsHtml = await generateTaskHtml(explorationUniqueId);  // await here
-            const currentTaskHtml = await generateTaskHtml(currentTaskUniqueId, true); // await here, isCurrentTask = true
-
-            // Post the HTML to the exploration steps
-            webview.postMessage({ command: 'appendHtml', html: explorationStepsHtml, id: explorationUniqueId, num: i });
-
-            // Post the HTML to the current task content
-            webview.postMessage({ command: 'updateCurrentTaskContent', html: currentTaskHtml, id: currentTaskUniqueId, num: i });
-
-            // Increment the step counter
+            } else {
+                task2Html += `
+                    <div class="task-content">
+                        <p class="warning-text">
+                            <span class="warning-icon">&#9888;</span>
+                            No sub-questions explored.
+                        </p>
+                    </div>
+                </div>`;
+            }
+            webview.postMessage({ command: 'appendHtml', html: task2Html, id: uniqueId, num: i });
             this._stepCounter++;
         }
     }
@@ -344,8 +338,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
     public async addTask3Results(task3Output: any) {
         if (this._view) {
             const webview = this._view.webview;
-            const uniqueId = `task3-sub-questions-${this._stepCounter}`; // Generate unique ID for Task 3
-            let i = -1;
+            const explorationUniqueId = `exploration-task3-results-${this._stepCounter}`; // Unique ID for exploration steps
+            const currentTaskUniqueId = `current-task3-results-${this._stepCounter}`; // Unique ID for current task
+            var i = -1;
 
             // Update the preliminary answer text in the webview
             const answerText = task3Output.answer
@@ -354,69 +349,130 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     : `Preliminary Answer: ${task3Output.answer}`
                 : "No preliminary answer available";
 
-            webview.postMessage({
+            /* webview.postMessage({
                 command: 'updatePreliminaryAnswer',
                 answer: answerText
-            });
+            }); */
 
-            // Generate the HTML for Task 3 results
-            let task3Html = `
-        <div class="task">
-            <div class="task-header">
-                <div class="step-circle">${this._stepCounter}</div>
-                <h3>Explored code is ${task3Output.final_decision_sufficient ? 'sufficient' : 'insufficient'} to answer the question.</h3>
-            </div>
-            <div class="task-content">
-        `;
-
-            if (task3Output.final_decision_sufficient === true) {
-                // Display the final answer when the question is sufficiently answered
-                task3Html += `
-                <p><strong>Answer: </strong>${task3Output.answer}</p>
+            // Generate HTML for exploration steps
+            let explorationStepsHtml = `
+            <div class="task">
+                <div class="task-header">
+                    <div class="step-circle">${this._stepCounter}</div>
+                    <h3>Explored code is ${task3Output.final_decision_sufficient ? 'sufficient' : 'insufficient'} to answer the question.</h3>
+                </div>
+                <div class="task-content">
             `;
+
+            // If sufficient, display the final answer
+            if (task3Output.final_decision_sufficient) {
+                explorationStepsHtml += `<p><strong>Answer: </strong>${task3Output.answer}</p>`;
             } else if (task3Output.sub_problems.length > 0) {
-                // Display sub-questions when the question is insufficiently answered
-                task3Html += `
-                <p>Propose <strong>${task3Output.sub_problems.length}</strong> sub-questions:</p>
-            `;
-
+                explorationStepsHtml += `<p>Propose <strong>${task3Output.sub_problems.length}</strong> sub-questions:</p>`;
                 for (const subProblem of task3Output.sub_problems) {
                     i++;
                     const codeContext = subProblem.code_context;
                     const fileName = this.getFileNameFromUri(codeContext.file_uri);
 
-                    task3Html += `
-                    <div class="sub-question">
-                        <div class="sub-question-header">
-                            <button id="${uniqueId}-btn-${i}" class="toggle-button" data-target="${uniqueId}-sub-question-${i}">
-                                <span class="triangle-right"></span>
-                            </button>
-                            <p class="before-hide"><strong>Sub-question:</strong> ${subProblem.sub_question}</p>
-                        </div>
-                        <div id="${uniqueId}-sub-question-${i}" class="task-details" style="display: none">
-                            <p class="code-info">
-                                Going to use <strong>${allowedTools[subProblem.tool as keyof typeof allowedTools]}</strong> to explore 
-                                <strong>${codeContext.invoke_variable}</strong> in <strong>${fileName}, 
-                                <a href="#" class="line-link" data-file-uri="${codeContext.file_uri}" data-line="${codeContext.line_number}">
-                                    Line ${codeContext.line_number + 1}
-                                </a></strong>:
-                            </p>
-                            <div class="code-box">
-                                <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(codeContext.full_statement))}</code></pre>
+                    explorationStepsHtml += `
+                        <div class="sub-question">
+                            <div class="sub-question-header">
+                                <button id="${explorationUniqueId}-btn-${i}" class="toggle-button" data-target="${explorationUniqueId}-sub-question-${i}">
+                                    <span class="triangle-right"></span>
+                                </button>
+                                <p class="before-hide"><strong>Sub-question:</strong> ${subProblem.sub_question}</p>
+                            </div>
+                            <div id="${explorationUniqueId}-sub-question-${i}" class="task-details" style="display: none">
+                                <p class="code-info">
+                                    Going to use <strong>${allowedTools[subProblem.tool as keyof typeof allowedTools]}</strong> to explore <strong>${codeContext.invoke_variable}</strong> in <strong>${fileName}, 
+                                    <a href="#" class="line-link" data-file-uri="${codeContext.file_uri}" data-line="${codeContext.line_number}">
+                                        Line ${codeContext.line_number + 1}
+                                    </a></strong>:
+                                </p>
+                                <div class="code-box">
+                                    <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(codeContext.full_statement))}</code></pre>
+                                </div>
                             </div>
                         </div>
-                    </div>
-                `;
+                    `;
                 }
-
-                task3Html += `</div></div>`; // Close all divs correctly
+                explorationStepsHtml += `</div></div>`; // Close all divs
             } else {
-                // Handle the case where no sub-questions are proposed
-                task3Html += `<p>No sub-questions proposed.</p></div></div>`;
+                explorationStepsHtml += `<p>No sub-questions proposed.</p></div></div>`;
             }
 
-            // Send the generated HTML back to the webview
-            webview.postMessage({ command: 'appendHtml', html: task3Html, id: uniqueId, num: i });
+            // Post the HTML to the exploration steps
+            webview.postMessage({ command: 'appendHtml', html: explorationStepsHtml, id: explorationUniqueId, num: i });
+
+            // Generate HTML for current task content (show only the first invocation place)
+
+            if (task3Output.sub_problems.length > 0) {
+                let currentTaskHtml = `<div class="task-content">`;
+                const firstSubProblem = task3Output.sub_problems[0];
+                const codeContext = firstSubProblem.code_context;
+                const fileName = this.getFileNameFromUri(codeContext.file_uri);
+
+                // Show the first invocation place
+                currentTaskHtml += `
+                    <div class="sub-question">
+                        <p><strong>Currently exploring:</strong> ${firstSubProblem.sub_question}</p>
+                        <p class="code-info">
+                            Exploring <strong>${codeContext.invoke_variable}</strong> in <strong>${fileName}, 
+                            <a href="#" class="line-link" data-file-uri="${codeContext.file_uri}" data-line="${codeContext.line_number}">
+                                Line ${codeContext.line_number + 1}
+                            </a></strong>:
+                        </p>
+                        <div class="code-box">
+                            <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(codeContext.full_statement))}</code></pre>
+                        </div>
+                        <p class="code-info"><strong>Why to explore:</strong> ${firstSubProblem.reason}</p>
+                    </div>
+                `;
+
+                // Show the clickable line to expand remaining invocation places
+                if (task3Output.sub_problems.length > 1) {
+                    const remainingCount = task3Output.sub_problems.length - 1;
+                    currentTaskHtml += `
+                        <p class="show-more-invocations" id="${currentTaskUniqueId}-show-more" onClick="toggleAdditionalInvocations('${currentTaskUniqueId}-show-more')">
+                            ... also exploring <strong>${remainingCount}</strong> other places ...
+                        </p>
+                        <div id="${currentTaskUniqueId}-additional-invocations" style="display: none;">
+                    `;
+
+                    // Add remaining invocation places, hidden by default
+                    for (let j = 1; j < task3Output.sub_problems.length; j++) {
+                        const subProblem = task3Output.sub_problems[j];
+                        const otherCodeContext = subProblem.code_context;
+                        const otherFileName = this.getFileNameFromUri(otherCodeContext.file_uri);
+
+                        currentTaskHtml += `
+                            <div class="sub-question additional-invocation">
+                                <p><strong>Exploring:</strong> ${subProblem.sub_question}</p>
+                                <p class="code-info">
+                                    Exploring <strong>${otherCodeContext.invoke_variable}</strong> in <strong>${otherFileName}, 
+                                    <a href="#" class="line-link" data-file-uri="${otherCodeContext.file_uri}" data-line="${otherCodeContext.line_number}">
+                                        Line ${otherCodeContext.line_number + 1}
+                                    </a></strong>:
+                                </p>
+                                <div class="code-box">
+                                    <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(otherCodeContext.full_statement))}</code></pre>
+                                </div>
+                                <p class="code-info"><strong>Why to explore:</strong> ${subProblem.reason}</p>
+                            </div>
+                        `;
+                    }
+                    currentTaskHtml += `</div>`; // Close additional-invocations div
+                }
+                currentTaskHtml += `</div>`; // Close task-content div
+
+                // Post the HTML to the current task content
+                //webview.postMessage({ command: 'updateCurrentTaskContent', html: currentTaskHtml, id: currentTaskUniqueId, num: i });
+                // Only enqueue updates for non-empty answer or task content
+                if (answerText || currentTaskHtml) {
+                    this.enqueueTask3ResultUpdate(answerText || "", currentTaskHtml || "");
+                }
+            }
+            // Increment the step counter
             this._stepCounter++;
         }
     }

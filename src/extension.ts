@@ -137,9 +137,10 @@ const task2JsonSchema = {
                                 code_line: { type: "string" },
                                 line_number: { type: "integer" },
                                 full_statement: { type: "string" },
-                                explanation: { type: "string" }
+                                explanation: { type: "string" },
+                                from_results: { type: "boolean" }
                             },
-                            required: ["file_uri", "code_line", "line_number", "full_statement", "explanation"]
+                            required: ["file_uri", "code_line", "line_number", "full_statement", "explanation", "from_results"]
                         }
                     }
                 },
@@ -296,7 +297,7 @@ class Agent {
                 subProblem.code_context.file_uri = uri.toString();
             }
 
-            const invokeVariable = subProblem.code_context.invoke_variable;
+            //const invokeVariable = subProblem.code_context.invoke_variable;
             const codeLine = preProcessCodeLine(subProblem, surroundingCode);
 
             if (codeLine) {
@@ -308,15 +309,9 @@ class Agent {
 
                     const fullStatement = await getDestructuringAssignment(document, accurateLineNumber);
                     subProblem.code_context.full_statement = fullStatement;
-                } else {
-                    console.error(`Failed to find accurate line number for invoke_variable "${invokeVariable}" in code_line: ${codeLine}`);
                 }
-            } else {
-                console.error(`preProcessCodeLine failed for sub_problem "${subProblem.sub_question}".`);
             }
         }
-
-        console.log(`Task 1 Results: ${JSON.stringify(task1Output, null, 2)}`);
 
         // Update the sidebar view with Task 1 results after processing
         if (this._sidebarViewProvider) {
@@ -503,20 +498,46 @@ class Agent {
 
     // Helper function to add or update explored code lines
     private _addOrUpdateExploredCodeLines(fileUri: string, lineNumber: number, fullStatement: string) {
+        const linesInStatement = fullStatement.split('\n');
+        const endLineOfStatement = lineNumber + linesInStatement.length - 1;
+
+        // Find any existing code block that overlaps with the new code lines
         const existingCode = this._exploredCodeLines.find(
-            code => code.file_uri === fileUri && code.start_line <= lineNumber && code.end_line >= lineNumber
+            code => code.file_uri === fileUri &&
+                ((code.start_line <= lineNumber && code.end_line >= lineNumber) || // Partial or full overlap at the start
+                    (code.start_line <= endLineOfStatement && code.end_line >= endLineOfStatement) || // Partial or full overlap at the end
+                    (code.start_line >= lineNumber && code.end_line <= endLineOfStatement)) // Existing code fully inside new range
         );
+
         if (!existingCode) {
+            // No overlap; add a new entry for the code lines
             this._exploredCodeLines.push({
                 file_uri: fileUri,
                 start_line: lineNumber,
-                end_line: lineNumber + fullStatement.split('\n').length - 1,
+                end_line: endLineOfStatement,
                 code_snippet: fullStatement
             });
         } else {
-            existingCode.start_line = Math.min(existingCode.start_line, lineNumber);
-            existingCode.end_line = Math.max(existingCode.end_line, lineNumber + fullStatement.split('\n').length - 1);
-            existingCode.code_snippet += '\n' + fullStatement;
+            // Handle overlap by expanding boundaries and merging unique parts
+            const newStartLine = Math.min(existingCode.start_line, lineNumber);
+            const newEndLine = Math.max(existingCode.end_line, endLineOfStatement);
+
+            // Determine the unique parts of the code to avoid duplicates
+            let newSnippet = '';
+            if (lineNumber < existingCode.start_line) {
+                // Add lines before the existing snippet
+                newSnippet += linesInStatement.slice(0, existingCode.start_line - lineNumber).join('\n') + '\n';
+            }
+            newSnippet += existingCode.code_snippet; // Keep existing snippet
+            if (endLineOfStatement > existingCode.end_line) {
+                // Add lines after the existing snippet
+                newSnippet += '\n' + linesInStatement.slice(existingCode.end_line - lineNumber + 1).join('\n');
+            }
+
+            // Update the existing code entry
+            existingCode.start_line = newStartLine;
+            existingCode.end_line = newEndLine;
+            existingCode.code_snippet = newSnippet.trim();
         }
     }
 
@@ -563,8 +584,9 @@ class Agent {
             exploredFiles: this._exploredFiles // Now includes only URI and file content
         };
 
-        // log all file uris
-        console.log("Explored Files: ", this._exploredFiles.map(file => file.file_uri));
+        // log exploredCodeLines in json format
+        //console.log(`Explored Code Lines: ${JSON.stringify(this._exploredCodeLines, null, 2)})`);
+        //console.log("Explored Files: ", this._exploredFiles.map(file => file.file_uri));
 
         const inputJson = {
             task: 3,
@@ -576,8 +598,6 @@ class Agent {
 
         const response = await this._callAgentAPI(inputJson, 3, task3JsonSchema);
         const task3Output = JSON.parse(response);
-
-        console.log(`Task 3 Results: ${JSON.stringify(task3Output, null, 2)}`);
 
         this._sidebarViewProvider.addTask3Results(task3Output);
 
@@ -606,7 +626,7 @@ class Agent {
                 taskInstructions = `
                     Task 2: Filter and rank the exploration results for each sub-question.
                     Pick the most relevant results (up to num_results) for each sub-question based on their usefulness in answering the refined question.
-                    Ensure that the output follows the provided JSON schema for questions_and_results, which should include file uri, line number, code, and explanation.
+                    Ensure that the output follows the provided JSON schema for questions_and_results, which should include file uri, line number, code, explanation, and from_result.
                 `;
                 break;
             case 3:
@@ -621,14 +641,16 @@ class Agent {
             
                     When proposing sub-questions:
                     - Search through the exploredCodeLines first to check if any of the existing invoke_variables have already been explored.
-                    - If an invoke_variable is found within exploredCodeLines, set the "from_results" field in code_context to true.
-                    - If no invoke_variable is found in exploredCodeLines, search the entire file content (exploredFiles) to identify relevant code areas for exploration. Set the "from_results" field to false in this case.
+                    - If an "invoke_variable" is found within exploredCodeLines, set the "from_results" field in code_context to true.
+                    - If no "invoke_variable" is found in exploredCodeLines, search the entire file content (exploredFiles) to identify relevant code areas for exploration. Set the "from_results" field to false in this case.
                     - Ensure that each sub-question can be answered using a single VSCode tool on the invoke_variable.
                     - Ensure that each sub-question is unique and similar questions have not been explored before (please refer to exploredSubQuestions).
                     - Choose the tool to explore the sub-question from the following list by providing the corresponding integer value and add it in the output:
                         -- 0: Go to Definition
                         -- 1: Find References
-                    - Include the file_uri, invoke_variable, code_line, line_number, and full_statement in the code context output for each sub-question with a valid starting point. Ensure all these properties are filled in every case.
+                    - Provide a valid "reason" for each sub-question that explains why we chose to explore that specific area of the code.
+                    - Include the file_uri, invoke_variable, code_line, line_number, and full_statement in the code context output, and reason for each sub-question with a valid starting point. 
+                    - Ensure all these properties are filled in every case.
             
                     The output format must strictly follow the provided JSON schema:
                     - "final_decision_sufficient" should be a boolean indicating whether the question was fully answered.
@@ -684,6 +706,9 @@ class Agent {
         const parser = new StringOutputParser();
         const response = await parser.invoke(result);
 
+        // log the response in json format
+        console.log(`Task ${taskNumber} Response: ${JSON.stringify(response, null, 2)}`);
+
         let processedResponse;
         if (taskNumber === 3) {
             processedResponse = await this.postProcessResults(response);
@@ -705,6 +730,9 @@ class Agent {
             // Step 1: Match by file name (fuzzy matching)
             const inputFileName = getFileNameFromUri(file_uri); // Extract file name from provided file_uri
             let matchingFiles = this._exploredFiles.filter(file => getFileNameFromUri(file.file_uri) === inputFileName);
+
+            //log all file names in exploredFiles
+            console.log("Explored Files: ", this._exploredFiles.map(file => file.file_uri));
 
             if (matchingFiles.length > 0) {
                 // Iterate through matching files to find the one that contains the correct variable and code line

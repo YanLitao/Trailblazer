@@ -46,6 +46,21 @@ document.getElementById('stop-agent').addEventListener('click', function () {
     });
 });
 
+// JavaScript to toggle additional invocations
+function toggleAdditionalInvocations(elementId) {
+    const element = document.getElementById(elementId);
+    const currentTaskUniqueId = elementId.split('-show-more')[0]; // Get unique ID part
+    const additionalInvocations = document.getElementById(`${currentTaskUniqueId}-additional-invocations`);
+
+    if (additionalInvocations.style.display === 'none') {
+        additionalInvocations.style.display = 'block';
+        element.style.display = 'none'; // Hide the "show more" link after clicking
+    } else {
+        additionalInvocations.style.display = 'none';
+        element.style.display = 'block';
+    }
+}
+
 // Function to append HTML content dynamically
 function appendHtml(html, id, num) {
     const explorationSteps = document.getElementById('exploration-steps');

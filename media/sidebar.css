@@ -267,3 +267,17 @@ code {
 .uncertain {
     border: gray 1px dashed;
 }
+
+.show-more-invocations {
+    color: blue;
+    cursor: pointer;
+    font-style: italic;
+}
+
+#current-task-content .task-content {
+    margin-left: 0;
+}
+
+#current-task-content .task-content .sub-question {
+    padding-top: 5px;
+}
