@@ -32,26 +32,22 @@ export class ExplorationGraph {
     /**
      * Adds a new node to the graph if it does not exist or updates an existing node's properties.
      */
-    public upsertNode(nodeId: string, nodeData: Node, sourceId: string | null, stepNumber: number): Node {
+    public upsertNode(nodeId: string, nodeData: Node, sourceId: string | null, stepNumber: number, toolType: number): Node {
         let existingNode = this.nodes.get(nodeId);
 
         if (existingNode) {
-            // Update existing node to an invoking place if necessary
             if (!existingNode.isPlace) {
                 existingNode.isPlace = true;
-                this.updateEdgeVisibility(nodeId); // Update edges if isPlace status changes
+                this.updateEdgeVisibility(nodeId);
             }
-            // Merge new variables with existing variables
             nodeData.variables.forEach(variable => existingNode!.variables.add(variable));
         } else {
-            // Add a new node
             this.nodes.set(nodeId, nodeData);
             existingNode = nodeData;
         }
 
-        // Add edge if a sourceId is provided and valid
         if (sourceId && this.nodes.has(sourceId)) {
-            this.addEdge(sourceId, nodeId, stepNumber);
+            this.addEdge(sourceId, nodeId, stepNumber, toolType);
         }
 
         return existingNode;
@@ -60,19 +56,23 @@ export class ExplorationGraph {
     /**
      * Adds a new edge between nodes if it doesn't already exist.
      */
-    public addEdge(sourceId: string, targetId: string, stepNumber: number) {
-        const edgeId = `${sourceId}->${targetId}`;
+    public addEdge(sourceId: string, targetId: string, stepNumber: number, toolType: number) {
+        // Adjust source and target based on tool type
+        const edgeSourceId = toolType === 0 ? sourceId : targetId;
+        const edgeTargetId = toolType === 0 ? targetId : sourceId;
+        const edgeId = `${edgeSourceId}->${edgeTargetId}`;
+
         if (this.edges.has(edgeId)) return; // Avoid duplicate edges
 
-        const sourceNode = this.nodes.get(sourceId);
-        const targetNode = this.nodes.get(targetId);
+        const sourceNode = this.nodes.get(edgeSourceId);
+        const targetNode = this.nodes.get(edgeTargetId);
 
         if (sourceNode && targetNode) {
             const showEdge = sourceNode.isPlace && targetNode.isPlace; // Only show if both are invoking nodes
             const edge: Edge = {
                 id: edgeId,
-                sourceId,
-                targetId,
+                sourceId: edgeSourceId,
+                targetId: edgeTargetId,
                 stepNumber,
                 showEdge
             };
@@ -138,5 +138,25 @@ export class ExplorationGraph {
      */
     public getNode(id: string): Node | null {
         return this.nodes.get(id) || null;
+    }
+
+    public toJSON() {
+        return {
+            nodes: Array.from(this.nodes.values()).map(node => ({
+                id: node.id,
+                fileUri: node.fileUri,
+                startLine: node.startLine,
+                endLine: node.endLine,
+                isPlace: node.isPlace,
+                variables: Array.from(node.variables),
+                codeSnippet: node.codeSnippet
+            })),
+            edges: Array.from(this.edges.values()).map(edge => ({
+                sourceId: edge.sourceId,
+                targetId: edge.targetId,
+                stepNumber: edge.stepNumber,
+                showEdge: edge.showEdge
+            }))
+        };
     }
 }

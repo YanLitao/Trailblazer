@@ -30,39 +30,41 @@ export function stripSingleLineIndentation(code: string): string {
     return code.replace(/\s+/g, ' ').trim();
 }
 
-export function getAccurateLineNumber(context: string, selectedCodeLine: string, startLineOfContext: number): number | null {
+export function getAccurateLineNumber(context: string, selectedCodeLine: string, fuzzyLineNum: number, contextStartLineNum: number): number | null {
     const contextLines = context.split('\n');
     let closestMatch = -1;
-    let distance = contextLines.length + 1;
+    let minDistance = contextLines.length + 1;
 
-    // Break down the selected code line into components
-    const selectedComponents = selectedCodeLine.replace(/[,;]/g, '').split(/\s+/).filter(Boolean); // Remove commas/semicolons and split by whitespace
+    // Normalize the selected code line by removing commas, semicolons, and extra whitespace
+    const selectedComponents = selectedCodeLine.replace(/[,;]/g, '').split(/\s+/).filter(Boolean);
 
-    // Loop through all the lines in the context and find matches based on components
+    // Loop through each line in the context and search for closest match
     for (let i = 0; i < contextLines.length; i++) {
         const lineText = contextLines[i].trim();
 
         if (lineText) {
             // Check if all components of the selected line exist in the current line
             const isMatch = selectedComponents.every(component => lineText.includes(component));
-            if (isMatch) {
-                // Calculate the distance of this match from the start line of the context
-                const d = Math.abs(startLineOfContext - i);
 
-                // Check if this match is closer than any previous matches
-                if (closestMatch === -1 || distance > d) {
-                    closestMatch = i + 1;
-                    distance = d;
+            if (isMatch) {
+                // Calculate distance from the fuzzyLineNum to current line in context
+                const lineNumInContext = contextStartLineNum + i;
+                const distance = Math.abs(fuzzyLineNum - lineNumInContext);
+
+                // Update closest match if this match is closer than previous matches
+                if (closestMatch === -1 || distance < minDistance) {
+                    closestMatch = lineNumInContext;
+                    minDistance = distance;
                 }
             }
         }
     }
 
-    // Return the closest match if any, otherwise return null
+    // Return the closest match if found, else return null
     if (closestMatch >= 0) {
         return closestMatch;
     } else {
-        console.error(`Code line ${startLineOfContext}: "${selectedCodeLine}" not found in ${context}.`);
+        console.error(`Code line ${fuzzyLineNum}: "${selectedCodeLine}" not found in context.`);
         return null;
     }
 }

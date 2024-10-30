@@ -271,6 +271,7 @@ class Agent {
     }
 
     async runTask1(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
+        const document = await vscode.workspace.openTextDocument(uri);
         console.warn("Running Task 1");
         const { contextText: surroundingCode, startContextLine } = await getSurroundingCode(uri, startLine, endLine);
 
@@ -292,7 +293,7 @@ class Agent {
 
         this._refined_question = task1Output.refined_question;
 
-        const document = await vscode.workspace.openTextDocument(uri);
+
 
         for (const subProblem of task1Output.sub_problems) {
             if (uri) {
@@ -303,7 +304,7 @@ class Agent {
             const codeLine = preProcessCodeLine(subProblem, surroundingCode);
 
             if (codeLine) {
-                const accurateLineNumber = getAccurateLineNumber(surroundingCode, codeLine, startContextLine);
+                const accurateLineNumber = getAccurateLineNumber(surroundingCode, codeLine, subProblem.code_context.line_number, startContextLine);
 
                 if (accurateLineNumber !== null) {
                     subProblem.code_context.line_number = accurateLineNumber;
@@ -322,7 +323,7 @@ class Agent {
                         isPlace: true,  // Mark as invoking place
                         edges: new Set()
                     };
-                    this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter);
+                    this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, subProblem.tool);
                 }
             }
         }
@@ -361,7 +362,7 @@ class Agent {
             const codeLine = document.lineAt(initialLineNumber).text.trim();
 
             if (!codeLine.includes(variableName)) {
-                const accurateLineNumber = getAccurateLineNumber(document.getText(), variableName, initialLineNumber);
+                const accurateLineNumber = getAccurateLineNumber(document.getText(), variableName, initialLineNumber, 0);
                 if (!accurateLineNumber) {
                     continue;
                 } else {
@@ -437,16 +438,7 @@ class Agent {
                     edges: new Set()
                 };
 
-                this._explorationGraph.upsertNode(resultNodeId, resultNode, sourceId, this._stepCounter);
-
-                // Determine edge direction based on tool type
-                const edgeSource = subProblem.tool === 0 ? resultNodeId : sourceId;
-                const edgeTarget = subProblem.tool === 0 ? sourceId : resultNodeId;
-
-                // Add edge between invoking place and result node
-                if (!this._explorationGraph.edgeExists(edgeSource, edgeTarget, this._stepCounter)) {
-                    this._explorationGraph.addEdge(edgeSource, edgeTarget, this._stepCounter);
-                }
+                this._explorationGraph.upsertNode(resultNodeId, resultNode, sourceId, this._stepCounter, subProblem.tool);
             });
 
             // Add the variable and results to _exploredVariables
@@ -779,7 +771,7 @@ class Agent {
 
             // Step 3: Find the precise line number using `getAccurateLineNumber`
             const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(matchedFile.file_uri));
-            const lineNumber = getAccurateLineNumber(document.getText(), invoke_variable, 0);
+            const lineNumber = getAccurateLineNumber(document.getText(), invoke_variable, subProblem.code_context.line_number, 0);
             if (lineNumber === null) {
                 console.error(`Accurate line number for "${invoke_variable}" not found in "${matchedFile.file_uri}".`);
                 return null;
@@ -801,7 +793,7 @@ class Agent {
                 isPlace: true,
                 edges: new Set()
             };
-            this._explorationGraph.upsertNode(nodeId, newNode, subProblem.code_context.file_uri, this._stepCounter);
+            this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, subProblem.tool);
 
             // Update `code_context` with matched details
             subProblem.code_context.file_uri = matchedFile.file_uri;
