@@ -133,7 +133,8 @@ export class SidebarView implements vscode.WebviewViewProvider {
         const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', 'sidebar.css'));
         const prismCSS = webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', 'prism.css'));
         const prismJS = webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', 'prism.js'));
-        const html2pdfJS = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js'; // Use external CDN
+        const html2pdfJS = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js';
+        const d3Uri = 'https://d3js.org/d3.v7.min.js';
 
         return `
             <!DOCTYPE html>
@@ -147,6 +148,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
                 <link href="https://fonts.googleapis.com/css2?family=Lato:ital,wght@0,100;0,300;0,400;0,700;0,900;1,100;1,300;1,400;1,700;1,900&display=swap" rel="stylesheet">
                 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/9000.0.1/themes/prism.min.css" />
+                <script src="${d3Uri}"></script>
             </head>
             <body>
                 <div id="header">
@@ -167,6 +169,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     <button id="stop-agent" class="action-btn">Stop agent</button>
                     <button id="toggle-log" class="action-btn">See full log</button>
                 </div>
+                <div id="graph-container" style="width: 100%; height: 400px;"></div>
                 <div id="exploration-steps" style="display:none;">
                     <div class="task">
                         <div class="task-header">
@@ -271,7 +274,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 for (const result of task2Output.questions_and_results) {
                     i++;
                     task2Html += `<div class="sub-question `;
-                    if (!result.code_context.from_results) {
+                    if (result.code_context && (!('from_results' in result.code_context) || !result.code_context.from_results)) {
                         task2Html += ` uncertain`;
                     }
                     const invokeFileName = this.getFileNameFromUri(result.code_context.file_uri);
@@ -494,5 +497,13 @@ export class SidebarView implements vscode.WebviewViewProvider {
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;")
             .replace(/'/g, "&#039;");
+    }
+
+    public updateGraphVisualization(graphData: { nodes: any[], edges: any[] }) {
+        // Send the graph data to the webview for visualization
+        this._view?.webview.postMessage({
+            command: 'renderGraph',
+            data: graphData
+        });
     }
 }

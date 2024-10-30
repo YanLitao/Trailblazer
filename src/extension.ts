@@ -4,7 +4,7 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
 import { getFileNameFromUri, getSurroundingCode, stripSingleLineIndentation, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, getDestructuringAssignment } from './codeContextUtils';
-
+import { ExplorationGraph, Node, Edge } from './explorationGraph';
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
 
@@ -195,6 +195,7 @@ class Agent {
     private _exploredFiles: { file_uri: string, file_content: string }[] = []; // Simplified _exploredFiles
     private _exploredSubQuestions: string[] = [];
     private _exploredCodeLines: { file_uri: string, start_line: number, end_line: number, code_snippet: string }[] = [];
+    private _explorationGraph: ExplorationGraph;
 
     constructor(sidebarViewProvider: SidebarView) {
         this._model = new ChatOpenAI({
@@ -205,6 +206,7 @@ class Agent {
             topP: 1,
         });
         this._sidebarViewProvider = sidebarViewProvider;
+        this._explorationGraph = new ExplorationGraph();
     }
 
     async runWorkflow(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
@@ -305,10 +307,22 @@ class Agent {
 
                 if (accurateLineNumber !== null) {
                     subProblem.code_context.line_number = accurateLineNumber;
-                    //console.log(`Accurate line number for invoke_variable "${invokeVariable}" is: ${accurateLineNumber}`);
-
                     const fullStatement = await getDestructuringAssignment(document, accurateLineNumber);
                     subProblem.code_context.full_statement = fullStatement;
+
+                    // Create a node for each sub-problem and mark it as an invoking place
+                    const nodeId = `${uri.toString()}:${accurateLineNumber}`;
+                    const newNode: Node = {
+                        id: nodeId,
+                        fileUri: uri.toString(),
+                        startLine: accurateLineNumber,
+                        endLine: accurateLineNumber + fullStatement.split('\n').length - 1,
+                        variables: new Set([subProblem.code_context.invoke_variable]),
+                        codeSnippet: fullStatement,
+                        isPlace: true,  // Mark as invoking place
+                        edges: new Set()
+                    };
+                    this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter);
                 }
             }
         }
@@ -391,7 +405,7 @@ class Agent {
             }
 
             // Perform the selected tool action (Go to Definition or Find References)
-            const results = await this._runTool(subProblem.tool, fileUri, line, offset, subProblem);
+            const results = await this._runTool(fileUri, line, offset, subProblem);
 
             if (results.length === 0) {
                 console.warn(`No results were found for sub-problem "${subProblem.sub_question}".`);
@@ -404,6 +418,36 @@ class Agent {
                 });
                 continue;
             }
+
+            // Process each result as a node in the exploration graph
+            const sourceId = `${subProblem.code_context.file_uri}:${subProblem.code_context.line_number}`;
+
+            results.forEach(result => {
+                const resultNodeId = `${result.file_uri}:${result.line_number}`;
+
+                // Create result node if it doesn't already exist in the graph
+                const resultNode: Node = {
+                    id: resultNodeId,
+                    fileUri: result.file_uri,
+                    startLine: result.line_number,
+                    endLine: result.line_number, // Assuming single line, adjust if multiline
+                    variables: new Set([variableName]),
+                    codeSnippet: result.code_line,
+                    isPlace: false, // Result nodes are not invoking places
+                    edges: new Set()
+                };
+
+                this._explorationGraph.upsertNode(resultNodeId, resultNode, sourceId, this._stepCounter);
+
+                // Determine edge direction based on tool type
+                const edgeSource = subProblem.tool === 0 ? resultNodeId : sourceId;
+                const edgeTarget = subProblem.tool === 0 ? sourceId : resultNodeId;
+
+                // Add edge between invoking place and result node
+                if (!this._explorationGraph.edgeExists(edgeSource, edgeTarget, this._stepCounter)) {
+                    this._explorationGraph.addEdge(edgeSource, edgeTarget, this._stepCounter);
+                }
+            });
 
             // Add the variable and results to _exploredVariables
             this._exploredVariables.push({
@@ -457,17 +501,17 @@ class Agent {
     }
 
     // Helper function to run the selected tool and get results
-    private async _runTool(tool: number, fileUri: vscode.Uri, line: number, offset: number, subProblem: any): Promise<any[]> {
+    private async _runTool(fileUri: vscode.Uri, line: number, offset: number, subProblem: any): Promise<any[]> {
         const pos = new vscode.Position(line, offset);
         const loc = new vscode.Location(fileUri, pos);
         let results = [];
 
-        if (tool === 0) { // Go to Definition
+        if (subProblem.tool === 0) { // Go to Definition
             const definitionLocations = await vscode.commands.executeCommand<vscode.Location[] | vscode.LocationLink[]>(
                 'vscode.executeDefinitionProvider', loc.uri, loc.range.start
             );
             results = await this._prepareResults(definitionLocations, subProblem);
-        } else if (tool === 1) { // Find References
+        } else if (subProblem.tool === 1) { // Find References
             const referenceLocations = await vscode.commands.executeCommand(
                 'vscode.executeReferenceProvider', loc.uri, loc.range.start
             );
@@ -497,47 +541,32 @@ class Agent {
     }
 
     // Helper function to add or update explored code lines
-    private _addOrUpdateExploredCodeLines(fileUri: string, lineNumber: number, fullStatement: string) {
+    private _addOrUpdateExploredCodeLines(fileUri: string, lineNumber: number, fullStatement: string, subProblem: any) {
         const linesInStatement = fullStatement.split('\n');
         const endLineOfStatement = lineNumber + linesInStatement.length - 1;
 
-        // Find any existing code block that overlaps with the new code lines
+        // Check if the line is already covered in an existing code line
         const existingCode = this._exploredCodeLines.find(
             code => code.file_uri === fileUri &&
-                ((code.start_line <= lineNumber && code.end_line >= lineNumber) || // Partial or full overlap at the start
-                    (code.start_line <= endLineOfStatement && code.end_line >= endLineOfStatement) || // Partial or full overlap at the end
-                    (code.start_line >= lineNumber && code.end_line <= endLineOfStatement)) // Existing code fully inside new range
+                ((code.start_line <= lineNumber && code.end_line >= lineNumber) ||
+                    (code.start_line <= endLineOfStatement && code.end_line >= endLineOfStatement) ||
+                    (code.start_line >= lineNumber && code.end_line <= endLineOfStatement))
         );
 
         if (!existingCode) {
-            // No overlap; add a new entry for the code lines
+            // Add the new code to _exploredCodeLines if it’s unique
             this._exploredCodeLines.push({
                 file_uri: fileUri,
                 start_line: lineNumber,
                 end_line: endLineOfStatement,
                 code_snippet: fullStatement
             });
+
         } else {
-            // Handle overlap by expanding boundaries and merging unique parts
-            const newStartLine = Math.min(existingCode.start_line, lineNumber);
-            const newEndLine = Math.max(existingCode.end_line, endLineOfStatement);
-
-            // Determine the unique parts of the code to avoid duplicates
-            let newSnippet = '';
-            if (lineNumber < existingCode.start_line) {
-                // Add lines before the existing snippet
-                newSnippet += linesInStatement.slice(0, existingCode.start_line - lineNumber).join('\n') + '\n';
-            }
-            newSnippet += existingCode.code_snippet; // Keep existing snippet
-            if (endLineOfStatement > existingCode.end_line) {
-                // Add lines after the existing snippet
-                newSnippet += '\n' + linesInStatement.slice(existingCode.end_line - lineNumber + 1).join('\n');
-            }
-
-            // Update the existing code entry
-            existingCode.start_line = newStartLine;
-            existingCode.end_line = newEndLine;
-            existingCode.code_snippet = newSnippet.trim();
+            // If there’s an overlap, extend the existing node if necessary
+            existingCode.start_line = Math.min(existingCode.start_line, lineNumber);
+            existingCode.end_line = Math.max(existingCode.end_line, endLineOfStatement);
+            existingCode.code_snippet = `${existingCode.code_snippet}\n${fullStatement}`.trim();
         }
     }
 
@@ -560,7 +589,7 @@ class Agent {
             //console.log(`Full statement retrieved: ${fullStatement}`);
 
             // Add or update the explored code lines
-            this._addOrUpdateExploredCodeLines(fileUri, lineNumber, fullStatement);
+            this._addOrUpdateExploredCodeLines(fileUri, lineNumber, fullStatement, subProblem);
             // Add or update the explored files
             this._addToExploredFiles(vscode.Uri.parse(fileUri), document);
 
@@ -600,6 +629,7 @@ class Agent {
         const task3Output = JSON.parse(response);
 
         this._sidebarViewProvider.addTask3Results(task3Output);
+        this.updateGraphVisualization();
 
         return task3Output;
     }
@@ -719,85 +749,79 @@ class Agent {
     }
 
     private async postProcessResults(response: string) {
-        // Post-process the result for task 3
-
         const task3Output = JSON.parse(response);
-        // For each sub_problem, validate and complete code_context
+
         task3Output.sub_problems = await Promise.all(task3Output.sub_problems.map(async (subProblem: any) => {
-            const invokeVariable = subProblem.code_context.invoke_variable;
-            const { file_uri, code_line } = subProblem.code_context;
+            const { file_uri, invoke_variable } = subProblem.code_context;
+            const inputFileName = getFileNameFromUri(file_uri);
 
-            // Step 1: Match by file name (fuzzy matching)
-            const inputFileName = getFileNameFromUri(file_uri); // Extract file name from provided file_uri
+            // Step 1: Fuzzy match to find the best matching file
             let matchingFiles = this._exploredFiles.filter(file => getFileNameFromUri(file.file_uri) === inputFileName);
-
-            //log all file names in exploredFiles
-            console.log("Explored Files: ", this._exploredFiles.map(file => file.file_uri));
-
-            if (matchingFiles.length > 0) {
-                // Iterate through matching files to find the one that contains the correct variable and code line
-                for (const matchingFile of matchingFiles) {
-                    const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(matchingFile.file_uri));
-                    const fileContent = matchingFile.file_content;
-
-                    // Step 2: Preprocess and check if the code_line includes the invokeVariable
-                    let preprocessedCodeLine = preProcessCodeLine(subProblem, fileContent);
-                    if (!preprocessedCodeLine || !preprocessedCodeLine.includes(invokeVariable)) {
-                        console.warn(`Code line "${preprocessedCodeLine}" does not include invoke variable "${invokeVariable}". Searching for a better match...`);
-
-                        // Step 3: Fallback to searching for the invokeVariable in the entire file using getAccurateLineNumber
-                        const lineNumber = getAccurateLineNumber(fileContent, invokeVariable, 0); // Search entire file
-
-                        if (lineNumber !== null) {
-                            const fullStatement = await getDestructuringAssignment(document, lineNumber);
-                            preprocessedCodeLine = document.lineAt(lineNumber).text;
-
-                            // Update the subProblem's code_context with the new details
-                            subProblem.code_context.file_uri = matchingFile.file_uri;
-                            subProblem.code_context.code_line = stripSingleLineIndentation(preprocessedCodeLine);
-                            subProblem.code_context.line_number = lineNumber;
-                            subProblem.code_context.full_statement = fullStatement;
-                        } else {
-                            console.error(`Variable "${invokeVariable}" not found in the file "${matchingFile.file_uri}". Moving to next file...`);
-                            continue; // Move to the next matching file if no valid match is found in this one
-                        }
-                    }
-
-                    // Step 4: Check if this line exists in _exploredCodeLines
-                    const matchingCodeLine = this._exploredCodeLines.find(
-                        code => code.file_uri === matchingFile.file_uri && code.start_line === subProblem.code_context.line_number
-                    );
-
-                    if (matchingCodeLine) {
-                        // Found in exploredCodeLines
-                        subProblem.code_context.file_uri = matchingCodeLine.file_uri;
-                        subProblem.code_context.code_line = stripSingleLineIndentation(matchingCodeLine.code_snippet);
-                        subProblem.code_context.line_number = matchingCodeLine.start_line;
-                        subProblem.code_context.full_statement = matchingCodeLine.code_snippet;
-                        subProblem.code_context.from_results = true;
-                    } else {
-                        // Not found in exploredCodeLines, but found in exploredFiles
-                        subProblem.code_context.from_results = false;
-                    }
-
-                    // Exit the loop once a valid file has been found and processed
-                    return subProblem;
-                }
-
-                // If no valid file was found, log an error and remove the sub-problem
-                console.error(`No matching file containing invoke variable "${invokeVariable}" was found. Removing sub-problem.`);
-                return null; // Remove sub-problem if no valid file was found
-            } else {
-                console.error(`File URI "${file_uri}" not found in explored files. Removing sub-problem.`);
-                return null; // Remove sub-problem if file is not found
+            if (matchingFiles.length === 0) {
+                console.warn(`No matching files found for "${inputFileName}".`);
+                return null;
             }
+
+            // Step 2: Find the correct file content and verify the variable
+            let matchedFile: any;
+            for (const file of matchingFiles) {
+                const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(file.file_uri));
+                const fileContent = document.getText();
+                if (fileContent.includes(invoke_variable)) {
+                    matchedFile = file;
+                    break;
+                }
+            }
+            if (!matchedFile) {
+                console.error(`Variable "${invoke_variable}" not found in any matching files for "${inputFileName}".`);
+                return null;
+            }
+
+            // Step 3: Find the precise line number using `getAccurateLineNumber`
+            const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(matchedFile.file_uri));
+            const lineNumber = getAccurateLineNumber(document.getText(), invoke_variable, 0);
+            if (lineNumber === null) {
+                console.error(`Accurate line number for "${invoke_variable}" not found in "${matchedFile.file_uri}".`);
+                return null;
+            }
+
+            // Step 4: Set up the `Node` with linkage to the `ExplorationGraph`
+            const fullStatement = await getDestructuringAssignment(document, lineNumber);
+            const nodeId = `${matchedFile.file_uri}:${lineNumber}`;
+            const fromResults = this._exploredCodeLines.some(code => code.file_uri === matchedFile.file_uri && code.start_line <= lineNumber && code.end_line >= lineNumber);
+
+            // Create or update node as an invoking place
+            const newNode: Node = {
+                id: nodeId,
+                fileUri: matchedFile.file_uri,
+                startLine: lineNumber,
+                endLine: lineNumber + fullStatement.split('\n').length - 1,
+                variables: new Set([invoke_variable]),
+                codeSnippet: fullStatement,
+                isPlace: true,
+                edges: new Set()
+            };
+            this._explorationGraph.upsertNode(nodeId, newNode, subProblem.code_context.file_uri, this._stepCounter);
+
+            // Update `code_context` with matched details
+            subProblem.code_context.file_uri = matchedFile.file_uri;
+            subProblem.code_context.line_number = lineNumber;
+            subProblem.code_context.full_statement = fullStatement;
+            subProblem.code_context.from_results = fromResults;
+
+            return subProblem;
         }));
 
-        // Filter out any subProblems that were removed (null)
         task3Output.sub_problems = task3Output.sub_problems.filter((subProblem: any) => subProblem !== null);
-
         return JSON.stringify(task3Output);
     }
+
+    // Method to update the exploration graph and pass visualization data to SidebarView
+    private updateGraphVisualization() {
+        const graphData = this._explorationGraph.toVisualizationData();
+        this._sidebarViewProvider.updateGraphVisualization(graphData); // Pass nodes and edges data directly
+    }
+
 }
 
 export function deactivate() { }
