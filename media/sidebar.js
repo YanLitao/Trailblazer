@@ -141,19 +141,19 @@ function renderGraph(data) {
     const linkGroup = svg.append("g")
         .attr("class", "links")
         .selectAll("line")
-        .data(data.edges, d => `${d.source}-${d.target}`) // Unique key based on source-target IDs
+        .data(data.edges, d => `${d.source}-${d.target}`)
         .join("line")
         .style("stroke", "#aaa");
 
     const nodeGroup = svg.append("g")
         .attr("class", "nodes")
         .selectAll("circle")
-        .data(data.nodes, d => d.id) // Unique key based on node ID
+        .data(data.nodes, d => d.id)
         .join("circle")
         .attr("r", 8)
         .style("fill", d => d.isPlace ? "blue" : "grey");
 
-    const nodeLabels = svg.append("g") // Renamed from labelGroup to nodeLabels
+    const nodeLabels = svg.append("g")
         .attr("class", "labels")
         .selectAll("text")
         .data(data.nodes, d => d.id)
@@ -161,10 +161,8 @@ function renderGraph(data) {
         .attr("dx", 12)
         .attr("dy", ".35em")
         .text(d => {
-            // Extract the last segment after '/' as the file name and line number
             const parts = d.id.split('/');
-            const fileNameAndLine = parts[parts.length - 1]; // e.g., 'fileName.js:10'
-            return fileNameAndLine;
+            return parts[parts.length - 1]; // Show only filename and line number
         });
 
     const stepLabelGroup = svg.append("g")
@@ -173,36 +171,37 @@ function renderGraph(data) {
         .data(data.edges, d => `${d.source}-${d.target}`)
         .join("text")
         .attr("class", "step-label")
-        .attr("dx", d => (d.source.x + d.target.x) / 2)
-        .attr("dy", d => (d.source.y + d.target.y) / 2)
+        .attr("dx", d => (d.source.x + d.target.x) / 2 + 10) // Offset for better readability
+        .attr("dy", d => (d.source.y + d.target.y) / 2 + 10)
         .text(d => `Step ${d.stepNumber}`);
 
     const simulation = d3.forceSimulation(data.nodes)
         .force("link", d3.forceLink(data.edges).id(d => d.id).distance(50))
-        .force("charge", d3.forceManyBody().strength(-200))
+        .force("charge", d3.forceManyBody().strength(-150))
         .force("center", d3.forceCenter(width / 2, height / 2))
-        .alphaDecay(0.05); // Slows down the simulation for more stability
+        .force("collide", d3.forceCollide(30)) // Space out nodes to prevent overlap
+        .alphaDecay(0.05); // Slower decay for stability
 
     simulation.on("tick", () => {
         linkGroup
-            .attr("x1", d => d.source.x)
-            .attr("y1", d => d.source.y)
-            .attr("x2", d => d.target.x)
-            .attr("y2", d => d.target.y);
+            .attr("x1", d => Math.max(0, Math.min(width, d.source.x)))
+            .attr("y1", d => Math.max(0, Math.min(height, d.source.y)))
+            .attr("x2", d => Math.max(0, Math.min(width, d.target.x)))
+            .attr("y2", d => Math.max(0, Math.min(height, d.target.y)));
 
         nodeGroup
-            .attr("cx", d => d.x)
-            .attr("cy", d => d.y);
+            .attr("cx", d => d.x = Math.max(10, Math.min(width - 10, d.x))) // Keep nodes within view bounds
+            .attr("cy", d => d.y = Math.max(10, Math.min(height - 10, d.y)));
 
-        nodeLabels // Updated here to use nodeLabels instead of labelGroup
+        nodeLabels
             .attr("x", d => d.x)
             .attr("y", d => d.y);
 
         stepLabelGroup
-            .attr("x", d => (d.source.x + d.target.x) / 2)
-            .attr("y", d => (d.source.y + d.target.y) / 2);
+            .attr("x", d => (d.source.x + d.target.x) / 2 + 10) // Offset slightly for readability
+            .attr("y", d => (d.source.y + d.target.y) / 2 + 10);
     });
 
-    // Remove drag events to prevent nodes from moving
+    // Disable drag to prevent nodes from moving
     svg.selectAll("circle").on(".drag", null);
 }

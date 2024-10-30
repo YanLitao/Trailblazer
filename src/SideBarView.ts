@@ -376,6 +376,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     i++;
                     const codeContext = subProblem.code_context;
                     const fileName = this.getFileNameFromUri(codeContext.file_uri);
+                    const { contextText } = await getSurroundingCode(vscode.Uri.parse(codeContext.file_uri), codeContext.line_number, codeContext.line_number);
 
                     explorationStepsHtml += `
                         <div class="sub-question">
@@ -393,7 +394,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                                     </a></strong>:
                                 </p>
                                 <div class="code-box">
-                                    <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(codeContext.full_statement))}</code></pre>
+                                    <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(contextText))}</code></pre>
                                 </div>
                             </div>
                         </div>
@@ -414,6 +415,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 const firstSubProblem = task3Output.sub_problems[0];
                 const codeContext = firstSubProblem.code_context;
                 const fileName = this.getFileNameFromUri(codeContext.file_uri);
+                const { contextText } = await getSurroundingCode(vscode.Uri.parse(codeContext.file_uri), codeContext.line_number, codeContext.line_number);
 
                 // Show the first invocation place
                 currentTaskHtml += `
@@ -426,7 +428,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                             </a></strong>:
                         </p>
                         <div class="code-box">
-                            <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(codeContext.full_statement))}</code></pre>
+                            <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(contextText))}</code></pre>
                         </div>
                         <p class="code-info"><strong>Why to explore:</strong> ${firstSubProblem.reason}</p>
                     </div>
