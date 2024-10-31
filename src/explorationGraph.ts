@@ -58,8 +58,8 @@ export class ExplorationGraph {
      */
     public addEdge(sourceId: string, targetId: string, stepNumber: number, toolType: number) {
         // Adjust source and target based on tool type
-        const edgeSourceId = toolType === 0 ? sourceId : targetId;
-        const edgeTargetId = toolType === 0 ? targetId : sourceId;
+        const edgeSourceId = toolType === 0 ? targetId : sourceId;
+        const edgeTargetId = toolType === 0 ? sourceId : targetId;
         const edgeId = `${edgeSourceId}->${edgeTargetId}`;
 
         if (this.edges.has(edgeId)) return; // Avoid duplicate edges
@@ -118,6 +118,7 @@ export class ExplorationGraph {
             id: node.id,
             label: node.codeSnippet,
             isPlace: node.isPlace,
+            fileUri: node.fileUri,  // Include fileUri for clustering
             // Additional properties as needed
         }));
 
@@ -126,11 +127,11 @@ export class ExplorationGraph {
             .map(edge => ({
                 source: edge.sourceId,
                 target: edge.targetId,
-                // Additional edge properties if required
+                stepNumber: edge.stepNumber, // Include step number if needed for labeling
             }));
-
-        console.log({ nodesData, edgesData });
-        return { nodes: nodesData, edges: edgesData };
+        // log the data
+        const vizData = { nodes: nodesData, edges: edgesData };
+        return vizData;
     }
 
     /**

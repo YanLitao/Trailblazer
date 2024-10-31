@@ -127,81 +127,102 @@ function updateCurrentTaskContent(html, id, num) {
 }
 
 function renderGraph(data) {
+    console.log(data);
     const container = document.getElementById("graph-container");
     container.innerHTML = ""; // Clear previous graph
 
     const width = container.offsetWidth;
     const height = container.offsetHeight;
+    const radius = Math.min(width, height) / 2 - 40;
+
+    // Filter nodes to only include those marked as invoking places (isPlace=true)
+    const filteredNodes = data.nodes.filter(node => node.isPlace);
+    const filteredEdges = data.edges.filter(edge =>
+        filteredNodes.some(node => node.id === edge.source) &&
+        filteredNodes.some(node => node.id === edge.target)
+    );
 
     const svg = d3.select("#graph-container")
         .append("svg")
         .attr("width", width)
-        .attr("height", height);
+        .attr("height", height)
+        .append("g")
+        .attr("transform", `translate(${width / 2}, ${height / 2})`);
 
-    const linkGroup = svg.append("g")
-        .attr("class", "links")
-        .selectAll("line")
-        .data(data.edges, d => `${d.source}-${d.target}`)
-        .join("line")
-        .style("stroke", "#aaa");
+    const colorScale = d3.scaleOrdinal(d3.schemeCategory10);
 
-    const nodeGroup = svg.append("g")
-        .attr("class", "nodes")
-        .selectAll("circle")
-        .data(data.nodes, d => d.id)
-        .join("circle")
-        .attr("r", 8)
-        .style("fill", d => d.isPlace ? "blue" : "grey");
+    const groupedNodes = d3.group(filteredNodes, d => d.fileUri);
 
-    const nodeLabels = svg.append("g")
-        .attr("class", "labels")
-        .selectAll("text")
-        .data(data.nodes, d => d.id)
-        .join("text")
-        .attr("dx", 12)
-        .attr("dy", ".35em")
-        .text(d => {
-            const parts = d.id.split('/');
-            return parts[parts.length - 1]; // Show only filename and line number
-        });
+    const rootData = {
+        name: "root",
+        children: Array.from(groupedNodes, ([fileUri, nodes]) => ({
+            fileUri,
+            children: nodes
+        }))
+    };
 
-    const stepLabelGroup = svg.append("g")
-        .attr("class", "step-labels")
-        .selectAll("text")
-        .data(data.edges, d => `${d.source}-${d.target}`)
-        .join("text")
-        .attr("class", "step-label")
-        .attr("dx", d => (d.source.x + d.target.x) / 2 + 10) // Offset for better readability
-        .attr("dy", d => (d.source.y + d.target.y) / 2 + 10)
-        .text(d => `Step ${d.stepNumber}`);
+    const root = d3.hierarchy(rootData).sum(d => d.children ? 0 : 1);
+    const clusterLayout = d3.cluster().size([2 * Math.PI, radius]);
+    clusterLayout(root);
 
-    const simulation = d3.forceSimulation(data.nodes)
-        .force("link", d3.forceLink(data.edges).id(d => d.id).distance(50))
-        .force("charge", d3.forceManyBody().strength(-150))
-        .force("center", d3.forceCenter(width / 2, height / 2))
-        .force("collide", d3.forceCollide(30)) // Space out nodes to prevent overlap
-        .alphaDecay(0.05); // Slower decay for stability
+    const line = d3.lineRadial()
+        .curve(d3.curveBundle.beta(0.85))
+        .radius(d => d.y)
+        .angle(d => d.x);
 
-    simulation.on("tick", () => {
-        linkGroup
-            .attr("x1", d => Math.max(0, Math.min(width, d.source.x)))
-            .attr("y1", d => Math.max(0, Math.min(height, d.source.y)))
-            .attr("x2", d => Math.max(0, Math.min(width, d.target.x)))
-            .attr("y2", d => Math.max(0, Math.min(height, d.target.y)));
+    svg.append("defs").append("marker")
+        .attr("id", "arrowhead")
+        .attr("viewBox", "0 -5 10 10")
+        .attr("refX", 10)
+        .attr("refY", 0)
+        .attr("markerWidth", 6)
+        .attr("markerHeight", 6)
+        .attr("orient", "auto")
+        .append("path")
+        .attr("d", "M0,-5L10,0L0,5")
+        .attr("fill", "#aaa");
 
-        nodeGroup
-            .attr("cx", d => d.x = Math.max(10, Math.min(width - 10, d.x))) // Keep nodes within view bounds
-            .attr("cy", d => d.y = Math.max(10, Math.min(height - 10, d.y)));
-
-        nodeLabels
-            .attr("x", d => d.x)
-            .attr("y", d => d.y);
-
-        stepLabelGroup
-            .attr("x", d => (d.source.x + d.target.x) / 2 + 10) // Offset slightly for readability
-            .attr("y", d => (d.source.y + d.target.y) / 2 + 10);
+    const nodeColors = new Map();
+    root.leaves().forEach(leaf => {
+        nodeColors.set(leaf.data.id, colorScale(leaf.data.fileUri));
     });
 
-    // Disable drag to prevent nodes from moving
-    svg.selectAll("circle").on(".drag", null);
+    svg.append("g")
+        .selectAll("path")
+        .data(filteredEdges)
+        .join("path")
+        .attr("class", "link")
+        .attr("d", d => {
+            const sourceNode = root.descendants().find(node => node.data.id === d.source);
+            const targetNode = root.descendants().find(node => node.data.id === d.target);
+            return line(sourceNode.path(targetNode));
+        })
+        .attr("stroke", d => nodeColors.get(d.source))
+        .attr("stroke-width", 1.5)
+        .attr("marker-end", "url(#arrowhead)")
+        .style("fill", "none");
+
+    svg.append("g")
+        .selectAll("circle")
+        .data(root.leaves())
+        .join("circle")
+        .attr("transform", d => `rotate(${(d.x * 180 / Math.PI - 90)}) translate(${d.y},0)`)
+        .attr("r", 5)
+        .style("fill", d => colorScale(d.data.fileUri));
+
+    svg.append("g")
+        .selectAll("text")
+        .data(root.leaves())
+        .join("text")
+        .attr("transform", d => `
+            rotate(${(d.x * 180 / Math.PI - 90)})
+            translate(${d.y + 8}, 0)
+            ${d.x < Math.PI ? "" : "rotate(180)"}
+        `)
+        .attr("text-anchor", d => d.x < Math.PI ? "start" : "end")
+        .text(d => {
+            const parts = d.data.id ? d.data.id.split('/') : ["unknown"];
+            return parts[parts.length - 1];
+        })
+        .style("font-size", "10px");
 }

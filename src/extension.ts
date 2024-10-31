@@ -97,9 +97,10 @@ const task1JsonSchema = {
                         },
                         required: ["file_uri", "invoke_variable", "code_line", "full_statement"]
                     },
-                    num_results: { type: "integer" }
+                    num_results: { type: "integer" },
+                    reason: { type: "string" }
                 },
-                required: ["sub_question", "tool", "code_context", "num_results"]
+                required: ["sub_question", "tool", "code_context", "num_results", "reason"]
             }
         }
     },
@@ -293,11 +294,12 @@ class Agent {
 
         this._refined_question = task1Output.refined_question;
 
-
-
         for (const subProblem of task1Output.sub_problems) {
-            if (uri) {
+            if (uri && "file_uri" in subProblem.code_context) {
                 subProblem.code_context.file_uri = uri.toString();
+            } else {
+                console.log(subProblem);
+                continue;
             }
 
             //const invokeVariable = subProblem.code_context.invoke_variable;
@@ -642,6 +644,8 @@ class Agent {
                     The 'code_line' should not span multiple lines, and must include the exact line that contains the 'invoke_variable' being explored.
     
                     The output format should strictly follow the JSON schema provided, where the tool should be represented as an integer.
+
+                    For each sub-question, provide a clear and specific “reason” explaining the goal of exploring this sub-question. Describe exactly what we aim to uncover, such as particular methods, patterns, or code structures relevant to the exploration. Be as precise as possible in defining what we are looking for and why it is essential to the investigation.
                 `;
                 break;
             case 2:
@@ -670,7 +674,7 @@ class Agent {
                     - Choose the tool to explore the sub-question from the following list by providing the corresponding integer value and add it in the output:
                         -- 0: Go to Definition
                         -- 1: Find References
-                    - Provide a valid "reason" for each sub-question that explains why we chose to explore that specific area of the code.
+                    - For each sub-question, provide a clear and specific “reason” explaining the goal of exploring this sub-question. Describe exactly what we aim to uncover, such as particular methods, patterns, or code structures relevant to the exploration. Be as precise as possible in defining what we are looking for and why it is essential to the investigation.
                     - Include the file_uri, invoke_variable, code_line, line_number, and full_statement in the code context output, and reason for each sub-question with a valid starting point. 
                     - Ensure all these properties are filled in every case.
             

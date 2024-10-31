@@ -51,7 +51,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
     }
 
     // Enqueue new content
-    public enqueueTask3ResultUpdate(answer: string, taskContentHtml: string) {
+    public enqueueTaskResultUpdate(answer: string, taskContentHtml: string) {
         this._displayQueue.push({ answer, taskContentHtml });
         this.processQueue(); // Start processing the queue if not already in progress
     }
@@ -120,7 +120,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
 
     // Example usage: Set agent status to "Running"
     public agentIsRunning() {
-        this._updateAgentStatus('Running');
+        this._updateAgentStatus('Searching');
     }
 
     // Example usage: Set agent status to "Finished"
@@ -201,38 +201,93 @@ export class SidebarView implements vscode.WebviewViewProvider {
     public async addTask1Results(task1Output: any) {
         if (this._view) {
             const webview = this._view.webview;
-            const uniqueId = `task1-sub-questions-${this._stepCounter}`; // Generate unique ID for Task 1
-            var i = -1;
-
+            const uniqueId = `task1-sub-questions-${this._stepCounter}`;
+            const currentTaskUniqueId = `current-task1-results-${this._stepCounter}`;
             let task1Html = `
             <div class="task">
                 <div class="task-header">
-                    <div class="step-circle">${this._stepCounter}</div> <!-- Circle with step count -->
+                    <div class="step-circle">${this._stepCounter}</div>
                     <h3>Refined question: ${task1Output.refined_question}</h3>
                 </div>
-            `;
-            if (task1Output.sub_problems.length > 0) {
-                /* task1Html += `
                 <div class="task-content">
-                <p>
-                    Going to explore <strong>${task1Output.sub_problems.length}</strong> sub-questions:
-                </p>
+            `;
+
+            let currentTaskHtml = `<div class="task-content">`;
+
+            if (task1Output.sub_problems.length > 0) {
+                const firstSubProblem = task1Output.sub_problems[0];
+                const codeContext = firstSubProblem.code_context;
+                const fileName = this.getFileNameFromUri(codeContext.file_uri);
+                const { contextText } = await getSurroundingCode(vscode.Uri.parse(codeContext.file_uri), codeContext.line_number, codeContext.line_number);
+
+                // Build currentTaskHtml for the first sub-question in Task 3 style
+                currentTaskHtml += `
+                    <div class="sub-question">
+                        <p><strong>Currently exploring:</strong> ${firstSubProblem.sub_question}</p>
+                        <p class="code-info">
+                            Exploring <strong>${codeContext.invoke_variable}</strong> in <strong>${fileName}, 
+                            <a href="#" class="line-link" data-file-uri="${codeContext.file_uri}" data-line="${codeContext.line_number}">
+                                Line ${codeContext.line_number + 1}
+                            </a></strong>:
+                        </p>
+                        <div class="code-box">
+                            <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(contextText))}</code></pre>
+                        </div>
+                        <p class="code-info"><strong>Purpose:</strong> ${firstSubProblem.reason}</p>
+                    </div>
                 `;
 
-                for (const subProblem of task1Output.sub_problems) {
-                    i++;
+                // If there are more sub-questions, add a "show more" section for additional ones
+                if (task1Output.sub_problems.length > 1) {
+                    const remainingCount = task1Output.sub_problems.length - 1;
+                    currentTaskHtml += `
+                        <p class="show-more-invocations" id="${currentTaskUniqueId}-show-more" onClick="toggleAdditionalInvocations('${currentTaskUniqueId}-show-more')">
+                            ... also exploring <strong>${remainingCount}</strong> other places ...
+                        </p>
+                        <div id="${currentTaskUniqueId}-additional-invocations" style="display: none;">
+                    `;
+
+                    for (let i = 1; i < task1Output.sub_problems.length; i++) {
+                        const subProblem = task1Output.sub_problems[i];
+                        const otherCodeContext = subProblem.code_context;
+                        const otherFileName = this.getFileNameFromUri(otherCodeContext.file_uri);
+                        const { contextText: otherContextText } = await getSurroundingCode(vscode.Uri.parse(otherCodeContext.file_uri), otherCodeContext.line_number, otherCodeContext.line_number);
+
+                        currentTaskHtml += `
+                            <div class="sub-question additional-invocation">
+                                <p><strong>Exploring:</strong> ${subProblem.sub_question}</p>
+                                <p class="code-info">
+                                    Exploring <strong>${otherCodeContext.invoke_variable}</strong> in <strong>${otherFileName}, 
+                                    <a href="#" class="line-link" data-file-uri="${otherCodeContext.file_uri}" data-line="${otherCodeContext.line_number}">
+                                        Line ${otherCodeContext.line_number + 1}
+                                    </a></strong>:
+                                </p>
+                                <div class="code-box">
+                                    <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(otherContextText))}</code></pre>
+                                </div>
+                                <p class="code-info"><strong>Purpose:</strong> ${subProblem.reason}</p>
+                            </div>
+                        `;
+                    }
+                    currentTaskHtml += `</div>`; // Close additional-invocations div
+                }
+                currentTaskHtml += `</div>`; // Close task-content div
+
+                // Build task1Html for the full list of sub-questions in original Task 1 style
+                task1Html += `
+                    <p>Exploring <strong>${task1Output.sub_problems.length}</strong> sub-questions:</p>
+                    <div class="sub-questions">
+                `;
+                for (let i = 0; i < task1Output.sub_problems.length; i++) {
+                    const subProblem = task1Output.sub_problems[i];
                     const codeContext = subProblem.code_context;
                     const fileName = this.getFileNameFromUri(codeContext.file_uri);
 
                     task1Html += `
-                    <div class="sub-question">
-                        <div class="sub-question-header">
-                            <button id="${uniqueId}-btn-${i}" class="toggle-button" data-target="${uniqueId}-sub-question-${i}"><span class="triangle-right"></span></button>
-                            <p class="before-hide"><strong>Sub-question: </strong>${subProblem.sub_question}</p>
-                        </div>
-                        <div id="${uniqueId}-sub-question-${i}" class="task-details" style="display: none">
+                        <div class="sub-question">
+                            <p><strong>Sub-question:</strong> ${subProblem.sub_question}</p>
                             <p class="code-info">
-                                Going to use <strong>${allowedTools[subProblem.tool as keyof typeof allowedTools]}</strong> to explore <strong>${codeContext.invoke_variable}</strong> in <strong>${fileName}, 
+                                Tool: <strong>${allowedTools[subProblem.tool as keyof typeof allowedTools]}</strong>, exploring <strong>${codeContext.invoke_variable}</strong> in <strong>${fileName}, 
                                 <a href="#" class="line-link" data-file-uri="${codeContext.file_uri}" data-line="${codeContext.line_number}">
                                     line ${codeContext.line_number + 1}
                                 </a></strong>:
@@ -241,15 +296,21 @@ export class SidebarView implements vscode.WebviewViewProvider {
                                 <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(codeContext.full_statement))}</code></pre>
                             </div>
                         </div>
-                    </div>
                     `;
                 }
+                task1Html += `</div></div></div>`; // Close task-content and task divs
 
-                task1Html += `</div></div>`; // Close all divs correctly */
+                // Post the HTML updates for Task 1
+                webview.postMessage({ command: 'appendHtml', html: task1Html, id: uniqueId });
+                // Post the HTML for the current task in Task 3 format
+                webview.postMessage({ command: 'updateCurrentTaskContent', html: currentTaskHtml, id: currentTaskUniqueId });
             } else {
+                // If no sub-questions found, post a message
                 task1Html += `<div class="task-content"><p>No sub-questions found.</p></div></div>`;
+                webview.postMessage({ command: 'appendHtml', html: task1Html, id: uniqueId });
             }
-            webview.postMessage({ command: 'appendHtml', html: task1Html, id: uniqueId, num: i });
+
+            // Increment the step counter
             this._stepCounter++;
         }
     }
@@ -474,7 +535,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 //webview.postMessage({ command: 'updateCurrentTaskContent', html: currentTaskHtml, id: currentTaskUniqueId, num: i });
                 // Only enqueue updates for non-empty answer or task content
                 if (answerText || currentTaskHtml) {
-                    this.enqueueTask3ResultUpdate(answerText || "", currentTaskHtml || "");
+                    this.enqueueTaskResultUpdate(answerText || "", currentTaskHtml || "");
                 }
             }
             // Increment the step counter
