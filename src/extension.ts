@@ -13,9 +13,9 @@ if (!API_KEY) {
 }
 
 export function activate(context: vscode.ExtensionContext) {
-    // Register the command to ask a question about code
-    // Initialize the SidebarView with only the context
+    // Initialize the SidebarView and Agent with only the context
     const sidebarViewProvider = new SidebarView(context);
+    const agent = new Agent(sidebarViewProvider); // Instantiate Agent once here
 
     // Register the webview provider for the sidebar
     context.subscriptions.push(
@@ -23,10 +23,26 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     // Register the command to ask a question about code
-    const disposable = vscode.commands.registerCommand('search-copilot.helloWorld', () => {
-        askQuestionAboutCode(context, sidebarViewProvider); // Pass the SidebarView instance
+    const askQuestionDisposable = vscode.commands.registerCommand('search-copilot.helloWorld', () => {
+        askQuestionAboutCode(context, sidebarViewProvider, agent); // Pass the Agent instance
     });
-    context.subscriptions.push(disposable);
+    context.subscriptions.push(askQuestionDisposable);
+
+    // Register commands for pause, continue, and stop
+    context.subscriptions.push(
+        vscode.commands.registerCommand('extension.pauseAgent', () => {
+            agent.pause();
+            vscode.window.showInformationMessage('Agent paused.');
+        }),
+        vscode.commands.registerCommand('extension.continueAgent', () => {
+            agent.continue();
+            vscode.window.showInformationMessage('Agent continued.');
+        }),
+        vscode.commands.registerCommand('extension.stopAgent', () => {
+            agent.stop();
+            vscode.window.showInformationMessage('Agent stopped.');
+        })
+    );
 }
 
 export async function getQuestion(code: string) {
@@ -36,15 +52,13 @@ export async function getQuestion(code: string) {
     });
 }
 
-async function askQuestionAboutCode(context: vscode.ExtensionContext, sidebarViewProvider: SidebarView) {
+async function askQuestionAboutCode(context: vscode.ExtensionContext, sidebarViewProvider: SidebarView, agent: Agent) {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
         return;
     }
 
     const selection = editor.selection;
-
-    // Get the selected lines, fallback to the current line if no selection is made
     let selectedText = editor.document.getText(selection);
     if (selection.isEmpty) {
         selectedText = editor.document.lineAt(selection.start.line).text;
@@ -53,20 +67,19 @@ async function askQuestionAboutCode(context: vscode.ExtensionContext, sidebarVie
     const startLine = selection.start.line;
     const endLine = selection.end.line;
 
-    // Call getQuestion to display input box to the user
-    const query = await getQuestion(selectedText); // The input box appears here
-
+    // Prompt user for the question
+    const query = await getQuestion(selectedText);
     if (query === undefined) {
         return; // User canceled the input box
     }
 
-    // Update the sidebar view content with the user question and selected code
+    // Update the sidebar with the user question and selected code
     sidebarViewProvider.updateWebviewContent(query, selectedText, getFileNameFromUri(editor.document.uri.toString()), startLine);
 
     // Show the sidebar automatically once the question is received
     vscode.commands.executeCommand('workbench.view.extension.search-copilot-sidebar').then(() => {
-        // Start the agent to handle exploration
-        new Agent(sidebarViewProvider).runWorkflow(query, editor.document.uri, startLine, endLine);
+        // Run the workflow using the persistent Agent instance
+        agent.runWorkflow(query, editor.document.uri, startLine, endLine);
     });
 }
 
@@ -197,6 +210,8 @@ class Agent {
     private _exploredSubQuestions: string[] = [];
     private _exploredCodeLines: { file_uri: string, start_line: number, end_line: number, code_snippet: string }[] = [];
     private _explorationGraph: ExplorationGraph;
+    private isPaused: boolean = false;     // Track if the agent is paused
+    private isStopped: boolean = false;    // Track if the agent is stopped
 
     constructor(sidebarViewProvider: SidebarView) {
         this._model = new ChatOpenAI({
@@ -208,6 +223,21 @@ class Agent {
         });
         this._sidebarViewProvider = sidebarViewProvider;
         this._explorationGraph = new ExplorationGraph();
+    }
+
+    // New methods to handle pause, continue, and stop
+    pause() {
+        this.isPaused = true;
+        this.isStopped = false;
+    }
+
+    continue() {
+        this.isPaused = false;
+    }
+
+    stop() {
+        this.isPaused = false;
+        this.isStopped = true;
     }
 
     async runWorkflow(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
@@ -243,10 +273,15 @@ class Agent {
         refinedOutput = await this.runTask1(question, uri, startLine, endLine);
 
         // Loop to explore sub-problems
-        while (!sufficient && this._stepCounter < MAX_STEPS) {
+        while (!sufficient && this._stepCounter < MAX_STEPS && !this.isStopped) {
             if (!refinedOutput || !refinedOutput.sub_problems) {
                 console.error("Error: No sub-problems returned.");
                 break;
+            }
+
+            if (this.isPaused) {
+                await new Promise(resolve => setTimeout(resolve, 500)); // Wait if paused
+                continue;
             }
 
             this._stepCounter++;
@@ -325,7 +360,7 @@ class Agent {
                         isPlace: true,  // Mark as invoking place
                         edges: new Set()
                     };
-                    this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, subProblem.tool);
+                    this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, subProblem.tool, true);
                 }
             }
         }
@@ -440,7 +475,7 @@ class Agent {
                     edges: new Set()
                 };
 
-                this._explorationGraph.upsertNode(resultNodeId, resultNode, sourceId, this._stepCounter, subProblem.tool);
+                this._explorationGraph.upsertNode(resultNodeId, resultNode, sourceId, this._stepCounter, subProblem.tool, false);
             });
 
             // Add the variable and results to _exploredVariables
@@ -797,7 +832,7 @@ class Agent {
                 isPlace: true,
                 edges: new Set()
             };
-            this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, subProblem.tool);
+            this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, subProblem.tool, true);
 
             // Update `code_context` with matched details
             subProblem.code_context.file_uri = matchedFile.file_uri;

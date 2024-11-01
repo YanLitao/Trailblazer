@@ -32,11 +32,11 @@ export class ExplorationGraph {
     /**
      * Adds a new node to the graph if it does not exist or updates an existing node's properties.
      */
-    public upsertNode(nodeId: string, nodeData: Node, sourceId: string | null, stepNumber: number, toolType: number): Node {
+    public upsertNode(nodeId: string, nodeData: Node, sourceId: string | null, stepNumber: number, toolType: number, isPlaceUpdate: boolean): Node {
         let existingNode = this.nodes.get(nodeId);
 
         if (existingNode) {
-            if (!existingNode.isPlace) {
+            if (isPlaceUpdate && !existingNode.isPlace) {
                 existingNode.isPlace = true;
                 this.updateEdgeVisibility(nodeId);
             }

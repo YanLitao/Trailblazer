@@ -46,6 +46,11 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 this.openFileAtLine(fileUri, lineNumber);
             } else if (message.command === 'stopAgent') {
                 this.agentIsDone();
+                vscode.commands.executeCommand('extension.stopAgent');
+            } else if (message.command === 'pauseAgent') {
+                vscode.commands.executeCommand('extension.pauseAgent');
+            } else if (message.command === 'continueAgent') {
+                vscode.commands.executeCommand('extension.continueAgent');
             }
         });
     }
@@ -128,6 +133,14 @@ export class SidebarView implements vscode.WebviewViewProvider {
         this._updateAgentStatus('Finished');
     }
 
+    public agentIsPaused() {
+        this._updateAgentStatus('Paused');
+    }
+
+    public agentIsStopped() {
+        this._updateAgentStatus('Stopped');
+    }
+
     private _getHtmlForWebview(webview: vscode.Webview): string {
         const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', 'sidebar.js'));
         const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', 'sidebar.css'));
@@ -164,9 +177,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     </div>
                 </div>
                 <div id="actions" style="display: flex; justify-content: space-around; padding: 10px;">
-                    <button id="give-hint" class="action-btn">Give a hint</button>
-                    <button id="refine-question" class="action-btn">Refine question</button>
-                    <button id="stop-agent" class="action-btn">Stop agent</button>
+                    <button id="continue-agent" class="action-btn">Continue</button>
+                    <button id="pause-agent" class="action-btn">Pause</button>
+                    <button id="stop-agent" class="action-btn">Stop</button>
                     <button id="toggle-log" class="action-btn">See full log</button>
                 </div>
                 <div id="graph-container" style="width: 100%; height: 400px;"></div>

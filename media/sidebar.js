@@ -43,6 +43,18 @@ document.getElementById('toggle-log').addEventListener('click', function () {
     }
 });
 
+document.getElementById('continue-agent').addEventListener('click', function () {
+    vscode.postMessage({
+        command: 'continueAgent'
+    });
+});
+
+document.getElementById('pause-agent').addEventListener('click', function () {
+    vscode.postMessage({
+        command: 'pauseAgent'
+    });
+});
+
 document.getElementById('stop-agent').addEventListener('click', function () {
     vscode.postMessage({
         command: 'stopAgent'
