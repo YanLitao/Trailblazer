@@ -170,6 +170,10 @@ export class SidebarView implements vscode.WebviewViewProvider {
                         Status: <span id="agent-status-text">Idle</span>
                     </p>
                     <p id="preliminary-answer"><span id="preliminary-answer-text"></span></p>
+                    <p id="still-to-be-found">Still to be found: <span id="still-to-be-found-text"></span></p>
+                    <p>Findings:</p>
+                    <div id="findings">
+                    </div>
                     <button id="save-pdf">Save</button>
                 </div>
                 <div id="current-task">
@@ -553,6 +557,59 @@ export class SidebarView implements vscode.WebviewViewProvider {
             }
             // Increment the step counter
             this._stepCounter++;
+        }
+    }
+
+    public async addTask4Results(task4Output: any) {
+        if (this._view) {
+            const webview = this._view.webview;
+            const findingsDivId = "findings";
+            const visibleLimit = 3; // Show this many results initially
+
+            // Filter for only score=3 results in the current batch
+            const score3Results = task4Output.ranked_results.filter((result: any) => result.relevance_score === 3);
+            const initialVisibleResults = score3Results.slice(0, visibleLimit);
+            const additionalResults = score3Results.slice(visibleLimit);
+
+            // HTML content for visible code boxes
+            let findingsHtml = ``;
+
+            // Display initial visible results directly
+            initialVisibleResults.forEach((result: any) => {
+                const escapedCodeLine = this.escapeHtml(stripSingleLineIndentation(result.code_line));
+
+                findingsHtml += `
+                    <div class="code-box">
+                        <pre class="line-numbers"><code class="language-ts">${escapedCodeLine}</code></pre>
+                    </div>
+                `;
+            });
+
+            // Prepare "show more" button and hidden additional results if there are more than visibleLimit
+            const remainingCount = additionalResults.length;
+            if (remainingCount > 0) {
+                findingsHtml += `
+                    <p class="show-more-results" id="${findingsDivId}-show-more" onclick="toggleAdditionalInvocations('${findingsDivId}-show-more')">
+                        ... also showing <strong>${remainingCount}</strong> other relevant snippets ...
+                    </p>
+                    <div id="${findingsDivId}-additional-results" style="display: none;">
+                `;
+
+                // Add hidden additional results
+                additionalResults.forEach((result: any) => {
+                    const escapedCodeLine = this.escapeHtml(result.code_line);
+
+                    findingsHtml += `
+                        <div class="code-box">
+                            <pre class="line-numbers"><code class="language-ts">${escapedCodeLine}</code></pre>
+                        </div>
+                    `;
+                });
+                findingsHtml += `</div>`; // Close additional-results div
+            }
+
+            // Post the HTML to the webview to append it to the findings area
+            webview.postMessage({ command: 'appendFindings', html: findingsHtml });
         }
     }
 

@@ -17,6 +17,9 @@ window.addEventListener('message', event => {
         case 'updatePreliminaryAnswer':
             document.getElementById('preliminary-answer-text').innerText = message.answer;
             break;
+        case 'appendFindings':
+            document.getElementById('findings').insertAdjacentHTML('beforeend', message.html);
+            break;
         case 'renderGraph':
             renderGraph(message.data);
             break;
