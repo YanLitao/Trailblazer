@@ -40,6 +40,77 @@ h4 {
     font-style: italic;
 }
 
+/* Switch container styling */
+#button-container {
+    display: flex;
+    align-items: center;
+    gap: 50px;
+    /* Space between switch and Save button */
+    margin-top: 10px;
+}
+
+/* Hide the default checkbox */
+.switch input {
+    display: none;
+}
+
+/* Switch styling */
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 48px;
+    height: 24px;
+}
+
+.switch .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: 0.4s;
+    border-radius: 34px;
+}
+
+.switch .slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 4px;
+    bottom: 3px;
+    background-color: white;
+    transition: 0.4s;
+    border-radius: 50%;
+}
+
+/* Checked styling */
+input:checked+.slider {
+    background-color: #4CAF50;
+}
+
+input:checked+.slider:before {
+    transform: translateX(24px);
+    /* Moves the slider to the right */
+}
+
+/* Round slider styling */
+.slider.round {
+    border-radius: 34px;
+}
+
+.slider.round:before {
+    border-radius: 50%;
+}
+
+/* Optional: Label styling next to the switch */
+.switch-label {
+    font-size: 0.9em;
+    color: #333;
+}
+
 button#save-pdf {
     padding: 8px 12px;
     background-color: #4CAF50;
@@ -48,6 +119,7 @@ button#save-pdf {
     border-radius: 4px;
     cursor: pointer;
     font-size: 0.9em;
+    transition: background-color 0.3s ease;
 }
 
 button#save-pdf:hover {

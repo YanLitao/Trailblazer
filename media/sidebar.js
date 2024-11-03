@@ -31,6 +31,17 @@ document.getElementById('save-pdf').addEventListener('click', function () {
     html2pdf().from(element).save('search-copilot.pdf');
 });
 
+// Add event listener for watch mode toggle switch
+document.getElementById('watch-mode-toggle').addEventListener('change', (event) => {
+    const isActive = event.target.checked;
+
+    // Send a message to the extension to toggle watch mode
+    vscode.postMessage({
+        command: 'toggleWatchMode',
+        isActive: isActive
+    });
+});
+
 // Function to toggle the visibility of the exploration steps
 document.getElementById('toggle-log').addEventListener('click', function () {
     const explorationSteps = document.getElementById('exploration-steps');

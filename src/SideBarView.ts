@@ -14,9 +14,10 @@ export class SidebarView implements vscode.WebviewViewProvider {
     private _stepCounter: number = 1;
     private _initialFileUri: string = '';
     private _initialLineNumber: number = 0;
-    private _displayQueue: Array<{ answer: string, taskContentHtml: string }> = [];
+    private _displayQueue: Array<{ answer: string, taskContentHtml: string, locations: Array<{ fileUri?: string, lineNumber?: number }> }> = [];
     private _isDisplaying: boolean = false;
-    private _stayingTime: number = 15; // seconds
+    private _stayingTime: number = 10; // seconds
+    private _watchMode: boolean = false;
 
     constructor(
         private readonly _context: vscode.ExtensionContext
@@ -51,13 +52,15 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 vscode.commands.executeCommand('extension.pauseAgent');
             } else if (message.command === 'continueAgent') {
                 vscode.commands.executeCommand('extension.continueAgent');
+            } else if (message.command === 'toggleWatchMode') {
+                this._watchMode = message.isActive;
             }
         });
     }
 
     // Enqueue new content
-    public enqueueTaskResultUpdate(answer: string, taskContentHtml: string) {
-        this._displayQueue.push({ answer, taskContentHtml });
+    public enqueueTaskResultUpdate(answer: string, taskContentHtml: string, locations: Array<{ fileUri?: string, lineNumber?: number }> = []) {
+        this._displayQueue.push({ answer, taskContentHtml, locations });
         this.processQueue(); // Start processing the queue if not already in progress
     }
 
@@ -70,7 +73,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
         this._isDisplaying = true;
 
         // Dequeue and display the next item
-        const { answer, taskContentHtml } = this._displayQueue.shift()!;
+        const { answer, taskContentHtml, locations } = this._displayQueue.shift()!;
 
         // Send message to update preliminary answer and current task content
         this._view?.webview.postMessage({
@@ -82,6 +85,15 @@ export class SidebarView implements vscode.WebviewViewProvider {
             command: 'updateCurrentTaskContent',
             html: taskContentHtml
         });
+
+        // Check if watch mode is active and extract the file URI and line number
+        if (this._watchMode) {
+            for (const location of locations) {
+                if (location.fileUri && location.lineNumber !== undefined) {
+                    await this.openFileAtLine(vscode.Uri.parse(location.fileUri), location.lineNumber);
+                }
+            }
+        }
 
         // Wait 30 seconds before allowing the next update
         await new Promise(resolve => setTimeout(resolve, this._stayingTime * 1000));
@@ -174,7 +186,14 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     <p>Findings:</p>
                     <div id="findings">
                     </div>
-                    <button id="save-pdf">Save</button>
+                    <div id="button-container">
+                        <label for="watch-mode-toggle" class="switch-label">Watch Mode</label>
+                        <label class="switch">
+                            <input type="checkbox" id="watch-mode-toggle">
+                            <span class="slider round"></span>
+                        </label>
+                        <button id="save-pdf">Save Log</button>
+                    </div>
                 </div>
                 <div id="current-task">
                     <div id="current-task-content">
@@ -552,7 +571,8 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 //webview.postMessage({ command: 'updateCurrentTaskContent', html: currentTaskHtml, id: currentTaskUniqueId, num: i });
                 // Only enqueue updates for non-empty answer or task content
                 if (answerText || currentTaskHtml) {
-                    this.enqueueTaskResultUpdate(answerText || "", currentTaskHtml || "");
+                    const locations = [{ fileUri: firstSubProblem.code_context.file_uri, lineNumber: firstSubProblem.code_context.line_number }];
+                    this.enqueueTaskResultUpdate(answerText || "", currentTaskHtml || "", locations);
                 }
             }
             // Increment the step counter
