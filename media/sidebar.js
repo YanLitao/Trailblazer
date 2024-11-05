@@ -153,7 +153,6 @@ function updateCurrentTaskContent(html, id, num) {
 }
 
 function renderGraph(data) {
-    console.log(data);
     const container = document.getElementById("graph-container");
     container.innerHTML = ""; // Clear previous graph
 

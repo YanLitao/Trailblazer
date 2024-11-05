@@ -192,7 +192,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
                             <input type="checkbox" id="watch-mode-toggle">
                             <span class="slider round"></span>
                         </label>
-                        <button id="save-pdf">Save Log</button>
                     </div>
                 </div>
                 <div id="current-task">
@@ -204,6 +203,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     <button id="pause-agent" class="action-btn">Pause</button>
                     <button id="stop-agent" class="action-btn">Stop</button>
                     <button id="toggle-log" class="action-btn">See full log</button>
+                    <button id="save-pdf" class="action-btn">Save Log</button>
                 </div>
                 <div id="graph-container" style="width: 100%; height: 400px;"></div>
                 <div id="exploration-steps" style="display:none;">
@@ -374,21 +374,32 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     if (result.code_context && (!('from_results' in result.code_context) || !result.code_context.from_results)) {
                         task2Html += ` uncertain`;
                     }
-                    const invokeFileName = this.getFileNameFromUri(result.code_context.file_uri);
+                    let variable = "";
+                    let line = 0;
+                    let invokeFileName = "";
+                    let codeLine = "";
+
+                    if ("code_context" in result) {
+                        variable = result.code_context.invoke_variable;
+                        line = result.code_context.line_number;
+                        invokeFileName = this.getFileNameFromUri(result.code_context.file_uri);
+                        codeLine = result.code_context.code_line;
+                    }
+
                     task2Html += `">
                         <div class="sub-question-header">
                             <button id="${uniqueId}-btn-${i}" class="toggle-button" data-target="${uniqueId}-sub-question-${i}">
                                 <span class="triangle-right"></span>
                             </button>
-                            <p class="code-info">Explored <strong>${result.code_context.invoke_variable}</strong> in ${invokeFileName}: line 
-                                <a href="#" class="line-link" data-file-uri="${invokeFileName}" data-line="${result.code_context.line_number}">${result.code_context.line_number}</a>, 
+                            <p class="code-info">Explored <strong>${variable}</strong> in ${invokeFileName}: line 
+                                <a href="#" class="line-link" data-file-uri="${invokeFileName}" data-line="${line}">${line}</a>, 
                                 using <strong>${allowedTools[result.tool as keyof typeof allowedTools]}</strong>:
                             </p>
                         </div>
                         <div id="${uniqueId}-sub-question-${i}" class="task-details" style="display: none">
                             <p class="before-hide"><strong>Sub-question:</strong> ${result.sub_question}</p>
                             <div class="code-box">
-                                <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(result.code_context.code_line))}</code></pre>
+                                <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(codeLine))}</code></pre>
                             </div>
                             <p class="code-info">Found <strong>${result.filtered_results.length}</strong> results:</p>
                             <div class="filtered-results">
@@ -415,6 +426,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     }
 
                     task2Html += `</div></div></div>`;
+
                 }
 
                 task2Html += `</div></div>`;

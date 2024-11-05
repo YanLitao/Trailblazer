@@ -5,6 +5,7 @@ import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
 import { getFileNameFromUri, getSurroundingCode, stripSingleLineIndentation, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, getDestructuringAssignment } from './codeContextUtils';
 import { ExplorationGraph, Node, Edge } from './explorationGraph';
+import * as path from 'path';
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
 
@@ -223,7 +224,6 @@ const task4JsonSchema = {
 
 class Agent {
     private _model: ChatOpenAI;
-    private _explorationHistory: any[] = [];
     private _stepCounter: number = 0;
     private _refined_question: string | null = null;
     private _sidebarViewProvider: SidebarView;
@@ -236,6 +236,11 @@ class Agent {
     private isStopped: boolean = false;    // Track if the agent is stopped
     private _importantResults: Array<{ file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }> = [];
     private _lastTask4Promise = Promise.resolve(); // Initialize a placeholder Promise
+
+    private _fileExtensionsToExclude = ['.test.ts', '.spec.tsx', '.test.js', '.spec.js'];
+    private _primarySearchFolder: string = "";
+    private _secondarySearchFolder: string = "";
+    private _entireFolder: string = "";
 
     constructor(sidebarViewProvider: SidebarView) {
         this._model = new ChatOpenAI({
@@ -336,6 +341,23 @@ class Agent {
         if (this._stepCounter >= MAX_STEPS) {
             console.log("Reached maximum exploration steps.");
         }
+    }
+
+    private _defineSearchFolders(fileUri: string): void {
+        const fileDir = path.dirname(fileUri);
+
+        // Primary search folder is the direct folder where the file is located
+        this._primarySearchFolder = fileDir;
+
+        // Secondary search folder (one level up) - used to locate related modules
+        this._secondarySearchFolder = path.resolve(fileDir, '..');
+
+        // Entire folder - assumed to be two levels up for project boundary or directory like 'packages'
+        let projectFolder = path.resolve(this._secondarySearchFolder, '..');
+        while (projectFolder && !['packages', 'src'].some(dir => projectFolder.endsWith(dir))) {
+            projectFolder = path.dirname(projectFolder);
+        }
+        this._entireFolder = projectFolder;
     }
 
     async runTask1(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
@@ -641,30 +663,63 @@ class Agent {
             return results;
         }
 
-        for (const location of locations) {
+        // Filter locations to exclude unwanted file extensions
+        const filteredLocations = locations.filter(location => {
+            const fileUri = location instanceof vscode.Location ? location.uri.toString() : (location as vscode.LocationLink).targetUri.toString();
+            const ext = path.extname(fileUri);
+            return !this._fileExtensionsToExclude.includes(ext);
+        });
+
+        const primaryResults: any[] = [];
+        const secondaryResults: any[] = [];
+        const entireResults: any[] = [];
+
+        for (const location of filteredLocations) {
             const lineNumber = location instanceof vscode.Location ? location.range.start.line : (location as vscode.LocationLink).targetRange.start.line;
             const fileUri = location instanceof vscode.Location ? location.uri.toString() : (location as vscode.LocationLink).targetUri.toString();
 
+            // Open document to retrieve code content and statements
             const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(fileUri));
-
             const fullStatement = await getDestructuringAssignment(document, lineNumber);
 
-            //console.log(`Result found at file: ${fileUri}, line: ${lineNumber}`);
-            //console.log(`Full statement retrieved: ${fullStatement}`);
-
-            // Add or update the explored code lines
-            this._addOrUpdateExploredCodeLines(fileUri, lineNumber, fullStatement, subProblem);
-            // Add or update the explored files
-            this._addToExploredFiles(vscode.Uri.parse(fileUri), document);
-
-            results.push({
+            const result = {
                 file_uri: fileUri,
                 line_number: lineNumber,
                 code_line: document.lineAt(lineNumber).text.trim(),
                 full_statement: fullStatement
-            });
+            };
+
+            // Add or update the explored code lines and files
+            this._addOrUpdateExploredCodeLines(fileUri, lineNumber, fullStatement, subProblem);
+            this._addToExploredFiles(vscode.Uri.parse(fileUri), document);
+
+            // Categorize based on folder priority
+            if (fileUri.startsWith(this._primarySearchFolder)) {
+                primaryResults.push(result);
+            } else if (fileUri.startsWith(this._secondarySearchFolder)) {
+                secondaryResults.push(result);
+            } else if (fileUri.startsWith(this._entireFolder)) {
+                entireResults.push(result);
+            }
         }
 
+        // Build final results based on folder priority and num_results constraint
+        results.push(...primaryResults);
+        if (subProblem.num_results && results.length >= subProblem.num_results) {
+            return results.slice(0, subProblem.num_results);
+        }
+
+        results.push(...secondaryResults);
+        if (subProblem.num_results && results.length >= subProblem.num_results) {
+            return results.slice(0, subProblem.num_results);
+        }
+
+        results.push(...entireResults);
+        if (subProblem.num_results && results.length >= subProblem.num_results) {
+            return results.slice(0, subProblem.num_results);
+        }
+
+        // Return all results if they are still below num_results
         return results;
     }
 
@@ -927,7 +982,7 @@ class Agent {
         const response = await parser.invoke(result);
 
         // log the response in json format
-        console.log(`Task ${taskNumber} Response: ${JSON.stringify(response, null, 2)}`);
+        console.log(`Task ${taskNumber} Response: ${JSON.stringify(JSON.parse(response), null, 2)}`);
 
         let processedResponse;
         if (taskNumber === 3) {

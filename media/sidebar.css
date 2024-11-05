@@ -44,7 +44,7 @@ h4 {
 #button-container {
     display: flex;
     align-items: center;
-    gap: 50px;
+    gap: 20px;
     /* Space between switch and Save button */
     margin-top: 10px;
 }
@@ -109,21 +109,6 @@ input:checked+.slider:before {
 .switch-label {
     font-size: 0.9em;
     color: #333;
-}
-
-button#save-pdf {
-    padding: 8px 12px;
-    background-color: #4CAF50;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.9em;
-    transition: background-color 0.3s ease;
-}
-
-button#save-pdf:hover {
-    background-color: #45a049;
 }
 
 /* Current Task Section */
