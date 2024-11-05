@@ -278,6 +278,7 @@ class Agent {
         const document = await vscode.workspace.openTextDocument(uri);
         const fileUriString = uri.toString();
         const fileContent = document.getText();
+        this._defineSearchFolders(fileUriString);
 
         // Add the file content only if it hasn't been explored before
         if (!this._exploredFiles.some(file => file.file_uri === fileUriString)) {
