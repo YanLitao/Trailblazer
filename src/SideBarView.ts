@@ -14,7 +14,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
     private _stepCounter: number = 1;
     private _initialFileUri: string = '';
     private _initialLineNumber: number = 0;
-    private _displayQueue: Array<{ answer: string, taskContentHtml: string, locations: Array<{ fileUri?: string, lineNumber?: number }> }> = [];
+    private _displayQueue: Array<{ answer: string, nextStepSummary: string, taskContentHtml: string, locations: Array<{ fileUri?: string, lineNumber?: number }> }> = [];
     private _isDisplaying: boolean = false;
     private _stayingTime: number = 10; // seconds
     private _watchMode: boolean = false;
@@ -59,8 +59,8 @@ export class SidebarView implements vscode.WebviewViewProvider {
     }
 
     // Enqueue new content
-    public enqueueTaskResultUpdate(answer: string, taskContentHtml: string, locations: Array<{ fileUri?: string, lineNumber?: number }> = []) {
-        this._displayQueue.push({ answer, taskContentHtml, locations });
+    public enqueueTaskResultUpdate(answer: string, nextStepSummary: string, taskContentHtml: string, locations: Array<{ fileUri?: string, lineNumber?: number }> = []) {
+        this._displayQueue.push({ answer, nextStepSummary, taskContentHtml, locations });
         this.processQueue(); // Start processing the queue if not already in progress
     }
 
@@ -73,12 +73,17 @@ export class SidebarView implements vscode.WebviewViewProvider {
         this._isDisplaying = true;
 
         // Dequeue and display the next item
-        const { answer, taskContentHtml, locations } = this._displayQueue.shift()!;
+        const { answer, nextStepSummary, taskContentHtml, locations } = this._displayQueue.shift()!;
 
         // Send message to update preliminary answer and current task content
         this._view?.webview.postMessage({
             command: 'updatePreliminaryAnswer',
             answer: answer
+        });
+
+        this._view?.webview.postMessage({
+            command: 'updateExplorationSummary',
+            summary: nextStepSummary
         });
 
         this._view?.webview.postMessage({
@@ -182,7 +187,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                         Status: <span id="agent-status-text">Idle</span>
                     </p>
                     <p id="preliminary-answer"><span id="preliminary-answer-text"></span></p>
-                    <p id="still-to-be-found">Still to be found: <span id="still-to-be-found-text"></span></p>
+                    <p id="still-to-be-found">Still to be found: <span id="exploration-summary"></span></p>
                     <p>Findings:</p>
                     <div id="findings">
                     </div>
@@ -461,6 +466,10 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     : `Preliminary Answer: ${task3Output.answer}`
                 : "No preliminary answer available";
 
+            const nextStepSummary = task3Output.final_decision_sufficient
+                ? "Exploration completed."
+                : (task3Output.next_step_summary || "Exploration completed.");
+
             /* webview.postMessage({
                 command: 'updatePreliminaryAnswer',
                 answer: answerText
@@ -582,9 +591,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 // Post the HTML to the current task content
                 //webview.postMessage({ command: 'updateCurrentTaskContent', html: currentTaskHtml, id: currentTaskUniqueId, num: i });
                 // Only enqueue updates for non-empty answer or task content
-                if (answerText || currentTaskHtml) {
+                if (answerText || nextStepSummary || currentTaskHtml) {
                     const locations = [{ fileUri: firstSubProblem.code_context.file_uri, lineNumber: firstSubProblem.code_context.line_number }];
-                    this.enqueueTaskResultUpdate(answerText || "", currentTaskHtml || "", locations);
+                    this.enqueueTaskResultUpdate(answerText || "", nextStepSummary || "", currentTaskHtml || "", locations);
                 }
             }
             // Increment the step counter

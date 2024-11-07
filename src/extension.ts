@@ -195,9 +195,10 @@ const task3JsonSchema = {
                 },
                 required: ["sub_question", "tool", "code_context", "num_results", "reason"]
             }
-        }
+        },
+        next_step_summary: { type: "string" }
     },
-    required: ["final_decision_sufficient", "answer", "sub_problems"]
+    required: ["final_decision_sufficient", "answer", "sub_problems", "next_step_summary"]
 };
 
 const task4JsonSchema = {
@@ -247,7 +248,7 @@ class Agent {
             model: "gpt-4o-mini",
             apiKey: API_KEY,
             maxTokens: 16384,
-            temperature: 0.5,
+            temperature: 1.0,
             topP: 1,
         });
         this._sidebarViewProvider = sidebarViewProvider;
@@ -892,11 +893,11 @@ class Agent {
                 taskInstructions = `
                     Task 3: Assess whether the refined question has been sufficiently answered based on the explored sub-questions and explored code lines.
                     
-                    - Always provide an **answer** in the "answer" field. If the question is sufficiently answered, this will be the final answer. If not, provide a short **preliminary answer** summarizing the progress made from the current exploration (one or two sentences).
+                    - Always provide an **answer** in the "answer" field. If the question is sufficiently answered, this will be the final answer. If not, provide a short **preliminary answer** summarizing the progress made from the current exploration (one or two sentences). Do not need to explain what needs to be explored next.
                     
-                    - If the question is sufficiently answered, set "final_decision_sufficient" to true and provide an insightful, beginner-friendly explanation in the "answer" field that helps the user understand how the question was addressed.
+                    - If the question is sufficiently answered, set "final_decision_sufficient" to true and provide an insightful, beginner-friendly explanation in the "answer" field that helps the user understand how the question was addressed. Leave "next_step_summary" empty.
                     
-                    - If the question is not sufficiently answered, set "final_decision_sufficient" to false and include the **preliminary answer** in the "answer" field. Then, propose additional sub-questions that can further explore the question.
+                    - If the question is not sufficiently answered, set "final_decision_sufficient" to false and include the **preliminary answer** in the "answer" field. Then, propose additional sub-questions that can further explore the question. In "next_step_summary", provide a brief summary of the next steps to take in the exploration process.
             
                     When proposing sub-questions:
                     - Search through the exploredCodeLines first to check if any of the existing invoke_variables have already been explored.
@@ -916,6 +917,7 @@ class Agent {
                     - "answer" should always contain either the final answer (if sufficiently answered) or a **preliminary answer** (if more exploration is needed).
                     - "sub_problems" should contain any sub-questions and code contexts for further exploration if the question was not sufficiently answered.
                     - If there are any new sub-problems, the corresponding "code_context" should never be left empty and must contain all fields.
+                    - If the exploration is insufficient, summarize what to explore next in "next_step_summary" based on "sub_problems".
                 `;
                 break;
             case 4:
