@@ -14,7 +14,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
     private _stepCounter: number = 1;
     private _initialFileUri: string = '';
     private _initialLineNumber: number = 0;
-    private _displayQueue: Array<{ answer: string, nextStepSummary: string, taskContentHtml: string, locations: Array<{ fileUri?: string, lineNumber?: number }> }> = [];
+    private _displayQueue: Array<{ answer: string, nextStepSummary: string, findingsHtml: string, taskContentHtml: string, locations: Array<{ fileUri?: string, lineNumber?: number }> }> = [];
     private _isDisplaying: boolean = false;
     private _stayingTime: number = 10; // seconds
     private _watchMode: boolean = false;
@@ -59,8 +59,8 @@ export class SidebarView implements vscode.WebviewViewProvider {
     }
 
     // Enqueue new content
-    public enqueueTaskResultUpdate(answer: string, nextStepSummary: string, taskContentHtml: string, locations: Array<{ fileUri?: string, lineNumber?: number }> = []) {
-        this._displayQueue.push({ answer, nextStepSummary, taskContentHtml, locations });
+    public enqueueTaskResultUpdate(answer: string, nextStepSummary: string, findingsHtml: string, taskContentHtml: string, locations: Array<{ fileUri?: string, lineNumber?: number }> = []) {
+        this._displayQueue.push({ answer, nextStepSummary, findingsHtml, taskContentHtml, locations });
         this.processQueue(); // Start processing the queue if not already in progress
     }
 
@@ -73,7 +73,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
         this._isDisplaying = true;
 
         // Dequeue and display the next item
-        const { answer, nextStepSummary, taskContentHtml, locations } = this._displayQueue.shift()!;
+        const { answer, nextStepSummary, findingsHtml, taskContentHtml, locations } = this._displayQueue.shift()!;
 
         // Send message to update preliminary answer and current task content
         this._view?.webview.postMessage({
@@ -89,6 +89,11 @@ export class SidebarView implements vscode.WebviewViewProvider {
         this._view?.webview.postMessage({
             command: 'updateCurrentTaskContent',
             html: taskContentHtml
+        });
+
+        this._view?.webview.postMessage({
+            command: 'appendFindings',
+            html: findingsHtml
         });
 
         // Check if watch mode is active and extract the file URI and line number
@@ -187,10 +192,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
                         Status: <span id="agent-status-text">Idle</span>
                     </p>
                     <p id="preliminary-answer"><span id="preliminary-answer-text"></span></p>
-                    <p id="still-to-be-found">Still to be found: <span id="exploration-summary"></span></p>
                     <p>Findings:</p>
-                    <div id="findings">
-                    </div>
+                    <div id="findings"></div>
+                    <p id="still-to-be-found">Still to be found: <span id="exploration-summary"></span></p>
                     <div id="button-container">
                         <label for="watch-mode-toggle" class="switch-label">Watch Mode</label>
                         <label class="switch">
@@ -223,7 +227,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                                 </a>:
                             </p>
                             <div class="code-box">
-                                <pre class="line-numbers"><code class="language-ts">${stripSingleLineIndentation(this._selectedCode)}</code></pre>
+                                <pre class="line-numbers language-ts"><code class="language-ts">${stripSingleLineIndentation(this._selectedCode)}</code></pre>
                             </div>
                         </div>
                 </div> <!-- This div will hold all exploration steps --> 
@@ -272,7 +276,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                             </a></strong>:
                         </p>
                         <div class="code-box">
-                            <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(contextText))}</code></pre>
+                            <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(contextText))}</code></pre>
                         </div>
                         <p class="code-info"><strong>Purpose:</strong> ${firstSubProblem.reason}</p>
                     </div>
@@ -304,7 +308,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                                     </a></strong>:
                                 </p>
                                 <div class="code-box">
-                                    <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(otherContextText))}</code></pre>
+                                    <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(otherContextText))}</code></pre>
                                 </div>
                                 <p class="code-info"><strong>Purpose:</strong> ${subProblem.reason}</p>
                             </div>
@@ -334,7 +338,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                                 </a></strong>:
                             </p>
                             <div class="code-box">
-                                <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(codeContext.full_statement))}</code></pre>
+                                <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(codeContext.full_statement))}</code></pre>
                             </div>
                         </div>
                     `;
@@ -404,7 +408,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                         <div id="${uniqueId}-sub-question-${i}" class="task-details" style="display: none">
                             <p class="before-hide"><strong>Sub-question:</strong> ${result.sub_question}</p>
                             <div class="code-box">
-                                <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(codeLine))}</code></pre>
+                                <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(codeLine))}</code></pre>
                             </div>
                             <p class="code-info">Found <strong>${result.filtered_results.length}</strong> results:</p>
                             <div class="filtered-results">
@@ -424,7 +428,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                                 </a></strong>:
                             </p>
                             <div class="code-box">
-                                <pre class="line-numbers" data-line="${filteredResult.line_number}"><code class="language-ts">${this.escapeHtml(alignedCode)}</code></pre>
+                                <pre class="line-numbers language-ts" data-line="${filteredResult.line_number}"><code class="language-ts">${this.escapeHtml(alignedCode)}</code></pre>
                             </div>
                         </div>
                         `;
@@ -452,7 +456,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
     }
 
     // Function to add Task 3 results (final decision and explanation) with surrounding code
-    public async addTask3Results(task3Output: any) {
+    public async addTask3Results(task3Output: any, important_code_snippets: Map<string, { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }>) {
         if (this._view) {
             const webview = this._view.webview;
             const explorationUniqueId = `exploration-task3-results-${this._stepCounter}`; // Unique ID for exploration steps
@@ -470,10 +474,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 ? "Exploration completed."
                 : (task3Output.next_step_summary || "Exploration completed.");
 
-            /* webview.postMessage({
-                command: 'updatePreliminaryAnswer',
-                answer: answerText
-            }); */
+            const findingsHtml = await this.addTask4Results({ importantCodeSnippets: important_code_snippets });
 
             // Generate HTML for exploration steps
             let explorationStepsHtml = `
@@ -512,7 +513,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                                     </a></strong>:
                                 </p>
                                 <div class="code-box">
-                                    <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(contextText))}</code></pre>
+                                    <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(contextText))}</code></pre>
                                 </div>
                             </div>
                         </div>
@@ -546,7 +547,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                             </a></strong>:
                         </p>
                         <div class="code-box">
-                            <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(contextText))}</code></pre>
+                            <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(contextText))}</code></pre>
                         </div>
                         <p class="code-info"><strong>Why to explore:</strong> ${firstSubProblem.reason}</p>
                     </div>
@@ -578,7 +579,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                                     </a></strong>:
                                 </p>
                                 <div class="code-box">
-                                    <pre class="line-numbers"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(otherCodeContext.full_statement))}</code></pre>
+                                    <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(otherCodeContext.full_statement))}</code></pre>
                                 </div>
                                 <p class="code-info"><strong>Why to explore:</strong> ${subProblem.reason}</p>
                             </div>
@@ -593,7 +594,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 // Only enqueue updates for non-empty answer or task content
                 if (answerText || nextStepSummary || currentTaskHtml) {
                     const locations = [{ fileUri: firstSubProblem.code_context.file_uri, lineNumber: firstSubProblem.code_context.line_number }];
-                    this.enqueueTaskResultUpdate(answerText || "", nextStepSummary || "", currentTaskHtml || "", locations);
+                    this.enqueueTaskResultUpdate(answerText || "", nextStepSummary || "", findingsHtml || "", currentTaskHtml || "", locations);
                 }
             }
             // Increment the step counter
@@ -601,57 +602,59 @@ export class SidebarView implements vscode.WebviewViewProvider {
         }
     }
 
-    public async addTask4Results(task4Output: any) {
-        if (this._view) {
-            const webview = this._view.webview;
-            const findingsDivId = "findings";
-            const visibleLimit = 3; // Show this many results initially
+    public async addTask4Results({ importantCodeSnippets }: { importantCodeSnippets: Map<string, any> }) {
+        const visibleLimit = 3; // Show this many results initially
 
-            // Filter for only score=3 results in the current batch
-            const score3Results = task4Output.ranked_results.filter((result: any) => result.relevance_score === 3);
-            const initialVisibleResults = score3Results.slice(0, visibleLimit);
-            const additionalResults = score3Results.slice(visibleLimit);
+        // Filter all relevant (score=3) results from importantCodeSnippets
+        const score3Results = [...importantCodeSnippets.entries()]
+            .filter(([_, result]) => result.relevance_score === 3)
+            .map(([index, result]) => ({ index, ...result }));
 
-            // HTML content for visible code boxes
-            let findingsHtml = ``;
+        const initialVisibleResults = score3Results.slice(0, visibleLimit);
+        const additionalResults = score3Results.slice(visibleLimit);
 
-            // Display initial visible results directly
-            initialVisibleResults.forEach((result: any) => {
-                const escapedCodeLine = this.escapeHtml(stripSingleLineIndentation(result.code_line));
+        // HTML content for visible code boxes with index
+        let findingsHtml = ``;
 
+        // Display initial visible results directly with indices
+        initialVisibleResults.forEach((result) => {
+            const escapedCodeLine = this.escapeHtml(stripSingleLineIndentation(result.code_line));
+            findingsHtml += `
+                <div class="code-box">
+                    <span class="code-index">${result.index}:</span>
+                    <pre class="line-numbers language-ts"><code class="language-ts">${escapedCodeLine}</code></pre>
+                </div>
+            `;
+        });
+
+        // Prepare "show more" button and hidden additional results if there are more than visibleLimit
+        const remainingCount = additionalResults.length;
+        if (remainingCount > 0) {
+            findingsHtml += `
+                <p class="show-more-results" id="findings-show-more" onclick="toggleAdditionalInvocations('findings-show-more')">
+                    ... also showing <strong>${remainingCount}</strong> other relevant snippets ...
+                </p>
+                <div id="findings-additional-results" style="display: none;">
+            `;
+
+            // Add hidden additional results with indices
+            additionalResults.forEach((result) => {
+                const escapedCodeLine = this.escapeHtml(result.code_line);
                 findingsHtml += `
                     <div class="code-box">
-                        <pre class="line-numbers"><code class="language-ts">${escapedCodeLine}</code></pre>
+                        <span class="code-index">${result.index}:</span>
+                        <pre class="line-numbers language-ts"><code class="language-ts">${escapedCodeLine}</code></pre>
                     </div>
                 `;
             });
-
-            // Prepare "show more" button and hidden additional results if there are more than visibleLimit
-            const remainingCount = additionalResults.length;
-            if (remainingCount > 0) {
-                findingsHtml += `
-                    <p class="show-more-results" id="${findingsDivId}-show-more" onclick="toggleAdditionalInvocations('${findingsDivId}-show-more')">
-                        ... also showing <strong>${remainingCount}</strong> other relevant snippets ...
-                    </p>
-                    <div id="${findingsDivId}-additional-results" style="display: none;">
-                `;
-
-                // Add hidden additional results
-                additionalResults.forEach((result: any) => {
-                    const escapedCodeLine = this.escapeHtml(result.code_line);
-
-                    findingsHtml += `
-                        <div class="code-box">
-                            <pre class="line-numbers"><code class="language-ts">${escapedCodeLine}</code></pre>
-                        </div>
-                    `;
-                });
-                findingsHtml += `</div>`; // Close additional-results div
-            }
-
-            // Post the HTML to the webview to append it to the findings area
-            webview.postMessage({ command: 'appendFindings', html: findingsHtml });
+            findingsHtml += `</div>`; // Close additional-results div
         }
+
+        // Return HTML for findings
+        return findingsHtml;
+
+        // Post the HTML to the webview to append it to the findings area
+        // webview.postMessage({ command: 'appendFindings', html: findingsHtml });
     }
 
     // Helper function to extract the file name from the URI

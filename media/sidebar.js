@@ -21,7 +21,7 @@ window.addEventListener('message', event => {
             document.getElementById('exploration-summary').innerText = message.summary;
             break;
         case 'appendFindings':
-            document.getElementById('findings').insertAdjacentHTML('beforeend', message.html);
+            document.getElementById('findings').innerHTML = message.html;
             break;
         case 'renderGraph':
             renderGraph(message.data);

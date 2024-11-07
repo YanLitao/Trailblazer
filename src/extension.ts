@@ -214,7 +214,7 @@ const task4JsonSchema = {
                     line_number: { type: "integer" },
                     full_statement: { type: "string" },
                     explanation: { type: "string" },    // Explanation of why this result is helpful
-                    relevance_score: { type: "integer" } // Relevance score, e.g., 1-5 where 5 is most relevant
+                    relevance_score: { type: "integer" }
                 },
                 required: ["file_uri", "code_line", "line_number", "full_statement", "explanation", "relevance_score"]
             }
@@ -236,6 +236,7 @@ class Agent {
     private isPaused: boolean = false;     // Track if the agent is paused
     private isStopped: boolean = false;    // Track if the agent is stopped
     private _importantResults: Array<{ file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }> = [];
+    private _importantCodeSnippets = new Map<string, { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }>();
     private _lastTask4Promise = Promise.resolve(); // Initialize a placeholder Promise
 
     private _fileExtensionsToExclude = ['.test.ts', '.spec.tsx', '.test.js', '.spec.js'];
@@ -317,13 +318,12 @@ class Agent {
 
             this._stepCounter++;
 
-            // Ensure Task 4 from previous cycle completes before starting this cycle
-            if (this._lastTask4Promise) {
-                await this._lastTask4Promise;
-            }
-
             // Task 2: Explore sub-problems
-            await this.runTask2(refinedOutput.sub_problems);
+            const task2Results = await this.runTask2(refinedOutput.sub_problems);
+
+            // Run Task 4 after Task 2 and wait for it to complete before Task 3
+            this._lastTask4Promise = this.runTask4(task2Results);
+            await this._lastTask4Promise;
 
             // Task 3: Evaluate if the question is sufficiently answered
             const task3Output = await this.runTask3();
@@ -386,7 +386,7 @@ class Agent {
         this._refined_question = task1Output.refined_question;
 
         for (const subProblem of task1Output.sub_problems) {
-            if (uri && "file_uri" in subProblem.code_context) {
+            if (subProblem && "code_context" in subProblem && uri && "file_uri" in subProblem.code_context) {
                 subProblem.code_context.file_uri = uri.toString();
             } else {
                 console.log(subProblem);
@@ -570,11 +570,10 @@ class Agent {
             this._processAgentResults(JSON.parse(agentResults), task2Results);
         }
 
-        // Run task 4 to rank the exploration results
-        await this.runTask4(task2Results);
-
         // Update the sidebar with the final Task 2 results
         this._sidebarViewProvider.addTask2Results({ questions_and_results: task2Results });
+
+        return task2Results;
     }
 
     // Helper function to add document content to _exploredFiles if not already present
@@ -642,7 +641,7 @@ class Agent {
         );
 
         if (!existingCode) {
-            // Add the new code to _exploredCodeLines if it’s unique
+            // Add the new code to _exploredCodeLines if it's unique
             this._exploredCodeLines.push({
                 file_uri: fileUri,
                 start_line: lineNumber,
@@ -651,7 +650,7 @@ class Agent {
             });
 
         } else {
-            // If there’s an overlap, extend the existing node if necessary
+            // If there's an overlap, extend the existing node if necessary
             existingCode.start_line = Math.min(existingCode.start_line, lineNumber);
             existingCode.end_line = Math.max(existingCode.end_line, endLineOfStatement);
             existingCode.code_snippet = `${existingCode.code_snippet}\n${fullStatement}`.trim();
@@ -727,8 +726,11 @@ class Agent {
 
     async runTask3() {
         console.warn("Running Task 3");
-        // Create a clean exploration history without explanations for Task 3 input
+
+        console.log("Important Results: ", this._importantResults);
+
         const cleanExplorationHistory = {
+            importantFindings: this._importantCodeSnippets,
             exploredSubQuestions: this._exploredSubQuestions,
             exploredCodeLines: this._exploredCodeLines,
             exploredFiles: this._exploredFiles // Now includes only URI and file content
@@ -744,12 +746,10 @@ class Agent {
             exploration_history: cleanExplorationHistory
         };
 
-        //console.log("Task 3 Input:\n", JSON.stringify(inputJson));
-
         const response = await this._callAgentAPI(inputJson, 3, task3JsonSchema);
         const task3Output = JSON.parse(response);
 
-        this._sidebarViewProvider.addTask3Results(task3Output);
+        this._sidebarViewProvider.addTask3Results(task3Output, this._importantCodeSnippets);
         this.updateGraphVisualization();
 
         return task3Output;
@@ -799,7 +799,7 @@ class Agent {
     }
 
     async runTask4(task2Results: any[]): Promise<void> {
-        console.warn("Running Task 4 - Ranking Task");
+        console.warn("Running Task 4");
 
         // Prepare input with refined question and results from task2
         const filteredResults = task2Results.flatMap(result =>
@@ -847,7 +847,6 @@ class Agent {
             })
             .filter(Boolean); // Remove any null results
 
-        // Identify new results that are not already in _importantResults
         const newResults = highRelevanceResults.filter((result: { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }) =>
             !this._importantResults.some(r =>
                 r.file_uri === result!.file_uri &&
@@ -858,8 +857,13 @@ class Agent {
         // Append only new unique results to _importantResults
         this._importantResults.push(...newResults);
 
-        // Update the sidebar with only the new relevant results (score = 3)
-        this._sidebarViewProvider.addTask4Results({ ranked_results: newResults });
+        // Update _importantCodeSnippets with new unique results only if relevance_score == 3
+        newResults.forEach((result: { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }) => {
+            if (result.relevance_score === 3) {
+                const snippetIndex = this._importantCodeSnippets.size.toString(); // get next key as string
+                this._importantCodeSnippets.set(snippetIndex, result);
+            }
+        });
     }
 
     async _callAgentAPI(inputJson: any, taskNumber: number, selectedSchema: any): Promise<string> {
@@ -892,33 +896,40 @@ class Agent {
             case 3:
                 taskInstructions = `
                     Task 3: Assess whether the refined question has been sufficiently answered based on the explored sub-questions and explored code lines.
-                    
-                    - Always provide an **answer** in the "answer" field. If the question is sufficiently answered, this will be the final answer. If not, provide a short **preliminary answer** summarizing the progress made from the current exploration (one or two sentences). Do not need to explain what needs to be explored next.
-                    
-                    - If the question is sufficiently answered, set "final_decision_sufficient" to true and provide an insightful, beginner-friendly explanation in the "answer" field that helps the user understand how the question was addressed. Leave "next_step_summary" empty.
-                    
-                    - If the question is not sufficiently answered, set "final_decision_sufficient" to false and include the **preliminary answer** in the "answer" field. Then, propose additional sub-questions that can further explore the question. In "next_step_summary", provide a brief summary of the next steps to take in the exploration process.
-            
+
+                    - Always provide an **answer** in the "answer" field. If the question is sufficiently answered, this will be the final answer. If not, provide a short **preliminary answer** summarizing the progress made from the current exploration (one or two sentences). Avoid suggesting what needs to be explored next within the answer. Do **not** mention any gaps in the exploration, unaddressed areas, or what has yet to be explored in the "answer" field. Only summarize the information obtained so far.
+
+                    - If the question is sufficiently answered:
+                    - Set "final_decision_sufficient" to true.
+                    - Provide a clear, beginner-friendly explanation in the "answer" field that helps the user understand how the question was addressed. The content should be mainly based on importantFindings.
+                    - Use [Ref: key] to reference relevant code snippets from importantFindings, where "key" strictly matches the exact key key in importantFindings (e.g., "0", "1", ...). Include references wherever applicable, integrating them naturally into the answer.
+                    - Leave "next_step_summary" empty.
+
+                    - If the question is not sufficiently answered:
+                    - Set "final_decision_sufficient" to false.
+                    - Include the **preliminary answer** in the "answer" field, summarizing only what has been found without listing what hasn't been explored. The content should be mainly based on importantFindings.
+                    - Use [Ref: key] to reference relevant snippets from importantFindings wherever applicable,  where "key" strictly matches the exact key key in importantFindings (e.g., "0", "1", ...).
+                    - Propose additional sub-questions to continue the exploration, and provide a brief summary of the next steps in "next_step_summary".
+
                     When proposing sub-questions:
-                    - Search through the exploredCodeLines first to check if any of the existing invoke_variables have already been explored.
-                    - If an "invoke_variable" is found within exploredCodeLines, set the "from_results" field in code_context to true.
-                    - If no "invoke_variable" is found in exploredCodeLines, search the entire file content (exploredFiles) to identify relevant code areas for exploration. Set the "from_results" field to false in this case.
-                    - Ensure that each sub-question can be answered using a single VSCode tool on the invoke_variable.
-                    - Ensure that each sub-question is unique and similar questions have not been explored before (please refer to exploredSubQuestions).
-                    - Choose the tool to explore the sub-question from the following list by providing the corresponding integer value and add it in the output:
-                        -- 0: Go to Definition
-                        -- 1: Find References
-                    - For each sub-question, provide a clear and specific “reason” explaining the goal of exploring this sub-question. Describe exactly what we aim to uncover, such as particular methods, patterns, or code structures relevant to the exploration. Be as precise as possible in defining what we are looking for and why it is essential to the investigation.
-                    - Include the file_uri, invoke_variable, code_line, line_number, and full_statement in the code context output, and reason for each sub-question with a valid starting point. 
-                    - Ensure all these properties are filled in every case.
-            
-                    The output format must strictly follow the provided JSON schema:
-                    - "final_decision_sufficient" should be a boolean indicating whether the question was fully answered.
-                    - "answer" should always contain either the final answer (if sufficiently answered) or a **preliminary answer** (if more exploration is needed).
-                    - "sub_problems" should contain any sub-questions and code contexts for further exploration if the question was not sufficiently answered.
-                    - If there are any new sub-problems, the corresponding "code_context" should never be left empty and must contain all fields.
-                    - If the exploration is insufficient, summarize what to explore next in "next_step_summary" based on "sub_problems".
-                `;
+                    - First, check if any invoke_variable has already been explored in exploredCodeLines.
+                    - If an "invoke_variable" is found in exploredCodeLines, set "from_results" in code_context to true.
+                    - If not found, search through the file content in exploredFiles to identify relevant code areas, and set "from_results" to false in this case.
+                    - Ensure each sub-question can be answered with a single VSCode tool on the invoke_variable.
+                    - Ensure sub-questions are unique and avoid duplicating questions already in exploredSubQuestions.
+                    - Choose the tool for each sub-question from the following list:
+                        - 0: Go to Definition
+                        - 1: Find References
+                    - Provide a clear "reason" for each sub-question, describing the goal of exploration. Specify the target methods, patterns, or code structures to locate, emphasizing why this information is essential to answering the refined question.
+                    - Include complete code context details (file_uri, invoke_variable, code_line, line_number, full_statement, and from_results) for each sub-question.
+
+                    Output format must strictly follow the JSON schema:
+                    - "final_decision_sufficient" as a boolean indicating if the question is fully answered.
+                    - "answer" always contains either the final answer or a preliminary answer. Avoid suggesting what needs to be explored next within the answer. Use [Ref: key] to reference relevant snippets from importantFindings wherever applicable.
+                    - "sub_problems" includes any sub-questions with complete code contexts for further exploration if the question is not fully answered.
+                    - If there are new sub-questions, their "code_context" should contain all required fields.
+                    - If more exploration is needed, provide a summary of next steps in "next_step_summary" based on "sub_problems".
+                    `;
                 break;
             case 4:
                 taskInstructions = `
