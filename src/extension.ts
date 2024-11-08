@@ -169,8 +169,6 @@ const task2JsonSchema = {
 const task3JsonSchema = {
     type: "object",
     properties: {
-        final_decision_sufficient: { type: "boolean" },
-        answer: { type: "string" },
         sub_problems: {
             type: "array",
             items: {
@@ -185,20 +183,20 @@ const task3JsonSchema = {
                             invoke_variable: { type: "string" },
                             code_line: { type: "string" },
                             line_number: { type: "integer" },
-                            full_statement: { type: "string" },
-                            from_results: { type: "boolean" }
+                            full_statement: { type: "string" }
                         },
-                        required: ["file_uri", "invoke_variable", "code_line", "line_number", "full_statement", "from_results"]
+                        required: []
                     },
+                    from_results: { type: "boolean" },
                     num_results: { type: "integer" },
                     reason: { type: "string" }
                 },
-                required: ["sub_question", "tool", "code_context", "num_results", "reason"]
+                required: ["sub_question", "tool", "from_results", "num_results", "reason"]
             }
         },
         next_step_summary: { type: "string" }
     },
-    required: ["final_decision_sufficient", "answer", "sub_problems", "next_step_summary"]
+    required: ["sub_problems", "next_step_summary"]
 };
 
 const task4JsonSchema = {
@@ -221,6 +219,65 @@ const task4JsonSchema = {
         }
     },
     required: ["ranked_results"]
+};
+
+const task5JsonSchema = {
+    type: "object",
+    properties: {
+        answer_sections: {
+            type: "array",
+            items: {
+                type: "object",
+                properties: {
+                    statement: { type: "string" },
+                    references: {
+                        type: "array",
+                        items: { type: "string" } // Keys from importantResults, e.g., ["0", "1"]
+                    }
+                },
+                required: ["statement", "references"]
+            }
+        },
+        next_exploration_steps: {
+            type: "array",
+            items: {
+                type: "string" // Descriptions of what still needs exploration
+            }
+        },
+        final_decision_sufficient: { type: "boolean" }
+    },
+    required: ["answer_sections", "next_exploration_steps", "final_decision_sufficient"]
+};
+
+const task6JsonSchema = {
+    type: "object",
+    properties: {
+        sub_problems: {
+            type: "array",
+            items: {
+                type: "object",
+                properties: {
+                    sub_question: { type: "string" },
+                    tool: { type: "integer" },
+                    code_context: {
+                        type: "object",
+                        properties: {
+                            file_uri: { type: "string" },
+                            invoke_variable: { type: "string" },
+                            code_line: { type: "string" },
+                            line_number: { type: "integer" },
+                            full_statement: { type: "string" }
+                        },
+                        required: ["file_uri", "invoke_variable", "code_line", "line_number", "full_statement"]
+                    },
+                    from_results: { type: "boolean" },
+                    reason: { type: "string" }
+                },
+                required: ["sub_question", "tool", "code_context", "from_results", "reason"]
+            }
+        }
+    },
+    required: ["sub_problems"]
 };
 
 class Agent {
@@ -321,16 +378,22 @@ class Agent {
             // Task 2: Explore sub-problems
             const task2Results = await this.runTask2(refinedOutput.sub_problems);
 
-            // Run Task 4 after Task 2 and wait for it to complete before Task 3
+            // Task 4: Decide the importance of results
             this._lastTask4Promise = this.runTask4(task2Results);
             await this._lastTask4Promise;
 
-            // Task 3: Evaluate if the question is sufficiently answered
-            const task3Output = await this.runTask3();
-            sufficient = task3Output.final_decision_sufficient;
+            // Task 5: Evaluate if the question is sufficiently answered and propose next steps
+            const task5Results = await this.runTask5();
+
+            // Task 3: Find code context for propose next steps
+            // And Task 6: Find code context for unresolved sub-problems
+            const task3Output = await this.runTask3(task5Results);
+            sufficient = task5Results.final_decision_sufficient;
             refinedOutput = task3Output;
 
-            if (sufficient || task3Output.sub_problems.length === 0) {
+            this._updateStepResults(refinedOutput, task5Results)
+
+            if (sufficient || refinedOutput.sub_problems.length === 0) {
                 break;
             }
         }
@@ -612,7 +675,7 @@ class Agent {
     private _processAgentResults(agentResults: any, task2Results: any[]) {
         if (Array.isArray(agentResults.questions_and_results)) {
             for (const subProblem of agentResults.questions_and_results) {
-                if ("results" in subProblem) {
+                if (subProblem && "results" in subProblem) {
                     subProblem.filtered_results = subProblem.results;
                     delete subProblem.results;
                 }
@@ -724,35 +787,67 @@ class Agent {
         return results;
     }
 
-    async runTask3() {
+    async runTask3(task5Results: any) {
         console.warn("Running Task 3");
 
-        console.log("Important Results: ", this._importantResults);
-
         const cleanExplorationHistory = {
-            importantFindings: this._importantCodeSnippets,
             exploredSubQuestions: this._exploredSubQuestions,
-            exploredCodeLines: this._exploredCodeLines,
-            exploredFiles: this._exploredFiles // Now includes only URI and file content
+            exploredCodeLines: this._exploredCodeLines
         };
-
-        // log exploredCodeLines in json format
-        //console.log(`Explored Code Lines: ${JSON.stringify(this._exploredCodeLines, null, 2)})`);
-        //console.log("Explored Files: ", this._exploredFiles.map(file => file.file_uri));
 
         const inputJson = {
             task: 3,
             refined_question: this._refined_question ?? "",
-            exploration_history: cleanExplorationHistory
+            exploration_history: cleanExplorationHistory,
+            next_exploration_steps: task5Results?.next_exploration_steps ?? []
         };
 
         const response = await this._callAgentAPI(inputJson, 3, task3JsonSchema);
         const task3Output = JSON.parse(response);
 
-        this._sidebarViewProvider.addTask3Results(task3Output, this._importantCodeSnippets);
-        this.updateGraphVisualization();
+        const unresolvedSubProblems: any[] = [];
 
-        return task3Output;
+        // Process sub-problems to either set code context or add to unresolved list
+        task3Output.sub_problems.forEach((subProblem: any) => {
+            const matchingCodeLine = this._exploredCodeLines.find(
+                line => line.code_snippet.includes(subProblem.invoke_variable)
+            );
+
+            if (matchingCodeLine) {
+                subProblem.code_context = {
+                    file_uri: matchingCodeLine.file_uri,
+                    invoke_variable: subProblem.invoke_variable,
+                    code_line: matchingCodeLine.code_snippet,
+                    line_number: matchingCodeLine.start_line,
+                    full_statement: matchingCodeLine.code_snippet
+                };
+                subProblem.from_results = true;
+            } else {
+                subProblem.code_context = {}; // Empty context for unresolved
+                subProblem.from_results = false;
+                unresolvedSubProblems.push(subProblem);
+            }
+        });
+
+        // Run Task 6 if there are unresolved sub-problems
+        if (unresolvedSubProblems.length > 0) {
+            const task6Results = await this.runTask6(unresolvedSubProblems);
+
+            // Update task3Output with findings from Task 6
+            task3Output.sub_problems.forEach((subProblem: any) => {
+                const resolvedSubProblem = task6Results.find(
+                    (res: any) => res.sub_question === subProblem.sub_question
+                );
+                if (resolvedSubProblem) {
+                    subProblem.code_context = resolvedSubProblem.code_context;
+                    subProblem.from_results = resolvedSubProblem.from_results;
+                }
+            });
+        }
+
+        const processedResponse = await this.postProcessResults(task3Output);
+
+        return processedResponse;
     }
 
     private async fuzzyMatchCode(fileUri: string, lineNumber: number, invokeVariable: string): Promise<{ fileUri: string; lineNumber: number; fullStatement: string } | null> {
@@ -798,6 +893,54 @@ class Agent {
         };
     }
 
+    private async postProcessResults(response: any) {
+
+        response.sub_problems = await Promise.all(
+            response.sub_problems.map(async (subProblem: any) => {
+                const { file_uri, invoke_variable, line_number } = subProblem.code_context;
+
+                // Use fuzzyMatchCode to get the most accurate file URI, line number, and full statement
+                const matchedCode = await this.fuzzyMatchCode(file_uri, line_number, invoke_variable);
+
+                // If no match is found, skip this sub-problem
+                if (!matchedCode) {
+                    console.warn(`No matched code found for file: "${file_uri}" with variable: "${invoke_variable}".`);
+                    return null;
+                }
+
+                // Step 4: Update the exploration graph with the new node as an invoking place
+                const nodeId = `${matchedCode.fileUri}:${matchedCode.lineNumber}`;
+                const fromResults = this._exploredCodeLines.some(code => code.file_uri === matchedCode.fileUri && code.start_line <= matchedCode.lineNumber && code.end_line >= matchedCode.lineNumber);
+
+                // Create a new node or update an existing one in the graph
+                const newNode: Node = {
+                    id: nodeId,
+                    fileUri: matchedCode.fileUri,
+                    startLine: matchedCode.lineNumber,
+                    endLine: matchedCode.lineNumber + matchedCode.fullStatement.split('\n').length - 1,
+                    variables: new Set([invoke_variable]),
+                    codeSnippet: matchedCode.fullStatement,
+                    isPlace: true,
+                    edges: new Set()
+                };
+                this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, subProblem.tool, true);
+
+                // Update `code_context` with matched details
+                subProblem.code_context.file_uri = matchedCode.fileUri;
+                subProblem.code_context.line_number = matchedCode.lineNumber;
+                subProblem.code_context.full_statement = matchedCode.fullStatement;
+                subProblem.code_context.from_results = fromResults;
+
+                return subProblem;
+            })
+        );
+
+        // Filter out any null sub-problems that couldn't be matched
+        response.sub_problems = response.sub_problems.filter((subProblem: any) => subProblem !== null);
+
+        return response;
+    }
+
     async runTask4(task2Results: any[]): Promise<void> {
         console.warn("Running Task 4");
 
@@ -824,7 +967,7 @@ class Agent {
 
         // Filter for only relevance score 3 results and remove duplicates before adding
         const highRelevanceResults = task4Output.ranked_results
-            .filter((result: { relevance_score: number }) => result.relevance_score === 3)
+            .filter((result: { relevance_score: number }) => result.relevance_score > 0)
             .map((result: { relevance_score: number, code_line: string, line_number: number, explanation: string, file_uri: string }) => {
                 const verifiedCode = this._exploredCodeLines.find(
                     code =>
@@ -866,6 +1009,90 @@ class Agent {
         });
     }
 
+    async runTask5() {
+        console.warn("Running Task 5");
+
+        // If _importantCodeSnippets is empty, temporarily add lower-scoring snippets from _importantResults
+        let importantResultsForTask5 = new Map(this._importantCodeSnippets);
+
+        if (importantResultsForTask5.size === 0) {
+            // Filter results by relevance score in descending order
+            const fallbackScores = [2, 1, 0];
+            for (const score of fallbackScores) {
+                const additionalResults = this._importantResults
+                    .filter(result => result.relevance_score === score)
+                    .slice(0, 5); // Add a limit to the number of less important snippets if desired
+
+                additionalResults.forEach((result, index) => {
+                    const snippetKey = `${score}-${index}`; // Use score and index as unique key
+                    importantResultsForTask5.set(snippetKey, result);
+                });
+
+                // Break loop if we have added some snippets
+                if (importantResultsForTask5.size > 0) break;
+            }
+        }
+
+        console.log(`Important Results for Task 5: ${JSON.stringify(Array.from(importantResultsForTask5.values()))}`);
+
+        const inputJson = {
+            task: 5,
+            refined_question: this._refined_question ?? "",
+            important_results: Object.fromEntries(importantResultsForTask5)
+        };
+
+        const response = await this._callAgentAPI(inputJson, 5, task5JsonSchema);
+        const task5Output = JSON.parse(response);
+
+        return task5Output;
+    }
+
+    async runTask6(unresolvedSubProblems: any[]) {
+        console.warn("Running Task 6");
+
+        const inputJson = {
+            task: 6,
+            explored_files: this._exploredFiles,
+            unresolved_sub_problems: unresolvedSubProblems
+        };
+
+        const response = await this._callAgentAPI(inputJson, 6, task6JsonSchema);
+        const task6Output = JSON.parse(response);
+
+        // Double-check each sub-problem's code_context to ensure it's not in exploredCodeLines and is complete
+        const verifiedResults = task6Output.sub_problems.filter((subProblem: any) => {
+            const { code_context } = subProblem;
+            const isContextComplete = code_context.file_uri && code_context.code_line && code_context.line_number !== undefined;
+            const isNotInExplored = !this._exploredCodeLines.some(
+                (line) => line.file_uri === code_context.file_uri && line.start_line <= code_context.lineNumber && line.end_line >= code_context.lineNumber
+            );
+            return isContextComplete && isNotInExplored;
+        });
+
+        return verifiedResults;
+    }
+
+    _updateStepResults(refinedOutput: any, task5Results: any) {
+        // Generate the formatted answer string with grouped references
+        const constructAnswerString = (answerSections: { statement: string, references: string[] }[]): string => {
+            return answerSections.map(section => {
+                const formattedReferences = `[${section.references.join(', ')}]`;
+                return `${section.statement} ${formattedReferences}`;
+            }).join(' ');
+        };
+
+        // Extract the answer_sections and format into a single answer string
+        const answerString = constructAnswerString(task5Results.answer_sections);
+
+        // Add 'final_decision_sufficient' and 'answer' back into refinedOutput
+        refinedOutput.final_decision_sufficient = task5Results.final_decision_sufficient;
+        refinedOutput.answer = answerString;
+
+        // Update sidebar and graph visualization
+        this._sidebarViewProvider.addTask3Results(refinedOutput, this._importantCodeSnippets);
+        this.updateGraphVisualization();
+    }
+
     async _callAgentAPI(inputJson: any, taskNumber: number, selectedSchema: any): Promise<string> {
         let taskInstructions = "";
 
@@ -895,41 +1122,27 @@ class Agent {
                 break;
             case 3:
                 taskInstructions = `
-                    Task 3: Assess whether the refined question has been sufficiently answered based on the explored sub-questions and explored code lines.
+                    Task 3: Based on the refined question and exploration history, propose additional sub-questions if further exploration is needed.
+                    
+                    Sub-Questions:
+                    - Generate sub-questions to continue the exploration of the refined question.
+                    - Ensure each sub-question can be answered with a single VSCode tool, either by exploring a code variable or structure relevant to the refined question.
+                    - Avoid duplicating sub-questions from exploredSubQuestions.
 
-                    - Always provide an **answer** in the "answer" field. If the question is sufficiently answered, this will be the final answer. If not, provide a short **preliminary answer** summarizing the progress made from the current exploration (one or two sentences). Avoid suggesting what needs to be explored next within the answer. Do **not** mention any gaps in the exploration, unaddressed areas, or what has yet to be explored in the "answer" field. Only summarize the information obtained so far.
-
-                    - If the question is sufficiently answered:
-                    - Set "final_decision_sufficient" to true.
-                    - Provide a clear, beginner-friendly explanation in the "answer" field that helps the user understand how the question was addressed. The content should be mainly based on importantFindings.
-                    - Use [Ref: key] to reference relevant code snippets from importantFindings, where "key" strictly matches the exact key key in importantFindings (e.g., "0", "1", ...). Include references wherever applicable, integrating them naturally into the answer.
-                    - Leave "next_step_summary" empty.
-
-                    - If the question is not sufficiently answered:
-                    - Set "final_decision_sufficient" to false.
-                    - Include the **preliminary answer** in the "answer" field, summarizing only what has been found without listing what hasn't been explored. The content should be mainly based on importantFindings.
-                    - Use [Ref: key] to reference relevant snippets from importantFindings wherever applicable,  where "key" strictly matches the exact key key in importantFindings (e.g., "0", "1", ...).
-                    - Propose additional sub-questions to continue the exploration, and provide a brief summary of the next steps in "next_step_summary".
-
-                    When proposing sub-questions:
-                    - First, check if any invoke_variable has already been explored in exploredCodeLines.
-                    - If an "invoke_variable" is found in exploredCodeLines, set "from_results" in code_context to true.
-                    - If not found, search through the file content in exploredFiles to identify relevant code areas, and set "from_results" to false in this case.
-                    - Ensure each sub-question can be answered with a single VSCode tool on the invoke_variable.
-                    - Ensure sub-questions are unique and avoid duplicating questions already in exploredSubQuestions.
-                    - Choose the tool for each sub-question from the following list:
+                    For each sub-question:
+                    - First, search exploredCodeLines to identify an invoke_variable that has been previously explored:
+                        - If a relevant invoking location is found, complete the code_context fields (file_uri, invoke_variable, code_line, line_number, full_statement) for the sub-question and set "from_results" to true.
+                        - If no invoking place is found, leave code_context empty and set "from_results" to false.
+                    - Specify a "reason" for each sub-question, clarifying the goal of exploration, and identify specific methods, patterns, or code structures needed to answer the refined question.
+                    - Set the appropriate tool for each sub-question from the following options:
                         - 0: Go to Definition
                         - 1: Find References
-                    - Provide a clear "reason" for each sub-question, describing the goal of exploration. Specify the target methods, patterns, or code structures to locate, emphasizing why this information is essential to answering the refined question.
-                    - Include complete code context details (file_uri, invoke_variable, code_line, line_number, full_statement, and from_results) for each sub-question.
 
-                    Output format must strictly follow the JSON schema:
-                    - "final_decision_sufficient" as a boolean indicating if the question is fully answered.
-                    - "answer" always contains either the final answer or a preliminary answer. Avoid suggesting what needs to be explored next within the answer. Use [Ref: key] to reference relevant snippets from importantFindings wherever applicable.
-                    - "sub_problems" includes any sub-questions with complete code contexts for further exploration if the question is not fully answered.
-                    - If there are new sub-questions, their "code_context" should contain all required fields.
-                    - If more exploration is needed, provide a summary of next steps in "next_step_summary" based on "sub_problems".
-                    `;
+                    Output format:
+                    - "sub_problems" should list sub-questions with their associated tools, contexts, and reasons.
+                    - Each sub-question in "sub_problems" must have a "from_results" field set to true if code_context is completed or false if it is left empty.
+                    - Provide a brief summary in "next_step_summary" based on "sub_problems" for suggested next steps.
+                `;
                 break;
             case 4:
                 taskInstructions = `
@@ -940,8 +1153,6 @@ class Agent {
                         - 1: Slightly relevant - The result has minor relevance but is unlikely to significantly help in answering the question.
                         - 2: Moderately relevant - The result provides some useful context or partial insight related to the question.
                         - 3: Highly relevant - The result is essential or very informative for answering the question.
-
-                    The output should include only results with scores of 1 or higher, ranked by "relevance_score" (highest to lowest).
                     
                     For each result, provide an "explanation" of why it is helpful or how it contributes to understanding the question.
                     
@@ -950,8 +1161,69 @@ class Agent {
                 break;
             case 5:
                 taskInstructions = `
-                    Task 5: Modify previous outputs based on user feedback.
-                    Incorporate user feedback into the previous output, and ensure that the modified output still follows the original task's schema.
+                    Task 5: Generate a preliminary answer based on the user's refined question and important exploration results.
+
+                    Input:
+                    - The refined user question.
+                    - A collection of relevant code snippets from important_results with a relevance score of 3. Each entry includes the snippet, file URI, line number, code context, and explanation, indexed by unique keys (e.g., "0", "1").
+
+                    Instructions:
+                    1. Answer Structure:
+                        - Provide a segmented answer under "answer_sections," with each statement summarizing a specific finding.
+                        - Each statement should refer to at least one code snippet in important_results using its key (e.g., "0", "1"). Use these references in the "references" array to ensure traceability to specific results.
+                        - Avoid mentioning unexamined areas in "answer_sections." The answer should only summarize the insights gained from the explored results.
+                    
+                    2. Reference Format:
+                        - Each statement in "answer_sections" should be paired with its "references" array, listing all related snippet keys (e.g., ["0", "2"]).
+                        
+                    3. Next Exploration Steps:
+                        - Summarize the areas requiring further exploration in "next_exploration_steps" as a list of open-ended questions or tasks.
+                        - Clearly state any specific details or components that remain unexplored or partially addressed.
+
+                    4. Decision on Sufficiency:
+                        - Based on the "answer_sections" and "next_exploration_steps," set "final_decision_sufficient" to true if the answer sufficiently addresses the refined question. Otherwise, set it to false.
+
+                    Output Format:
+                    {
+                        "answer_sections": [
+                            {
+                                "statement": "Summary of a specific insight...",
+                                "references": ["0", "1"]
+                            },
+                            ...
+                        ],
+                        "next_exploration_steps": [
+                            "Description of an area that still needs exploration...",
+                            ...
+                        ],
+                        "final_decision_sufficient": true or false
+                    }
+                    `;
+                break;
+            case 6:
+                taskInstructions = `
+                    Task 6: Identify relevant invoking locations for unresolved sub-questions from previously explored files.
+
+                    Input:
+                    - A list of unresolved sub-questions with empty code contexts (code_context: empty, from_results: false).
+                    - A collection of explored files, each containing the file URI and file content.
+
+                    Goal:
+                    - For each unresolved sub-question, locate a relevant code context (e.g., a line or function) within the explored files that aligns with the sub-question.
+                    
+                    Instructions:
+                    - Search through the content of exploredFiles to locate an invoking place that may help answer each unresolved sub-question.
+                    - Complete the "code_context" with:
+                        - "file_uri": URI of the file containing the context.
+                        - "invoke_variable": The relevant variable or function.
+                        - "code_line": The exact line containing the "invoke_variable".
+                        - "line_number": The line number of "code_line".
+                        - "full_statement": The complete statement where the invoke_variable is located.
+                    - You must find a relevant code context for each sub-question, and maintain "from_results" as false.
+
+                    Requirements:
+                    - Ensure each code context is accurate and complete if found within the explored files.
+                    - Preserve "from_results" as false for all sub-questions in the output, even if a code context is identified.
                 `;
                 break;
             default:
@@ -998,62 +1270,7 @@ class Agent {
         // log the response in json format
         console.log(`Task ${taskNumber} Response: ${JSON.stringify(JSON.parse(response), null, 2)}`);
 
-        let processedResponse;
-        if (taskNumber === 3) {
-            processedResponse = await this.postProcessResults(response);
-        } else {
-            processedResponse = response;
-        }
-        return processedResponse;
-    }
-
-    private async postProcessResults(response: string) {
-        const task3Output = JSON.parse(response);
-
-        task3Output.sub_problems = await Promise.all(
-            task3Output.sub_problems.map(async (subProblem: any) => {
-                const { file_uri, invoke_variable, line_number } = subProblem.code_context;
-
-                // Use fuzzyMatchCode to get the most accurate file URI, line number, and full statement
-                const matchedCode = await this.fuzzyMatchCode(file_uri, line_number, invoke_variable);
-
-                // If no match is found, skip this sub-problem
-                if (!matchedCode) {
-                    console.warn(`No matched code found for file: "${file_uri}" with variable: "${invoke_variable}".`);
-                    return null;
-                }
-
-                // Step 4: Update the exploration graph with the new node as an invoking place
-                const nodeId = `${matchedCode.fileUri}:${matchedCode.lineNumber}`;
-                const fromResults = this._exploredCodeLines.some(code => code.file_uri === matchedCode.fileUri && code.start_line <= matchedCode.lineNumber && code.end_line >= matchedCode.lineNumber);
-
-                // Create a new node or update an existing one in the graph
-                const newNode: Node = {
-                    id: nodeId,
-                    fileUri: matchedCode.fileUri,
-                    startLine: matchedCode.lineNumber,
-                    endLine: matchedCode.lineNumber + matchedCode.fullStatement.split('\n').length - 1,
-                    variables: new Set([invoke_variable]),
-                    codeSnippet: matchedCode.fullStatement,
-                    isPlace: true,
-                    edges: new Set()
-                };
-                this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, subProblem.tool, true);
-
-                // Update `code_context` with matched details
-                subProblem.code_context.file_uri = matchedCode.fileUri;
-                subProblem.code_context.line_number = matchedCode.lineNumber;
-                subProblem.code_context.full_statement = matchedCode.fullStatement;
-                subProblem.code_context.from_results = fromResults;
-
-                return subProblem;
-            })
-        );
-
-        // Filter out any null sub-problems that couldn't be matched
-        task3Output.sub_problems = task3Output.sub_problems.filter((subProblem: any) => subProblem !== null);
-
-        return JSON.stringify(task3Output);
+        return response;
     }
 
     // Method to update the exploration graph and pass visualization data to SidebarView
