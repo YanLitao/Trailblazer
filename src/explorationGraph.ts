@@ -138,6 +138,7 @@ export class ExplorationGraph {
      * Retrieves a node by its ID.
      */
     public getNode(id: string): Node | null {
+        // return the json object of the node
         return this.nodes.get(id) || null;
     }
 

@@ -15,13 +15,13 @@ window.addEventListener('message', event => {
             updateCurrentTaskContent(message.html, message.id, message.num);
             break;
         case 'updatePreliminaryAnswer':
-            document.getElementById('preliminary-answer-text').innerText = message.answer;
+            document.getElementById('preliminary-answer-text').innerHTML = message.answer;
             break;
         case 'updateExplorationSummary':
             document.getElementById('exploration-summary').innerText = message.summary;
             break;
         case 'appendFindings':
-            document.getElementById('findings').innerHTML = message.html;
+            appendFindingsHtml(message.html);
             break;
         case 'renderGraph':
             renderGraph(message.data);
@@ -78,11 +78,28 @@ document.getElementById('stop-agent').addEventListener('click', function () {
     });
 });
 
+document.addEventListener("click", function (event) {
+    if (event.target.classList.contains("citation-ref")) {
+        const refId = event.target.getAttribute("data-ref");
+        const targetCodeBox = document.querySelector(`.code-box .code-index[data-ref="${refId}"]`);
+
+        if (targetCodeBox) {
+            targetCodeBox.scrollIntoView({ behavior: "smooth", block: "center" });
+            targetCodeBox.classList.add("highlight");
+            setTimeout(() => targetCodeBox.classList.remove("highlight"), 2000);
+        }
+    }
+});
+
 // JavaScript to toggle additional invocations
 function toggleAdditionalInvocations(elementId) {
     const element = document.getElementById(elementId);
     const currentTaskUniqueId = elementId.split('-show-more')[0]; // Get unique ID part
     const additionalInvocations = document.getElementById(`${currentTaskUniqueId}-additional-invocations`);
+
+    if (!additionalInvocations) {
+        return;
+    }
 
     if (additionalInvocations.style.display === 'none') {
         additionalInvocations.style.display = 'block';
@@ -103,6 +120,35 @@ function appendHtml(html, id, num) {
         setupToggleDetails(id, num); // Set up the toggle details functionality
     }
 
+}
+
+function appendFindingsHtml(html) {
+    // Append the HTML content to findings
+    const findingsContainer = document.getElementById('findings');
+    findingsContainer.innerHTML = html;
+
+    // Re-highlight syntax using Prism.js
+    Prism.highlightAllUnder(findingsContainer);
+
+    // Add click event listeners for the .code-wrapper elements
+    findingsContainer.querySelectorAll('.code-wrapper').forEach((wrapper) => {
+        wrapper.addEventListener('click', (event) => {
+            // Log the node ID from the data attribute on the .code-wrapper element
+            const nodeId = wrapper.getAttribute('data-node-id');
+            console.log(`Clicked node ID: ${nodeId}`);
+
+            vscode.postMessage({
+                command: 'openNode',
+                nodeId: nodeId
+            });
+
+            // Toggle visibility of the .parent-node-info div
+            const parentNodeInfo = wrapper.querySelector('.parent-node-info');
+            if (parentNodeInfo) {
+                parentNodeInfo.style.display = parentNodeInfo.style.display === 'none' ? 'block' : 'none';
+            }
+        });
+    });
 }
 
 // Add click event listeners to the titles that contain line numbers

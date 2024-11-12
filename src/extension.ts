@@ -42,6 +42,11 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('extension.stopAgent', () => {
             agent.stop();
             vscode.window.showInformationMessage('Agent stopped.');
+        }),
+        vscode.commands.registerCommand('extension.getGraphData', (nodeId: string) => {
+            // Get the graph data from the agent and send it to the sidebar
+            console.log(`Getting graph data for node ${nodeId}`);
+            agent.getAndSendGraphData(nodeId);
         })
     );
 }
@@ -326,6 +331,12 @@ class Agent {
     stop() {
         this.isPaused = false;
         this.isStopped = true;
+    }
+
+    getAndSendGraphData(nodeId: string) {
+        const graphData = this._explorationGraph.getNode(nodeId);
+        console.log(`Sending graph data for node ${graphData}`);
+        // Send the graph data to the sidebar
     }
 
     async runWorkflow(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
@@ -1000,7 +1011,7 @@ class Agent {
         // Append only new unique results to _importantResults
         this._importantResults.push(...newResults);
 
-        // Update _importantCodeSnippets with new unique results only if relevance_score == 3
+        // Update _importantCodeSnippets with new unique results
         newResults.forEach((result: { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }) => {
             if (result.relevance_score === 3) {
                 const snippetIndex = this._importantCodeSnippets.size.toString(); // get next key as string
@@ -1033,7 +1044,7 @@ class Agent {
             }
         }
 
-        console.log(`Important Results for Task 5: ${JSON.stringify(Array.from(importantResultsForTask5.values()))}`);
+        //console.log(`Important Results for Task 5: ${JSON.stringify(Array.from(importantResultsForTask5.values()))}`);
 
         const inputJson = {
             task: 5,
@@ -1059,6 +1070,12 @@ class Agent {
         const response = await this._callAgentAPI(inputJson, 6, task6JsonSchema);
         const task6Output = JSON.parse(response);
 
+        // Check if sub_problems exists in task6Output
+        if (!task6Output || !Array.isArray(task6Output.sub_problems)) {
+            console.error("Expected sub_problems array is missing in task6Output:", task6Output);
+            return []; // Return an empty array or handle this error as needed
+        }
+
         // Double-check each sub-problem's code_context to ensure it's not in exploredCodeLines and is complete
         const verifiedResults = task6Output.sub_problems.filter((subProblem: any) => {
             const { code_context } = subProblem;
@@ -1073,20 +1090,20 @@ class Agent {
     }
 
     _updateStepResults(refinedOutput: any, task5Results: any) {
-        // Generate the formatted answer string with grouped references
+        // Generate the answer with clickable references for improved readability
         const constructAnswerString = (answerSections: { statement: string, references: string[] }[]): string => {
-            return answerSections.map(section => {
-                const formattedReferences = `[${section.references.join(', ')}]`;
-                return `${section.statement} ${formattedReferences}`;
-            }).join(' ');
+            return answerSections.map((section, index) => {
+                const formattedReferences = section.references.map(ref => `<span class="citation-ref" data-ref="${ref}">[${ref}]</span>`).join(' ');
+                return `<p>${section.statement} ${formattedReferences}</p>`;
+            }).join('');
         };
 
-        // Extract the answer_sections and format into a single answer string
-        const answerString = constructAnswerString(task5Results.answer_sections);
+        // Extract the answer_sections and format into HTML with clickable references
+        const answerHtml = constructAnswerString(task5Results.answer_sections);
 
         // Add 'final_decision_sufficient' and 'answer' back into refinedOutput
         refinedOutput.final_decision_sufficient = task5Results.final_decision_sufficient;
-        refinedOutput.answer = answerString;
+        refinedOutput.answer = answerHtml;
 
         // Update sidebar and graph visualization
         this._sidebarViewProvider.addTask3Results(refinedOutput, this._importantCodeSnippets);

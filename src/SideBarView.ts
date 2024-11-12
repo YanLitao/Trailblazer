@@ -54,6 +54,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 vscode.commands.executeCommand('extension.continueAgent');
             } else if (message.command === 'toggleWatchMode') {
                 this._watchMode = message.isActive;
+            } else if (message.command === 'openNode') {
+                console.log('Opening node:', message.nodeId);
+                vscode.commands.executeCommand('extension.getGraphData', message.nodeId);
             }
         });
     }
@@ -618,11 +621,36 @@ export class SidebarView implements vscode.WebviewViewProvider {
 
         // Display initial visible results directly with indices
         initialVisibleResults.forEach((result) => {
-            const escapedCodeLine = this.escapeHtml(stripSingleLineIndentation(result.code_line));
+            console.log(result.full_statement);
+
+            // Split the full statement into lines
+            const lines = result.full_statement.split('\n');
+            const codeLineIndex = lines.findIndex((line: string) => line.includes(result.code_line));
+
+            // Calculate the range to display (3 lines above and 3 lines below the code_line)
+            const startLine = Math.max(codeLineIndex - 3, 0);
+            const endLine = Math.min(codeLineIndex + 3, lines.length - 1);
+
+            // Extract the subset of lines and join them into a truncated statement
+            const truncatedStatement = lines.slice(startLine, endLine + 1).join('\n');
+
+            // Highlight the code_line within the truncated statement
+            let highlightedStatement = truncatedStatement.replace(
+                result.code_line,
+                `<span class="highlighted-code">${this.escapeHtml(result.code_line)}</span>`
+            );
+
+            // Create HTML with a wrapper div that will contain the clickable area
             findingsHtml += `
                 <div class="code-box">
-                    <span class="code-index">${result.index}:</span>
-                    <pre class="line-numbers language-ts"><code class="language-ts">${escapedCodeLine}</code></pre>
+                    <span class="code-index" data-ref="${result.index}">[${result.index}]</span>
+                    <div class="code-wrapper" data-node-id="${result.file_uri}:${result.line_number}">
+                        <pre class="line-numbers language-ts"><code class="language-ts">${highlightedStatement}</code></pre>
+                        <div class="parent-node-info" style="display: none;">
+                            <!-- Placeholder for parent nodes, to be populated in future -->
+                            Parent node information goes here.
+                        </div>
+                    </div>
                 </div>
             `;
         });

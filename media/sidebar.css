@@ -289,6 +289,62 @@ current-task {
     overflow-x: auto;
 }
 
+#findings .code-box {
+    display: flex;
+    align-items: center;
+    padding: 0;
+    border-radius: 5px;
+    overflow-x: auto;
+    margin-bottom: 10px;
+}
+
+#findings .code-wrapper {
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    padding: 8px;
+    margin-bottom: 10px;
+}
+
+#findings .parent-node-info {
+    display: none;
+    /* Initially hidden */
+    margin-top: 8px;
+    padding: 5px;
+    border-top: 1px solid #ddd;
+    font-size: 0.9em;
+    color: #555;
+    background-color: #f9f9f9;
+}
+
+.highlight {
+    background-color: #f0f8ff;
+    transition: background-color 0.3s ease;
+}
+
+.code-index {
+    margin-right: 8px;
+    color: #1e90ff;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.code-index:hover {
+    color: #104e8b;
+}
+
+/* Styling for citation references within the answer */
+.citation-ref {
+    color: #1e90ff;
+    font-weight: bold;
+    cursor: pointer;
+    margin: 0 3px;
+}
+
+.citation-ref:hover {
+    color: #104e8b;
+    text-decoration: underline;
+}
+
 .code-title {
     padding: 5px;
     font-size: 0.9em;
@@ -302,6 +358,13 @@ code {
     font-size: 0.9em;
     text-shadow: none;
     background-color: #f5f2f0;
+}
+
+.highlighted-code {
+    background-color: #fffae6;
+    /* Light yellow highlight */
+    padding: 2px 4px;
+    border-radius: 3px;
 }
 
 .filtered-results {
@@ -325,7 +388,8 @@ code {
     border: gray 1px dashed;
 }
 
-.show-more-invocations {
+.show-more-invocations,
+#findings-show-more {
     color: blue;
     cursor: pointer;
     font-style: italic;
