@@ -127,28 +127,41 @@ function appendFindingsHtml(html) {
     const findingsContainer = document.getElementById('findings');
     findingsContainer.innerHTML = html;
 
-    // Re-highlight syntax using Prism.js
-    Prism.highlightAllUnder(findingsContainer);
-
     // Add click event listeners for the .code-wrapper elements
     findingsContainer.querySelectorAll('.code-wrapper').forEach((wrapper) => {
         wrapper.addEventListener('click', (event) => {
-            // Log the node ID from the data attribute on the .code-wrapper element
-            const nodeId = wrapper.getAttribute('data-node-id');
-            console.log(`Clicked node ID: ${nodeId}`);
-
-            vscode.postMessage({
-                command: 'openNode',
-                nodeId: nodeId
-            });
+            event.stopPropagation();  // Stop the event from bubbling up
 
             // Toggle visibility of the .parent-node-info div
             const parentNodeInfo = wrapper.querySelector('.parent-node-info');
             if (parentNodeInfo) {
+                // Toggle display between 'none' and 'block'
                 parentNodeInfo.style.display = parentNodeInfo.style.display === 'none' ? 'block' : 'none';
             }
         });
     });
+}
+
+function appendPath(pathHtml, nodeId) {
+    // Find the code-wrapper div by data-node-id attribute
+    const codeWrapper = document.querySelector(`.code-wrapper[data-node-id="${nodeId}"]`);
+
+    if (!codeWrapper) {
+        console.warn(`No code-wrapper found with data-node-id: ${nodeId}`);
+        return;
+    }
+
+    // Get the .parent-node-info div within the selected code-wrapper
+    const parentNodeInfo = codeWrapper.querySelector('.parent-node-info');
+
+    if (!parentNodeInfo) {
+        console.warn(`No .parent-node-info found within code-wrapper with data-node-id: ${nodeId}`);
+        return;
+    }
+
+    // Set the HTML content of .parent-node-info to the pathHtml
+    parentNodeInfo.innerHTML = pathHtml;
+    parentNodeInfo.style.display = 'block';  // Make sure it is visible
 }
 
 // Add click event listeners to the titles that contain line numbers

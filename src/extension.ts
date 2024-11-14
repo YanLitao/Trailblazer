@@ -42,11 +42,6 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('extension.stopAgent', () => {
             agent.stop();
             vscode.window.showInformationMessage('Agent stopped.');
-        }),
-        vscode.commands.registerCommand('extension.getGraphData', (nodeId: string) => {
-            // Get the graph data from the agent and send it to the sidebar
-            console.log(`Getting graph data for node ${nodeId}`);
-            agent.getAndSendGraphData(nodeId);
         })
     );
 }
@@ -306,6 +301,8 @@ class Agent {
     private _secondarySearchFolder: string = "";
     private _entireFolder: string = "";
 
+    private _importantCodePaths: Map<string, Array<Node[]>> = new Map();  // Map of nodeId to paths
+
     constructor(sidebarViewProvider: SidebarView) {
         this._model = new ChatOpenAI({
             model: "gpt-4o-mini",
@@ -331,12 +328,6 @@ class Agent {
     stop() {
         this.isPaused = false;
         this.isStopped = true;
-    }
-
-    getAndSendGraphData(nodeId: string) {
-        const graphData = this._explorationGraph.getNode(nodeId);
-        console.log(`Sending graph data for node ${graphData}`);
-        // Send the graph data to the sidebar
     }
 
     async runWorkflow(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
@@ -484,13 +475,15 @@ class Agent {
                         id: nodeId,
                         fileUri: uri.toString(),
                         startLine: accurateLineNumber,
-                        endLine: accurateLineNumber + fullStatement.split('\n').length - 1,
+                        endLine: accurateLineNumber,
                         variables: new Set([subProblem.code_context.invoke_variable]),
                         codeSnippet: fullStatement,
                         isPlace: true,  // Mark as invoking place
-                        edges: new Set()
+                        edges: new Set(),
+                        origins: [nodeId]
                     };
                     this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, subProblem.tool, true);
+                    this._explorationGraph.addGraphOrigin(nodeId);
                 }
             }
         }
@@ -602,7 +595,8 @@ class Agent {
                     variables: new Set([variableName]),
                     codeSnippet: result.code_line,
                     isPlace: false, // Result nodes are not invoking places
-                    edges: new Set()
+                    edges: new Set(),
+                    origins: []
                 };
 
                 this._explorationGraph.upsertNode(resultNodeId, resultNode, sourceId, this._stepCounter, subProblem.tool, false);
@@ -928,11 +922,12 @@ class Agent {
                     id: nodeId,
                     fileUri: matchedCode.fileUri,
                     startLine: matchedCode.lineNumber,
-                    endLine: matchedCode.lineNumber + matchedCode.fullStatement.split('\n').length - 1,
+                    endLine: matchedCode.lineNumber,
                     variables: new Set([invoke_variable]),
                     codeSnippet: matchedCode.fullStatement,
                     isPlace: true,
-                    edges: new Set()
+                    edges: new Set(),
+                    origins: []
                 };
                 this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, subProblem.tool, true);
 
@@ -1068,7 +1063,15 @@ class Agent {
         };
 
         const response = await this._callAgentAPI(inputJson, 6, task6JsonSchema);
-        const task6Output = JSON.parse(response);
+
+        // Validate JSON format
+        let task6Output;
+        try {
+            task6Output = JSON.parse(response);
+        } catch (e) {
+            console.error("Failed to parse JSON response for Task 6:", e, response);
+            return [];
+        }
 
         // Check if sub_problems exists in task6Output
         if (!task6Output || !Array.isArray(task6Output.sub_problems)) {
@@ -1076,37 +1079,62 @@ class Agent {
             return []; // Return an empty array or handle this error as needed
         }
 
-        // Double-check each sub-problem's code_context to ensure it's not in exploredCodeLines and is complete
+        // Apply fallback handling for undefined fields within verifiedResults filter
         const verifiedResults = task6Output.sub_problems.filter((subProblem: any) => {
-            const { code_context } = subProblem;
+            const code_context = subProblem?.code_context || {};
             const isContextComplete = code_context.file_uri && code_context.code_line && code_context.line_number !== undefined;
+
+            // If code_context is incomplete, log a warning and skip this sub_problem
+            if (!isContextComplete) {
+                console.warn("Incomplete code_context in sub_problem:", subProblem);
+                return false;
+            }
+
+            // Check that the code context is not in exploredCodeLines
             const isNotInExplored = !this._exploredCodeLines.some(
-                (line) => line.file_uri === code_context.file_uri && line.start_line <= code_context.lineNumber && line.end_line >= code_context.lineNumber
+                (line) => line.file_uri === code_context.file_uri && line.start_line <= code_context.line_number && line.end_line >= code_context.line_number
             );
-            return isContextComplete && isNotInExplored;
+            return isNotInExplored;
         });
 
         return verifiedResults;
     }
 
-    _updateStepResults(refinedOutput: any, task5Results: any) {
+    private async _updateStepResults(refinedOutput: any, task5Results: any) {
         // Generate the answer with clickable references for improved readability
         const constructAnswerString = (answerSections: { statement: string, references: string[] }[]): string => {
-            return answerSections.map((section, index) => {
+            return answerSections.map((section) => {
                 const formattedReferences = section.references.map(ref => `<span class="citation-ref" data-ref="${ref}">[${ref}]</span>`).join(' ');
                 return `<p>${section.statement} ${formattedReferences}</p>`;
             }).join('');
         };
 
-        // Extract the answer_sections and format into HTML with clickable references
+        // Check each important code snippet and ensure its path is in _importantCodePaths
+        for (const [key, snippet] of this._importantCodeSnippets.entries()) {
+            if (snippet.relevance_score === 3) {
+                const nodeId = `${snippet.file_uri}:${snippet.line_number}`;
+                const node = this._explorationGraph.getNode(nodeId);
+
+                // Check if node is relevant and already has its path stored
+                if (node && !this._importantCodePaths.has(nodeId) &&
+                    node.startLine <= snippet.line_number && node.endLine >= snippet.line_number) {
+
+                    // Calculate the shortest paths for the relevant node and store them
+                    const paths = this._explorationGraph.findShortestPathsToOrigins(nodeId);
+                    this._importantCodePaths.set(nodeId, paths);
+                }
+            }
+        }
+
+        // Extract and format the answer_sections into HTML with clickable references
         const answerHtml = constructAnswerString(task5Results.answer_sections);
 
         // Add 'final_decision_sufficient' and 'answer' back into refinedOutput
         refinedOutput.final_decision_sufficient = task5Results.final_decision_sufficient;
         refinedOutput.answer = answerHtml;
 
-        // Update sidebar and graph visualization
-        this._sidebarViewProvider.addTask3Results(refinedOutput, this._importantCodeSnippets);
+        // Update sidebar and graph visualization with refinedOutput and important code snippets
+        this._sidebarViewProvider.addTask3Results(refinedOutput, this._importantCodeSnippets, this._importantCodePaths);
         this.updateGraphVisualization();
     }
 
@@ -1229,18 +1257,17 @@ class Agent {
                     - For each unresolved sub-question, locate a relevant code context (e.g., a line or function) within the explored files that aligns with the sub-question.
                     
                     Instructions:
-                    - Search through the content of exploredFiles to locate an invoking place that may help answer each unresolved sub-question.
-                    - Complete the "code_context" with:
+                    - Strictly follow JSON format in the output, ensuring that every item adheres to the specified schema.
+                    - Ensure the output has:
+                    - A top-level object with a "sub_problems" array, containing each sub-question as an object.
+                    - Each "sub_problem" object with a "sub_question", "tool", and "code_context" that includes:
                         - "file_uri": URI of the file containing the context.
                         - "invoke_variable": The relevant variable or function.
                         - "code_line": The exact line containing the "invoke_variable".
                         - "line_number": The line number of "code_line".
                         - "full_statement": The complete statement where the invoke_variable is located.
-                    - You must find a relevant code context for each sub-question, and maintain "from_results" as false.
-
-                    Requirements:
-                    - Ensure each code context is accurate and complete if found within the explored files.
-                    - Preserve "from_results" as false for all sub-questions in the output, even if a code context is identified.
+                    - The field "from_results" should remain false for each sub_problem.
+                    - All fields in "code_context" must be correctly filled with valid values. Use null only if absolutely no match is found.
                 `;
                 break;
             default:

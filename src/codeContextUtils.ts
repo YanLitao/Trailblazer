@@ -1,9 +1,22 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as url from 'url';
 
 // Function to extract the file name from a file URI
-export function getFileNameFromUri(fileUri: string): string {
-    return path.basename(fileUri); // Returns the file name, e.g., 'useModal.ts'
+export function getFileNameFromUri(fileUri: string | undefined): string {
+    if (!fileUri) {
+        console.warn("getFileNameFromUri received undefined fileUri");
+        return "unknown_file"; // Placeholder if fileUri is undefined
+    }
+
+    try {
+        // Convert file URI to a local path if it's in URI format
+        const localPath = url.fileURLToPath(fileUri);
+        return path.basename(localPath); // Extracts and returns the file name
+    } catch (error) {
+        console.error(`Error converting ${fileUri} to local path: `, error);
+        return "unknown_file"; // Fallback if conversion fails
+    }
 }
 
 export async function getSurroundingCode(uri: vscode.Uri, startLine: number, endLine: number): Promise<{ contextText: string, startContextLine: number }> {

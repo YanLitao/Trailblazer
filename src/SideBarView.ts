@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { getSurroundingCode, stripSingleLineIndentation, alignCodeLeft } from './codeContextUtils';
+import { Node } from './explorationGraph';
 
 const allowedTools = {
     0: "Go to Definition",
@@ -54,9 +55,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 vscode.commands.executeCommand('extension.continueAgent');
             } else if (message.command === 'toggleWatchMode') {
                 this._watchMode = message.isActive;
-            } else if (message.command === 'openNode') {
-                console.log('Opening node:', message.nodeId);
-                vscode.commands.executeCommand('extension.getGraphData', message.nodeId);
             }
         });
     }
@@ -459,7 +457,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
     }
 
     // Function to add Task 3 results (final decision and explanation) with surrounding code
-    public async addTask3Results(task3Output: any, important_code_snippets: Map<string, { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }>) {
+    public async addTask3Results(task3Output: any, importantCodeSnippets: any, importantCodePaths: any) {
         if (this._view) {
             const webview = this._view.webview;
             const explorationUniqueId = `exploration-task3-results-${this._stepCounter}`; // Unique ID for exploration steps
@@ -477,7 +475,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 ? "Exploration completed."
                 : (task3Output.next_step_summary || "Exploration completed.");
 
-            const findingsHtml = await this.addTask4Results({ importantCodeSnippets: important_code_snippets });
+            const findingsHtml = await this.addTask4Results(importantCodeSnippets, importantCodePaths);
 
             // Generate HTML for exploration steps
             let explorationStepsHtml = `
@@ -605,13 +603,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
         }
     }
 
-    public async addTask4Results({ importantCodeSnippets }: { importantCodeSnippets: Map<string, any> }) {
+    public async addTask4Results(importantCodeSnippets: Map<string, any>, importantCodePaths: Map<string, Array<Node[]>>) {
         const visibleLimit = 3; // Show this many results initially
-
-        // Filter all relevant (score=3) results from importantCodeSnippets
-        const score3Results = [...importantCodeSnippets.entries()]
-            .filter(([_, result]) => result.relevance_score === 3)
-            .map(([index, result]) => ({ index, ...result }));
+        const score3Results = [...importantCodeSnippets.entries()].map(([index, result]) => ({ index, ...result }));
 
         const initialVisibleResults = score3Results.slice(0, visibleLimit);
         const additionalResults = score3Results.slice(visibleLimit);
@@ -640,6 +634,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 `<span class="highlighted-code">${this.escapeHtml(result.code_line)}</span>`
             );
 
+            // Retrieve paths for the current node and generate HTML for each path
+            const pathsHtml = this.constructPathsHtml(importantCodePaths.get(result.index) || []);
+
             // Create HTML with a wrapper div that will contain the clickable area
             findingsHtml += `
                 <div class="code-box">
@@ -647,8 +644,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     <div class="code-wrapper" data-node-id="${result.file_uri}:${result.line_number}">
                         <pre class="line-numbers language-ts"><code class="language-ts">${highlightedStatement}</code></pre>
                         <div class="parent-node-info" style="display: none;">
-                            <!-- Placeholder for parent nodes, to be populated in future -->
-                            Parent node information goes here.
+                            ${pathsHtml}
                         </div>
                     </div>
                 </div>
@@ -678,11 +674,28 @@ export class SidebarView implements vscode.WebviewViewProvider {
             findingsHtml += `</div>`; // Close additional-results div
         }
 
-        // Return HTML for findings
         return findingsHtml;
+    }
 
-        // Post the HTML to the webview to append it to the findings area
-        // webview.postMessage({ command: 'appendFindings', html: findingsHtml });
+    // Helper function to construct the HTML for paths
+    private constructPathsHtml(paths: Array<Node[]>): string {
+        return paths.map((path, pathIndex) => {
+            const pathHtml = path.map((node, nodeIndex) => `
+                <div class="code-box">
+                    <span class="code-index">[${nodeIndex}]</span>
+                    <div class="code-wrapper" data-node-id="${node.fileUri}:${node.startLine}">
+                        <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(node.codeSnippet)}</code></pre>
+                    </div>
+                </div>
+            `).join('');
+
+            // Wrap each path in a dashed bounding box
+            return `
+                <div class="path-box" style="border: 1px dashed #ddd; padding: 8px; margin-top: 8px;">
+                    ${pathHtml}
+                </div>
+            `;
+        }).join('');
     }
 
     // Helper function to extract the file name from the URI
