@@ -615,7 +615,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
 
         // Display initial visible results directly with indices
         initialVisibleResults.forEach((result) => {
-            console.log(result.full_statement);
+            const resultNodeId = result.file_uri + ':' + result.line_number;
 
             // Split the full statement into lines
             const lines = result.full_statement.split('\n');
@@ -635,15 +635,16 @@ export class SidebarView implements vscode.WebviewViewProvider {
             );
 
             // Retrieve paths for the current node and generate HTML for each path
-            const pathsHtml = this.constructPathsHtml(importantCodePaths.get(result.index) || []);
+            const pathsHtml = this.constructPathsHtml(importantCodePaths.get(resultNodeId) || []);
 
             // Create HTML with a wrapper div that will contain the clickable area
             findingsHtml += `
                 <div class="code-box">
                     <span class="code-index" data-ref="${result.index}">[${result.index}]</span>
-                    <div class="code-wrapper" data-node-id="${result.file_uri}:${result.line_number}">
+                    <div class="code-wrapper" data-node-id="${resultNodeId}">
                         <pre class="line-numbers language-ts"><code class="language-ts">${highlightedStatement}</code></pre>
                         <div class="parent-node-info" style="display: none;">
+                            <p>Paths:</p>
                             ${pathsHtml}
                         </div>
                     </div>
@@ -678,24 +679,26 @@ export class SidebarView implements vscode.WebviewViewProvider {
     }
 
     // Helper function to construct the HTML for paths
-    private constructPathsHtml(paths: Array<Node[]>): string {
+    private constructPathsHtml(paths: Node[][]): string {
+        // Map over each path (array of nodes)
         return paths.map((path, pathIndex) => {
+            // Map over nodes in the path
             const pathHtml = path.map((node, nodeIndex) => `
                 <div class="code-box">
-                    <span class="code-index">[${nodeIndex}]</span>
+                    <span class="styled-index">${nodeIndex + 1}</span> <!-- 1-based indexing for readability -->
                     <div class="code-wrapper" data-node-id="${node.fileUri}:${node.startLine}">
                         <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(node.codeSnippet)}</code></pre>
                     </div>
                 </div>
-            `).join('');
+            `).join(''); // Combine all node HTML for this path
 
-            // Wrap each path in a dashed bounding box
+            // Wrap the path HTML in a styled container
             return `
-                <div class="path-box" style="border: 1px dashed #ddd; padding: 8px; margin-top: 8px;">
+                <div class="path-box" aria-label="Path ${pathIndex + 1}">
                     ${pathHtml}
                 </div>
             `;
-        }).join('');
+        }).join(''); // Combine all path HTMLs into a single string
     }
 
     // Helper function to extract the file name from the URI

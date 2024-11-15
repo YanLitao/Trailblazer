@@ -735,8 +735,8 @@ class Agent {
         // Filter locations to exclude unwanted file extensions
         const filteredLocations = locations.filter(location => {
             const fileUri = location instanceof vscode.Location ? location.uri.toString() : (location as vscode.LocationLink).targetUri.toString();
-            const ext = path.extname(fileUri);
-            return !this._fileExtensionsToExclude.includes(ext);
+            // if the string in the _fileExtensionsToExclude is found in the fileUri, exclude it
+            return !this._fileExtensionsToExclude.some(ext => fileUri.includes(ext));
         });
 
         const primaryResults: any[] = [];

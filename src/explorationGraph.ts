@@ -206,117 +206,104 @@ export class ExplorationGraph {
      * @returns An array of shortest paths, each being an array of Node objects from origin to nodeId.
      */
     public findShortestPathsToOrigins(nodeId: string): Node[][] {
-        console.log(`All edges: `, this.edges);
         const targetNode = this.getNode(nodeId);
         if (!targetNode) {
             throw new Error(`Node ${nodeId} not found in the graph.`);
         }
-        console.log(`node's edges: `, targetNode.edges);
 
-        const paths: Node[][] = [];
-        const relevantOrigins = targetNode.origins.filter(origin => this.graphOrigin.includes(origin));
+        // Step 1: Traverse all paths from the starting node
+        const allPaths = this.traversePathsFromNode(nodeId);
 
-        // Use relevant origins if any are found in graphOrigin, otherwise use all origins
-        const originsToUse = relevantOrigins.length > 0 ? relevantOrigins : targetNode.origins;
+        console.log(`Edges: ${this.edges}, Nodes: ${this.nodes}`);
 
-        const originPaths: Map<string, Node[]> = new Map(); // Tracks shortest paths to unique origins
+        console.log(`Found ${allPaths.length} paths from ${nodeId} to its origins.`);
 
-        // Find the shortest path for each origin in originsToUse
-        for (const originId of originsToUse) {
-            const path = this.findShortestPathWithNodes(nodeId, originId);
-            console.log(`Path from ${originId} to ${nodeId}:`, path);
-            if (path && path.length > 0) {
-                const reachedOrigin = path[0].id; // The origin reached by this path
+        // Step 2: Filter paths to only those containing origins or graphOrigin
+        const relevantOrigins = [...targetNode.origins, ...this.graphOrigin];
+        const pathsContainingOrigins = allPaths.filter(path =>
+            path.some(node => relevantOrigins.includes(node.id))
+        );
 
-                // Check if this origin already has a path and if the new path is shorter
-                if (!originPaths.has(reachedOrigin) || path.length < originPaths.get(reachedOrigin)!.length) {
-                    originPaths.set(reachedOrigin, path);
-                }
+        const filteredPaths = pathsContainingOrigins.length > 0 ? pathsContainingOrigins : allPaths;
+
+        // Step 3: Keep only the shortest path for each unique source (last node in the path)
+        const shortestPathsMap = new Map<string, Node[]>(); // Map of source node ID to shortest path
+        filteredPaths.forEach(path => {
+            const sourceNodeId = path[path.length - 1].id;
+            if (!shortestPathsMap.has(sourceNodeId) || path.length < shortestPathsMap.get(sourceNodeId)!.length) {
+                shortestPathsMap.set(sourceNodeId, path);
             }
-        }
+        });
 
-        // Convert originPaths to an array format
-        for (const path of originPaths.values()) {
-            paths.push(path);
-        }
+        // Step 4: Remove the starting node (index 0) from each path
+        const resultPaths = Array.from(shortestPathsMap.values()).map(path => path.slice(1));
 
-        // If no paths to target origins are found, keep the shortest paths to any reached origins
-        if (paths.length === 0) {
-            const fallbackPaths = new Map<string, Node[]>();
-
-            // Traverse all paths to find the shortest to each unique origin reached
-            for (const originId of targetNode.origins) {
-                const path = this.findShortestPathWithNodes(nodeId, originId);
-                if (path && path.length > 0) {
-                    const reachedOrigin = path[0].id;
-                    if (!fallbackPaths.has(reachedOrigin) || path.length < fallbackPaths.get(reachedOrigin)!.length) {
-                        fallbackPaths.set(reachedOrigin, path);
-                    }
-                }
-            }
-
-            for (const path of fallbackPaths.values()) {
-                paths.push(path);
-            }
-        }
-
-        return paths;
+        return resultPaths;
     }
 
-    /**
-     * Helper function to find the shortest path between two nodes using BFS and return nodes along the path.
-     * @param startId - The start node ID.
-     * @param endId - The target node ID.
-     * @returns An array representing the shortest path from startId to endId as Node objects, or null if no path exists.
-     */
-    private findShortestPathWithNodes(startId: string, endId: string): Node[] {
-        console.log(`Finding path from ${startId} to ${endId} based on decreasing stepNumber`);
-        if (startId === endId) return [this.getNode(startId)!];
+    private traversePathsFromNode(startId: string): Node[][] {
+        console.log(`Listing all upstream paths from ${startId}`);
 
-        const queue: Array<{ node: Node, path: Node[], stepCount: number }> = [
-            { node: this.getNode(startId)!, path: [this.getNode(startId)!], stepCount: 0 }
-        ];
-        const visited = new Set<string>([startId]);
-        let closestPath: Node[] = [];  // Tracks the closest path found
-        let minStepCount = Infinity;   // Tracks the minimum steps reached
-
-        while (queue.length > 0) {
-            const { node, path, stepCount } = queue.shift()!;
-
-            for (const edgeId of node.edges) {
-                const edge = this.edges.get(edgeId);
-                if (!edge) continue;
-
-                const nextNodeId = edge.sourceId === node.id ? edge.targetId : edge.sourceId;
-                const nextNode = this.getNode(nextNodeId);
-
-                if (!nextNode || visited.has(nextNodeId)) continue;
-
-                // Only consider edges moving to earlier exploration steps
-                if (edge.stepNumber < stepCount) {
-                    const newPath = [...path, nextNode];
-                    const newStepCount = stepCount + 1;
-
-                    // Update closest path if the current path length is shorter
-                    if (newStepCount < minStepCount) {
-                        closestPath = newPath;
-                        minStepCount = newStepCount;
-                    }
-
-                    // If we reached the endId, return the path immediately
-                    if (nextNodeId === endId) {
-                        return newPath;
-                    }
-
-                    // Continue searching if not yet reached the end
-                    visited.add(nextNodeId);
-                    queue.push({ node: nextNode, path: newPath, stepCount: newStepCount });
-                }
-            }
+        const startNode = this.getNode(startId);
+        if (!startNode) {
+            console.error(`Node ${startId} not found in the graph.`);
+            return [];
         }
 
-        // Return the closest path found, even if it doesn’t reach endId
-        console.log(`No direct path to ${endId} found. Returning closest path to the node with minimum steps: `, closestPath);
-        return closestPath;
+        const paths: Node[][] = []; // Stores all possible paths
+        const visited = new Set<string>(); // Tracks visited nodes to avoid cycles
+
+        const isSourceNode = (node: Node): boolean => {
+            // Check if the node is an origin node or graph origin
+            if (node.origins.length === 0 || this.graphOrigin.includes(node.id)) {
+                return true;
+            }
+            // Check if the node has no edges
+            if (node.edges.size === 0) {
+                return true;
+            }
+            // Check if all source edges are from already traversed nodes
+            for (const edgeId of node.edges) {
+                const edge = this.edges.get(edgeId);
+                if (edge && edge.targetId === node.id && !visited.has(edge.sourceId)) {
+                    return false; // Found an unexplored source
+                }
+            }
+            return true;
+        };
+
+        const traverse = (currentNode: Node, currentPath: Node[]) => {
+            currentPath.push(currentNode); // Add the current node to the path
+            visited.add(currentNode.id); // Mark it as visited
+
+            if (isSourceNode(currentNode)) {
+                // If the current node is a source node, save the current path
+                paths.push([...currentPath]);
+            } else {
+                // Traverse upstream edges
+                for (const edgeId of currentNode.edges) {
+                    const edge = this.edges.get(edgeId);
+                    if (!edge) continue;
+
+                    // Check if the edge points upstream
+                    if (edge.targetId === currentNode.id) {
+                        const nextNodeId = edge.sourceId;
+                        const nextNode = this.getNode(nextNodeId);
+
+                        if (nextNode && !visited.has(nextNodeId)) {
+                            traverse(nextNode, [...currentPath]); // Recurse upstream
+                        }
+                    }
+                }
+            }
+
+            visited.delete(currentNode.id); // Unmark the node to allow other paths to explore it
+        };
+
+        // Start traversal from the start node
+        traverse(startNode, []);
+
+        console.log(`Completed upstream path listing from ${startId}. Found paths:`, paths);
+        return paths;
     }
 }

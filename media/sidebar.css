@@ -332,6 +332,21 @@ current-task {
     color: #104e8b;
 }
 
+.styled-index {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    width: 18px;
+    height: 18px;
+    background-color: white;
+    color: #1e90ff;
+    font-size: 14px;
+    font-weight: bold;
+    border-radius: 50%;
+    margin-right: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
 /* Styling for citation references within the answer */
 .citation-ref {
     color: #1e90ff;
