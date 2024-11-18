@@ -301,7 +301,7 @@ class Agent {
     private _secondarySearchFolder: string = "";
     private _entireFolder: string = "";
 
-    private _importantCodePaths: Map<string, Array<Node[]>> = new Map();  // Map of nodeId to paths
+    private _importantCodePaths: Map<string, Array<{ nodes: Node[], edges: (Edge | null)[] }>> = new Map();  // Map of nodeId to paths
 
     constructor(sidebarViewProvider: SidebarView) {
         this._model = new ChatOpenAI({

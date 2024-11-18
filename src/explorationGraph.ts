@@ -18,6 +18,7 @@ export interface Edge {
     targetId: string;            // ID of the target node
     stepNumber: number;          // Step in the exploration workflow
     showEdge: boolean;           // Indicates if the edge should be displayed in the visualization
+    tool: number;                // Tool type (0: go to definitions, 1: find all references)
 }
 
 // ExplorationGraph class managing nodes, edges, and graph operations
@@ -105,7 +106,8 @@ export class ExplorationGraph {
                 sourceId: edgeSourceId,
                 targetId: edgeTargetId,
                 stepNumber,
-                showEdge
+                showEdge,
+                tool: toolType
             };
 
             this.edges.set(edgeId, edge);
@@ -205,7 +207,7 @@ export class ExplorationGraph {
      * @param nodeId - The ID of the node to track paths back to its origins.
      * @returns An array of shortest paths, each being an array of Node objects from origin to nodeId.
      */
-    public findShortestPathsToOrigins(nodeId: string): Node[][] {
+    public findShortestPathsToOrigins(nodeId: string) {
         const targetNode = this.getNode(nodeId);
         if (!targetNode) {
             throw new Error(`Node ${nodeId} not found in the graph.`);
@@ -214,34 +216,33 @@ export class ExplorationGraph {
         // Step 1: Traverse all paths from the starting node
         const allPaths = this.traversePathsFromNode(nodeId);
 
-        console.log(`Edges: ${this.edges}, Nodes: ${this.nodes}`);
-
-        console.log(`Found ${allPaths.length} paths from ${nodeId} to its origins.`);
-
         // Step 2: Filter paths to only those containing origins or graphOrigin
         const relevantOrigins = [...targetNode.origins, ...this.graphOrigin];
         const pathsContainingOrigins = allPaths.filter(path =>
-            path.some(node => relevantOrigins.includes(node.id))
+            path.nodes.some(node => relevantOrigins.includes(node.id))
         );
 
         const filteredPaths = pathsContainingOrigins.length > 0 ? pathsContainingOrigins : allPaths;
 
         // Step 3: Keep only the shortest path for each unique source (last node in the path)
-        const shortestPathsMap = new Map<string, Node[]>(); // Map of source node ID to shortest path
+        const shortestPathsMap = new Map<string, { nodes: Node[], edges: Edge[] }>();
         filteredPaths.forEach(path => {
-            const sourceNodeId = path[path.length - 1].id;
-            if (!shortestPathsMap.has(sourceNodeId) || path.length < shortestPathsMap.get(sourceNodeId)!.length) {
+            const sourceNodeId = path.nodes[path.nodes.length - 1].id;
+            if (!shortestPathsMap.has(sourceNodeId) || path.nodes.length < shortestPathsMap.get(sourceNodeId)!.nodes.length) {
                 shortestPathsMap.set(sourceNodeId, path);
             }
         });
 
         // Step 4: Remove the starting node (index 0) from each path
-        const resultPaths = Array.from(shortestPathsMap.values()).map(path => path.slice(1));
+        const resultPaths = Array.from(shortestPathsMap.values()).map(path => ({
+            nodes: path.nodes.reverse(),
+            edges: [...path.edges.reverse(), null] // Include edges as they are
+        }));
 
         return resultPaths;
     }
 
-    private traversePathsFromNode(startId: string): Node[][] {
+    private traversePathsFromNode(startId: string): Array<{ nodes: Node[], edges: Edge[] }> {
         console.log(`Listing all upstream paths from ${startId}`);
 
         const startNode = this.getNode(startId);
@@ -250,58 +251,51 @@ export class ExplorationGraph {
             return [];
         }
 
-        const paths: Node[][] = []; // Stores all possible paths
-        const visited = new Set<string>(); // Tracks visited nodes to avoid cycles
+        const paths: Array<{ nodes: Node[], edges: Edge[] }> = [];
+        const visited = new Set<string>();
 
         const isSourceNode = (node: Node): boolean => {
-            // Check if the node is an origin node or graph origin
             if (node.origins.length === 0 || this.graphOrigin.includes(node.id)) {
                 return true;
             }
-            // Check if the node has no edges
             if (node.edges.size === 0) {
                 return true;
             }
-            // Check if all source edges are from already traversed nodes
             for (const edgeId of node.edges) {
                 const edge = this.edges.get(edgeId);
                 if (edge && edge.targetId === node.id && !visited.has(edge.sourceId)) {
-                    return false; // Found an unexplored source
+                    return false;
                 }
             }
             return true;
         };
 
-        const traverse = (currentNode: Node, currentPath: Node[]) => {
-            currentPath.push(currentNode); // Add the current node to the path
-            visited.add(currentNode.id); // Mark it as visited
+        const traverse = (currentNode: Node, currentPath: Node[], currentEdges: Edge[]) => {
+            currentPath.push(currentNode);
+            visited.add(currentNode.id);
 
             if (isSourceNode(currentNode)) {
-                // If the current node is a source node, save the current path
-                paths.push([...currentPath]);
+                paths.push({ nodes: [...currentPath], edges: [...currentEdges] });
             } else {
-                // Traverse upstream edges
                 for (const edgeId of currentNode.edges) {
                     const edge = this.edges.get(edgeId);
                     if (!edge) continue;
 
-                    // Check if the edge points upstream
                     if (edge.targetId === currentNode.id) {
                         const nextNodeId = edge.sourceId;
                         const nextNode = this.getNode(nextNodeId);
 
                         if (nextNode && !visited.has(nextNodeId)) {
-                            traverse(nextNode, [...currentPath]); // Recurse upstream
+                            traverse(nextNode, [...currentPath], [...currentEdges, edge]);
                         }
                     }
                 }
             }
 
-            visited.delete(currentNode.id); // Unmark the node to allow other paths to explore it
+            visited.delete(currentNode.id);
         };
 
-        // Start traversal from the start node
-        traverse(startNode, []);
+        traverse(startNode, [], []);
 
         console.log(`Completed upstream path listing from ${startId}. Found paths:`, paths);
         return paths;

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { getSurroundingCode, stripSingleLineIndentation, alignCodeLeft } from './codeContextUtils';
-import { Node } from './explorationGraph';
+import { Node, Edge } from './explorationGraph';
 
 const allowedTools = {
     0: "Go to Definition",
@@ -603,7 +603,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
         }
     }
 
-    public async addTask4Results(importantCodeSnippets: Map<string, any>, importantCodePaths: Map<string, Array<Node[]>>) {
+    public async addTask4Results(importantCodeSnippets: Map<string, any>, importantCodePaths: Map<string, Array<{ nodes: Node[], edges: Edge[] }>>) {
         const visibleLimit = 3; // Show this many results initially
         const score3Results = [...importantCodeSnippets.entries()].map(([index, result]) => ({ index, ...result }));
 
@@ -679,26 +679,35 @@ export class SidebarView implements vscode.WebviewViewProvider {
     }
 
     // Helper function to construct the HTML for paths
-    private constructPathsHtml(paths: Node[][]): string {
-        // Map over each path (array of nodes)
+    private constructPathsHtml(paths: Array<{ nodes: Node[], edges: (Edge | null)[] }>): string {
+        console.log(paths);
         return paths.map((path, pathIndex) => {
-            // Map over nodes in the path
-            const pathHtml = path.map((node, nodeIndex) => `
-                <div class="code-box">
-                    <span class="styled-index">${nodeIndex + 1}</span> <!-- 1-based indexing for readability -->
-                    <div class="code-wrapper" data-node-id="${node.fileUri}:${node.startLine}">
-                        <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(node.codeSnippet)}</code></pre>
-                    </div>
-                </div>
-            `).join(''); // Combine all node HTML for this path
+            const pathHtml = path.nodes.map((node, nodeIndex) => {
+                const edge = path.edges[nodeIndex]; // Pair the current node with its corresponding edge
+                const tool = edge ? (edge.tool === 0 ? "Go to Definition" : "Find References") : "";
+                const toolInfo = edge
+                    ? `Using <strong>${tool}</strong> on <strong>${[...node.variables].join(", ")}</strong> in:`
+                    : "Find the code snippet: "; // If no edge or tool is available, leave it empty
 
-            // Wrap the path HTML in a styled container
+                return `
+                    <div class="code-box">
+                        <div class="info-row">
+                            <span class="styled-index">${nodeIndex + 1}</span> <!-- 1-based indexing -->
+                            <span class="tool-info">${toolInfo}</span>
+                        </div>
+                        <div class="code-wrapper" data-node-id="${node.fileUri}:${node.startLine}">
+                            <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(node.codeSnippet)}</code></pre>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
             return `
                 <div class="path-box" aria-label="Path ${pathIndex + 1}">
                     ${pathHtml}
                 </div>
             `;
-        }).join(''); // Combine all path HTMLs into a single string
+        }).join('');
     }
 
     // Helper function to extract the file name from the URI

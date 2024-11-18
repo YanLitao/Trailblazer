@@ -386,6 +386,51 @@ code {
     border-top: lightgray 1px solid;
 }
 
+#findings .parent-node-info .code-box {
+    display: block;
+    padding: 0;
+    border-radius: 5px;
+    overflow-x: auto;
+    margin-bottom: 10px;
+}
+
+#findings .parent-node-info info-row {
+    display: block;
+    margin-bottom: 5px;
+}
+
+#findings .parent-node-info .styled-index {
+    display: inline-block;
+    font-size: 14px;
+    color: #ffffff;
+    background-color: #007bff;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    text-align: center;
+    line-height: 20px;
+    margin-right: 10px;
+}
+
+#findings .parent-node-info .tool-info {
+    display: inline-block;
+    font-size: 14px;
+    color: #333333;
+}
+
+#findings .parent-node-info .info-line {
+    display: flex;
+    align-items: center;
+    margin-bottom: 5px;
+}
+
+#findings .parent-node-info .highlighted-variable {
+    background-color: #ffffcc;
+    border-radius: 3px;
+    padding: 2px 4px;
+    font-weight: bold;
+}
+
 .warning-text {
     color: red;
     display: flex;
