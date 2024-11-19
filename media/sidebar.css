@@ -360,6 +360,15 @@ current-task {
     text-decoration: underline;
 }
 
+.highlight-new {
+    background-color: #ffffcc;
+    /* Light yellow highlight */
+    border-left: 4px solid #ffcc00;
+    /* Add a subtle border for emphasis */
+    padding-left: 8px;
+    /* Add some spacing */
+}
+
 .code-title {
     padding: 5px;
     font-size: 0.9em;

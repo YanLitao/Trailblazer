@@ -294,8 +294,8 @@ class Agent {
     private isStopped: boolean = false;    // Track if the agent is stopped
     private _importantResults: Array<{ file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }> = [];
     private _importantCodeSnippets = new Map<string, { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }>();
-    private _lastTask4Promise = Promise.resolve(); // Initialize a placeholder Promise
-
+    private _newImportantCodeSnippets: Map<string, any> = new Map();
+    private _previousAnswerSections: Array<{ statement: string; references: string[] }> = [];
     private _fileExtensionsToExclude = ['.test.ts', '.spec.tsx', '.test.js', '.spec.js'];
     private _primarySearchFolder: string = "";
     private _secondarySearchFolder: string = "";
@@ -381,8 +381,7 @@ class Agent {
             const task2Results = await this.runTask2(refinedOutput.sub_problems);
 
             // Task 4: Decide the importance of results
-            this._lastTask4Promise = this.runTask4(task2Results);
-            await this._lastTask4Promise;
+            const task4Results = await this.runTask4(task2Results);
 
             // Task 5: Evaluate if the question is sufficiently answered and propose next steps
             const task5Results = await this.runTask5();
@@ -390,18 +389,16 @@ class Agent {
             // Task 3: Find code context for propose next steps
             // And Task 6: Find code context for unresolved sub-problems
             const task3Output = await this.runTask3(task5Results);
-            sufficient = task5Results.final_decision_sufficient;
             refinedOutput = task3Output;
+            refinedOutput.final_decision_sufficient = task5Results.final_decision_sufficient;
+            refinedOutput.answer = task5Results.answer;
 
-            this._updateStepResults(refinedOutput, task5Results)
+            this._updateStepResults(refinedOutput)
 
-            if (sufficient || refinedOutput.sub_problems.length === 0) {
+            if (task5Results.final_decision_sufficient || refinedOutput.sub_problems.length === 0) {
                 break;
             }
         }
-
-        // Ensure final ranking is completed
-        await this._lastTask4Promise;
 
         this._sidebarViewProvider.agentIsDone();
 
@@ -1009,8 +1006,14 @@ class Agent {
         // Update _importantCodeSnippets with new unique results
         newResults.forEach((result: { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }) => {
             if (result.relevance_score === 3) {
-                const snippetIndex = this._importantCodeSnippets.size.toString(); // get next key as string
-                this._importantCodeSnippets.set(snippetIndex, result);
+                const snippetKey = Array.from(this._importantCodeSnippets.entries()).find(
+                    ([_, snippet]) =>
+                        snippet.file_uri === result.file_uri &&
+                        snippet.line_number === result.line_number
+                )?.[0] ?? this._importantCodeSnippets.size.toString(); // Use the existing key if it exists; otherwise, assign a new key
+
+                this._importantCodeSnippets.set(snippetKey, result);
+                this._newImportantCodeSnippets.set(snippetKey, result); // Ensure consistent indexing
             }
         });
     }
@@ -1018,37 +1021,60 @@ class Agent {
     async runTask5() {
         console.warn("Running Task 5");
 
-        // If _importantCodeSnippets is empty, temporarily add lower-scoring snippets from _importantResults
-        let importantResultsForTask5 = new Map(this._importantCodeSnippets);
-
-        if (importantResultsForTask5.size === 0) {
-            // Filter results by relevance score in descending order
-            const fallbackScores = [2, 1, 0];
-            for (const score of fallbackScores) {
-                const additionalResults = this._importantResults
-                    .filter(result => result.relevance_score === score)
-                    .slice(0, 5); // Add a limit to the number of less important snippets if desired
-
-                additionalResults.forEach((result, index) => {
-                    const snippetKey = `${score}-${index}`; // Use score and index as unique key
-                    importantResultsForTask5.set(snippetKey, result);
-                });
-
-                // Break loop if we have added some snippets
-                if (importantResultsForTask5.size > 0) break;
-            }
+        // Check if there are new _importantCodeSnippets
+        if (this._newImportantCodeSnippets.size === 0) {
+            console.log("No new important code snippets. Using the previous answer.");
+            return this._previousAnswerSections; // Return the previous answer
         }
 
-        //console.log(`Important Results for Task 5: ${JSON.stringify(Array.from(importantResultsForTask5.values()))}`);
+        console.log(`New important code snippets found: ${Array.from(this._newImportantCodeSnippets.values())}`);
 
         const inputJson = {
             task: 5,
             refined_question: this._refined_question ?? "",
-            important_results: Object.fromEntries(importantResultsForTask5)
+            prior_answers: this._previousAnswerSections,
+            important_results: Object.fromEntries(this._newImportantCodeSnippets) // Use synchronized indices
         };
 
         const response = await this._callAgentAPI(inputJson, 5, task5JsonSchema);
         const task5Output = JSON.parse(response);
+
+        const constructAnswerString = (
+            previousAnswerSections: { statement: string, references: string[] }[],
+            newAnswerSections: { statement: string, references: string[] }[]
+        ): string => {
+            // Helper to identify new sections
+            const isNewSection = (section: { statement: string, references: string[] }): boolean => {
+                return !previousAnswerSections.some(prevSection =>
+                    prevSection.statement === section.statement &&
+                    prevSection.references.sort().join(',') === section.references.sort().join(',')
+                );
+            };
+
+            return newAnswerSections.map((section) => {
+                const formattedReferences = section.references.map(ref =>
+                    `<span class="citation-ref" data-ref="${ref}">[${ref}]</span>`
+                ).join(' ');
+
+                // Check if this section is new
+                const highlightClass = isNewSection(section) ? 'highlight-new' : '';
+
+                // Wrap the new content with a highlight class
+                return `<p class="${highlightClass}">${section.statement} ${formattedReferences}</p>`;
+            }).join('');
+        };
+
+        const previousAnswerSections = this._previousAnswerSections || [];
+        const answerHtml = constructAnswerString(previousAnswerSections, task5Output.answer_sections);
+        this._previousAnswerSections = task5Output.answer_sections; // Update after generating the HTML
+
+        // Update the previous answer with the new output
+        this._previousAnswerSections = task5Output.answer_sections;
+
+        task5Output.answer = answerHtml;
+
+        // Clear _newImportantCodeSnippets after processing
+        this._newImportantCodeSnippets.clear();
 
         return task5Output;
     }
@@ -1100,14 +1126,7 @@ class Agent {
         return verifiedResults;
     }
 
-    private async _updateStepResults(refinedOutput: any, task5Results: any) {
-        // Generate the answer with clickable references for improved readability
-        const constructAnswerString = (answerSections: { statement: string, references: string[] }[]): string => {
-            return answerSections.map((section) => {
-                const formattedReferences = section.references.map(ref => `<span class="citation-ref" data-ref="${ref}">[${ref}]</span>`).join(' ');
-                return `<p>${section.statement} ${formattedReferences}</p>`;
-            }).join('');
-        };
+    private async _updateStepResults(refinedOutput: any) {
 
         // Check each important code snippet and ensure its path is in _importantCodePaths
         for (const [key, snippet] of this._importantCodeSnippets.entries()) {
@@ -1125,13 +1144,6 @@ class Agent {
                 }
             }
         }
-
-        // Extract and format the answer_sections into HTML with clickable references
-        const answerHtml = constructAnswerString(task5Results.answer_sections);
-
-        // Add 'final_decision_sufficient' and 'answer' back into refinedOutput
-        refinedOutput.final_decision_sufficient = task5Results.final_decision_sufficient;
-        refinedOutput.answer = answerHtml;
 
         // Update sidebar and graph visualization with refinedOutput and important code snippets
         this._sidebarViewProvider.addTask3Results(refinedOutput, this._importantCodeSnippets, this._importantCodePaths);
@@ -1206,34 +1218,31 @@ class Agent {
                 break;
             case 5:
                 taskInstructions = `
-                    Task 5: Generate a preliminary answer based on the user's refined question and important exploration results.
+                    Task 5: Incrementally update the preliminary answer based on the user's refined question and new important exploration results.
 
                     Input:
                     - The refined user question.
-                    - A collection of relevant code snippets from important_results with a relevance score of 3. Each entry includes the snippet, file URI, line number, code context, and explanation, indexed by unique keys (e.g., "0", "1").
+                    - Prior segmented answers ("prior_answers") with statements and references summarizing the existing findings.
+                    - A collection of new relevant code snippets ("important_results") indexed by unique keys (e.g., "0", "1"). These indices correspond to the existing important code snippets and must be used consistently for traceability.
 
                     Instructions:
-                    1. Answer Structure:
-                        - Provide a segmented answer under "answer_sections," with each statement summarizing a specific finding.
-                        - Each statement should refer to at least one code snippet in important_results using its key (e.g., "0", "1"). Use these references in the "references" array to ensure traceability to specific results.
-                        - Avoid mentioning unexamined areas in "answer_sections." The answer should only summarize the insights gained from the explored results.
-                    
-                    2. Reference Format:
-                        - Each statement in "answer_sections" should be paired with its "references" array, listing all related snippet keys (e.g., ["0", "2"]).
-                        
-                    3. Next Exploration Steps:
-                        - Summarize the areas requiring further exploration in "next_exploration_steps" as a list of open-ended questions or tasks.
-                        - Clearly state any specific details or components that remain unexplored or partially addressed.
+                    1. Update the prior answers in "prior_answers":
+                        - Add a new section for new findings from "important_results" with a statement summarizing the insight and referencing the snippet keys (e.g., ["3", "4"]).
+                        - Update existing sections to include new details or references if the new findings complement them.
+                        - Remove incorrect or obsolete information if new findings contradict existing statements.
 
-                    4. Decision on Sufficiency:
-                        - Based on the "answer_sections" and "next_exploration_steps," set "final_decision_sufficient" to true if the answer sufficiently addresses the refined question. Otherwise, set it to false.
+                    2. Reference Format:
+                        - Use snippet keys (e.g., "0", "1") to ensure traceability.
+
+                    3. Decision on Sufficiency:
+                        - Based on the updated "answer_sections" and "next_exploration_steps," set "final_decision_sufficient" to true if the answer sufficiently addresses the refined question. Otherwise, set it to false.
 
                     Output Format:
                     {
                         "answer_sections": [
                             {
-                                "statement": "Summary of a specific insight...",
-                                "references": ["0", "1"]
+                                "statement": "Updated summary of a specific insight...",
+                                "references": ["3", "4"]
                             },
                             ...
                         ],
@@ -1243,7 +1252,7 @@ class Agent {
                         ],
                         "final_decision_sufficient": true or false
                     }
-                    `;
+                `;
                 break;
             case 6:
                 taskInstructions = `
