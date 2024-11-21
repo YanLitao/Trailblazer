@@ -19,6 +19,7 @@ export interface Edge {
     stepNumber: number;          // Step in the exploration workflow
     showEdge: boolean;           // Indicates if the edge should be displayed in the visualization
     tool: number;                // Tool type (0: go to definitions, 1: find all references)
+    invokingVariable: string;    // Variable that invokes the target node
 }
 
 // ExplorationGraph class managing nodes, edges, and graph operations
@@ -41,7 +42,7 @@ export class ExplorationGraph {
     /**
      * Adds a new node to the graph if it does not exist or updates an existing node's properties.
      */
-    public upsertNode(nodeId: string, nodeData: Node, sourceId: string | null, stepNumber: number, toolType: number, isPlaceUpdate: boolean): Node {
+    public upsertNode(nodeId: string, nodeData: Node, sourceId: string | null, stepNumber: number, toolType: number, isPlaceUpdate: boolean, invokeVariable: string): Node {
         let existingNode = this.getNode(nodeId);
 
         if (existingNode) {
@@ -75,7 +76,7 @@ export class ExplorationGraph {
 
         // Add an edge if a sourceId is provided and the source node exists
         if (sourceId && this.nodes.has(sourceId)) {
-            this.addEdge(sourceId, nodeId, stepNumber, toolType);
+            this.addEdge(sourceId, nodeId, stepNumber, toolType, invokeVariable);
         }
 
         return existingNode;
@@ -84,7 +85,7 @@ export class ExplorationGraph {
     /**
      * Adds a new edge between nodes if it doesn't already exist.
      */
-    public addEdge(sourceId: string, targetId: string, stepNumber: number, toolType: number) {
+    public addEdge(sourceId: string, targetId: string, stepNumber: number, toolType: number, invokingVariable: string) {
         // Adjust source and target based on tool type
         const edgeSourceId = toolType === 0 ? targetId : sourceId;
         const edgeTargetId = toolType === 0 ? sourceId : targetId;
@@ -107,7 +108,8 @@ export class ExplorationGraph {
                 targetId: edgeTargetId,
                 stepNumber,
                 showEdge,
-                tool: toolType
+                tool: toolType,
+                invokingVariable: invokingVariable
             };
 
             this.edges.set(edgeId, edge);

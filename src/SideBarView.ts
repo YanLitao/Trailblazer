@@ -146,7 +146,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
         }
     }
 
-    // Example usage: Set agent status to "Running"
+    // Example usage: Set agent status to "Searching"
     public agentIsRunning() {
         this._updateAgentStatus('Searching');
     }
@@ -190,10 +190,10 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 <div id="header">
                     <p>Searching for answer to "<span class="title-question">${this._question}</span>"</p>
                     <p id="agent-status">
-                        Status: <span id="agent-status-text">Idle</span>
+                        Status: <span id="agent-status-text" class="idle-status">Idle</span>
                     </p>
                     <p id="preliminary-answer"><span id="preliminary-answer-text"></span></p>
-                    <p>Findings:</p>
+                    <p>Snippets:</p>
                     <div id="findings"></div>
                     <p id="still-to-be-found">Still to be found: <span id="exploration-summary"></span></p>
                     <div id="button-container">
@@ -640,8 +640,8 @@ export class SidebarView implements vscode.WebviewViewProvider {
             // Create HTML with a wrapper div that will contain the clickable area
             findingsHtml += `
                 <div class="code-box">
-                    <span class="code-index" data-ref="${result.index}">[${result.index}]</span>
                     <div class="code-wrapper" data-node-id="${resultNodeId}">
+                        <span class="code-index" data-ref="${result.index}">[${result.index}]</span>
                         <pre class="line-numbers language-ts"><code class="language-ts">${highlightedStatement}</code></pre>
                         <div class="parent-node-info" style="display: none;">
                             <p>Paths:</p>
@@ -667,7 +667,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 const escapedCodeLine = this.escapeHtml(result.code_line);
                 findingsHtml += `
                     <div class="code-box">
-                        <span class="code-index">${result.index}:</span>
+                        <span class="code-index">${result.index}</span>
                         <pre class="line-numbers language-ts"><code class="language-ts">${escapedCodeLine}</code></pre>
                     </div>
                 `;
@@ -686,8 +686,8 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 const edge = path.edges[nodeIndex]; // Pair the current node with its corresponding edge
                 const tool = edge ? (edge.tool === 0 ? "Go to Definition" : "Find References") : "";
                 const toolInfo = edge
-                    ? `Using <strong>${tool}</strong> on <strong>${[...node.variables].join(", ")}</strong> in:`
-                    : "Find the code snippet: "; // If no edge or tool is available, leave it empty
+                    ? `I used "<strong>${tool}</strong>" on "<strong>${edge.invokingVariable}</strong>" here:`
+                    : "That brought me to this snippet."; // If no edge or tool is available, leave it empty
 
                 return `
                     <div class="code-box">

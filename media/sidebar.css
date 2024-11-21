@@ -32,8 +32,30 @@ h4 {
 
 #agent-status-text {
     font-weight: bold;
-    color: #ffcc00;
     /* Example color for idle status */
+}
+
+.idle-status {
+    color: gray;
+}
+
+.searching-status {
+    color: #ffa500;
+    /* Darker yellow for better contrast */
+}
+
+.paused-status {
+    color: pink;
+}
+
+.stop-status {
+    color: #4CAF50;
+    /* Green for "Stopped" (Finished) */
+}
+
+.finished-status {
+    color: #4CAF50;
+    /* Green for "Finished" */
 }
 
 .title-question {
@@ -322,14 +344,20 @@ current-task {
 }
 
 .code-index {
-    margin-right: 8px;
-    color: #1e90ff;
-    font-weight: bold;
+    display: block;
+    /* Make it appear on its own line inside the box */
+    margin-bottom: 4px;
+    /* Add spacing below */
+    color: #4682b4;
+    /* Match the darker blue */
+    font-weight: normal;
+    /* Not bold */
     cursor: pointer;
 }
 
 .code-index:hover {
     color: #104e8b;
+    /* Hover effect matches citation hover */
 }
 
 .styled-index {
@@ -339,7 +367,7 @@ current-task {
     width: 18px;
     height: 18px;
     background-color: white;
-    color: #1e90ff;
+    color: #4682b4;
     font-size: 14px;
     font-weight: bold;
     border-radius: 50%;
@@ -349,14 +377,17 @@ current-task {
 
 /* Styling for citation references within the answer */
 .citation-ref {
-    color: #1e90ff;
-    font-weight: bold;
+    color: #4682b4;
+    /* Darker blue */
+    font-weight: normal;
+    /* Not bold */
     cursor: pointer;
     margin: 0 3px;
 }
 
 .citation-ref:hover {
     color: #104e8b;
+    /* Slightly darker blue on hover */
     text-decoration: underline;
 }
 
@@ -410,21 +441,13 @@ code {
 
 #findings .parent-node-info .styled-index {
     display: inline-block;
-    font-size: 14px;
-    color: #ffffff;
-    background-color: #007bff;
-    border-radius: 50%;
-    width: 20px;
-    height: 20px;
+    color: #6c757d;
     text-align: center;
-    line-height: 20px;
-    margin-right: 10px;
+    margin: 5px;
 }
 
 #findings .parent-node-info .tool-info {
     display: inline-block;
-    font-size: 14px;
-    color: #333333;
 }
 
 #findings .parent-node-info .info-line {
@@ -459,7 +482,7 @@ code {
 
 .show-more-invocations,
 #findings-show-more {
-    color: blue;
+    color: #007bff;
     cursor: pointer;
     font-style: italic;
 }

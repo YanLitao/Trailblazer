@@ -479,7 +479,7 @@ class Agent {
                         edges: new Set(),
                         origins: [nodeId]
                     };
-                    this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, subProblem.tool, true);
+                    this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, subProblem.tool, true, subProblem.code_context.invoke_variable);
                     this._explorationGraph.addGraphOrigin(nodeId);
                 }
             }
@@ -596,7 +596,7 @@ class Agent {
                     origins: []
                 };
 
-                this._explorationGraph.upsertNode(resultNodeId, resultNode, sourceId, this._stepCounter, subProblem.tool, false);
+                this._explorationGraph.upsertNode(resultNodeId, resultNode, sourceId, this._stepCounter, subProblem.tool, false, variableName);
             });
 
             // Add the variable and results to _exploredVariables
@@ -815,7 +815,7 @@ class Agent {
                 line => line.code_snippet.includes(subProblem.invoke_variable)
             );
 
-            if (matchingCodeLine) {
+            if ("invoke_variable" in subProblem && subProblem.invoke_variable && matchingCodeLine) {
                 subProblem.code_context = {
                     file_uri: matchingCodeLine.file_uri,
                     invoke_variable: subProblem.invoke_variable,
@@ -825,30 +825,18 @@ class Agent {
                 };
                 subProblem.from_results = true;
             } else {
-                subProblem.code_context = {}; // Empty context for unresolved
-                subProblem.from_results = false;
                 unresolvedSubProblems.push(subProblem);
+                // remove the subProblem from the task3Output
+                task3Output.sub_problems = task3Output.sub_problems.filter((sp: any) => sp.sub_question !== subProblem.sub_question);
             }
         });
 
         // Run Task 6 if there are unresolved sub-problems
         if (unresolvedSubProblems.length > 0) {
             const task6Results = await this.runTask6(unresolvedSubProblems);
-
-            // Update task3Output with findings from Task 6
-            task3Output.sub_problems.forEach((subProblem: any) => {
-                const resolvedSubProblem = task6Results.find(
-                    (res: any) => res.sub_question === subProblem.sub_question
-                );
-                if (resolvedSubProblem) {
-                    subProblem.code_context = resolvedSubProblem.code_context;
-                    subProblem.from_results = resolvedSubProblem.from_results;
-                }
-            });
+            task3Output.sub_problems.push(...task6Results);
         }
-
         const processedResponse = await this.postProcessResults(task3Output);
-
         return processedResponse;
     }
 
@@ -858,7 +846,7 @@ class Agent {
         // Step 1: Filter matching files by file name
         const matchingFiles = this._exploredFiles.filter(file => getFileNameFromUri(file.file_uri) === inputFileName);
         if (matchingFiles.length === 0) {
-            console.warn(`No matching files found for "${inputFileName}".`);
+            console.warn(`No matching files found for "${fileUri}".`);
             return null;
         }
 
@@ -873,7 +861,7 @@ class Agent {
             }
         }
         if (!matchedFile) {
-            console.error(`Variable "${invokeVariable}" not found in any matching files for "${inputFileName}".`);
+            console.error(`Variable "${invokeVariable}" not found in any matching files for "${fileUri}".`);
             return null;
         }
 
@@ -901,6 +889,8 @@ class Agent {
             response.sub_problems.map(async (subProblem: any) => {
                 const { file_uri, invoke_variable, line_number } = subProblem.code_context;
 
+                console.log("Processing sub-problem:", subProblem);
+
                 // Use fuzzyMatchCode to get the most accurate file URI, line number, and full statement
                 const matchedCode = await this.fuzzyMatchCode(file_uri, line_number, invoke_variable);
 
@@ -926,7 +916,7 @@ class Agent {
                     edges: new Set(),
                     origins: []
                 };
-                this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, subProblem.tool, true);
+                this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, subProblem.tool, true, invoke_variable);
 
                 // Update `code_context` with matched details
                 subProblem.code_context.file_uri = matchedCode.fileUri;
@@ -1043,24 +1033,44 @@ class Agent {
             previousAnswerSections: { statement: string, references: string[] }[],
             newAnswerSections: { statement: string, references: string[] }[]
         ): string => {
-            // Helper to identify new sections
-            const isNewSection = (section: { statement: string, references: string[] }): boolean => {
-                return !previousAnswerSections.some(prevSection =>
-                    prevSection.statement === section.statement &&
-                    prevSection.references.sort().join(',') === section.references.sort().join(',')
+            // Helper to split text into sentences
+            const splitIntoSentences = (text: string): string[] => {
+                return text.split(/(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s+/); // Split by sentence-ending punctuation
+            };
+
+            const findUpdatedContent = (newStatement: string, previousStatements: string[]): string[] => {
+                const previousSentences = new Set(
+                    previousStatements.flatMap(prev => splitIntoSentences(prev))
+                );
+                const newSentences = splitIntoSentences(newStatement);
+
+                return newSentences.map(sentence =>
+                    previousSentences.has(sentence)
+                        ? sentence // Original sentence
+                        : `<span class="highlight-new">${sentence}</span>` // Highlighted sentence
                 );
             };
 
             return newAnswerSections.map((section) => {
-                const formattedReferences = section.references.map(ref =>
-                    `<span class="citation-ref" data-ref="${ref}">[${ref}]</span>`
-                ).join(' ');
+                const { statement, references } = section;
 
-                // Check if this section is new
-                const highlightClass = isNewSection(section) ? 'highlight-new' : '';
+                // Find matching previous sections for comparison
+                const matchingPreviousStatements = previousAnswerSections
+                    .filter(prevSection => prevSection.references.sort().join(',') === references.sort().join(','))
+                    .map(prevSection => prevSection.statement);
 
-                // Wrap the new content with a highlight class
-                return `<p class="${highlightClass}">${section.statement} ${formattedReferences}</p>`;
+                const updatedSentences = findUpdatedContent(statement, matchingPreviousStatements);
+
+                // Add references after each sentence
+                const sentencesWithReferences = updatedSentences.map((sentence, index) => {
+                    const reference = references[index]
+                        ? `<span class="citation-ref" data-ref="${references[index]}">[${references[index]}]</span>`
+                        : '';
+                    return `${sentence} ${reference}`.trim();
+                });
+
+                // Combine sentences into a paragraph
+                return `<p>${sentencesWithReferences.join(' ')}</p>`;
             }).join('');
         };
 
@@ -1116,11 +1126,11 @@ class Agent {
                 return false;
             }
 
-            // Check that the code context is not in exploredCodeLines
+            /* // Check that the code context is not in exploredCodeLines
             const isNotInExplored = !this._exploredCodeLines.some(
-                (line) => line.file_uri === code_context.file_uri && line.start_line <= code_context.line_number && line.end_line >= code_context.line_number
-            );
-            return isNotInExplored;
+                (line) => line.file_uri === code_context.file_uri && line.start_line <= code_context.line_number && line.end_line >= code_context.line_number 
+            ); */
+            return true;
         });
 
         return verifiedResults;

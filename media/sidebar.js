@@ -202,7 +202,29 @@ function setupToggleDetails(id, num) {
 }
 
 function updateStatus(status) {
-    document.getElementById('agent-status-text').innerText = status;
+    const statusText = document.getElementById('agent-status-text');
+
+    if (!statusText) return;
+
+    // Update text and class based on status
+    switch (status) {
+        case 'Searching':
+            statusText.textContent = 'Searching';
+            statusText.className = 'searching-status';
+            break;
+        case 'Paused':
+            statusText.textContent = 'Paused';
+            statusText.className = 'paused-status';
+            break;
+        case 'Stopped':
+        case 'Finished': // Treat both as "Finished"
+            statusText.textContent = 'Finished';
+            statusText.className = 'finished-status';
+            break;
+        default: // Default to "Idle"
+            statusText.textContent = 'Idle';
+            statusText.className = 'idle-status';
+    }
 }
 
 function updateCurrentTaskContent(html, id, num) {
