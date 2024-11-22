@@ -15,7 +15,17 @@ window.addEventListener('message', event => {
             updateCurrentTaskContent(message.html, message.id, message.num);
             break;
         case 'updatePreliminaryAnswer':
-            document.getElementById('preliminary-answer-text').innerHTML = message.answer;
+            const answerDiv = document.getElementById('preliminary-answer-text');
+
+            // De-highlight previous findings
+            const highlightedElements = answerDiv.querySelectorAll('.highlight-new');
+            highlightedElements.forEach(element => {
+                // Remove the highlight-new class
+                element.classList.remove('highlight-new');
+            });
+
+            // Prepend the new findings to the existing content
+            answerDiv.innerHTML = message.answer + answerDiv.innerHTML;
             break;
         case 'updateExplorationSummary':
             document.getElementById('exploration-summary').innerText = message.summary;

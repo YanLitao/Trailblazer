@@ -111,64 +111,19 @@ const task1JsonSchema = {
                         },
                         required: ["file_uri", "invoke_variable", "code_line", "full_statement"]
                     },
-                    num_results: { type: "integer" },
                     reason: { type: "string" }
                 },
-                required: ["sub_question", "tool", "code_context", "num_results", "reason"]
+                required: ["sub_question", "tool", "code_context", "reason"]
             }
         }
     },
     required: ["refined_question", "sub_problems"]
 };
 
-const task2JsonSchema = {
-    type: "object",
-    properties: {
-        questions_and_results: {
-            type: "array",
-            items: {
-                type: "object",
-                properties: {
-                    sub_question: { type: "string" },
-                    tool: { type: "integer" },
-                    code_context: {
-                        type: "object",
-                        properties: {
-                            file_uri: { type: "string" },
-                            invoke_variable: { type: "string" },
-                            code_line: { type: "string" },
-                            line_number: { type: "integer" },
-                            full_statement: { type: "string" }
-                        },
-                        required: ["file_uri", "invoke_variable", "code_line", "line_number", "full_statement"]
-                    },
-                    num_results: { type: "integer" },
-                    filtered_results: {
-                        type: "array",
-                        items: {
-                            type: "object",
-                            properties: {
-                                file_uri: { type: "string" },
-                                code_line: { type: "string" },
-                                line_number: { type: "integer" },
-                                full_statement: { type: "string" },
-                                explanation: { type: "string" },
-                                from_results: { type: "boolean" }
-                            },
-                            required: ["file_uri", "code_line", "line_number", "full_statement", "explanation", "from_results"]
-                        }
-                    }
-                },
-                required: ["sub_question", "filtered_results"]
-            }
-        }
-    },
-    required: ["questions_and_results"]
-};
-
 const task3JsonSchema = {
     type: "object",
     properties: {
+        final_decision_sufficient: { type: "boolean" },
         sub_problems: {
             type: "array",
             items: {
@@ -188,15 +143,14 @@ const task3JsonSchema = {
                         required: []
                     },
                     from_results: { type: "boolean" },
-                    num_results: { type: "integer" },
                     reason: { type: "string" }
                 },
-                required: ["sub_question", "tool", "from_results", "num_results", "reason"]
+                required: ["sub_question", "tool", "from_results", "reason"]
             }
         },
         next_step_summary: { type: "string" }
     },
-    required: ["sub_problems", "next_step_summary"]
+    required: ["final_decision_sufficient", "sub_problems", "next_step_summary"]
 };
 
 const task4JsonSchema = {
@@ -212,41 +166,14 @@ const task4JsonSchema = {
                     line_number: { type: "integer" },
                     full_statement: { type: "string" },
                     explanation: { type: "string" },    // Explanation of why this result is helpful
-                    relevance_score: { type: "integer" }
+                    relevance_score: { type: "integer" },
+                    finding: { type: "string" }
                 },
-                required: ["file_uri", "code_line", "line_number", "full_statement", "explanation", "relevance_score"]
+                required: ["file_uri", "code_line", "line_number", "full_statement", "explanation", "relevance_score", "finding"]
             }
         }
     },
     required: ["ranked_results"]
-};
-
-const task5JsonSchema = {
-    type: "object",
-    properties: {
-        answer_sections: {
-            type: "array",
-            items: {
-                type: "object",
-                properties: {
-                    statement: { type: "string" },
-                    references: {
-                        type: "array",
-                        items: { type: "string" } // Keys from importantResults, e.g., ["0", "1"]
-                    }
-                },
-                required: ["statement", "references"]
-            }
-        },
-        next_exploration_steps: {
-            type: "array",
-            items: {
-                type: "string" // Descriptions of what still needs exploration
-            }
-        },
-        final_decision_sufficient: { type: "boolean" }
-    },
-    required: ["answer_sections", "next_exploration_steps", "final_decision_sufficient"]
 };
 
 const task6JsonSchema = {
@@ -295,11 +222,7 @@ class Agent {
     private _importantResults: Array<{ file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }> = [];
     private _importantCodeSnippets = new Map<string, { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }>();
     private _newImportantCodeSnippets: Map<string, any> = new Map();
-    private _previousAnswerSections: Array<{ statement: string; references: string[] }> = [];
     private _fileExtensionsToExclude = ['.test.ts', '.spec.tsx', '.test.js', '.spec.js'];
-    private _primarySearchFolder: string = "";
-    private _secondarySearchFolder: string = "";
-    private _entireFolder: string = "";
 
     private _importantCodePaths: Map<string, Array<{ nodes: Node[], edges: (Edge | null)[] }>> = new Map();  // Map of nodeId to paths
 
@@ -339,7 +262,6 @@ class Agent {
         const document = await vscode.workspace.openTextDocument(uri);
         const fileUriString = uri.toString();
         const fileContent = document.getText();
-        this._defineSearchFolders(fileUriString);
 
         // Add the file content only if it hasn't been explored before
         if (!this._exploredFiles.some(file => file.file_uri === fileUriString)) {
@@ -365,6 +287,8 @@ class Agent {
 
         // Loop to explore sub-problems
         while (!sufficient && this._stepCounter < MAX_STEPS && !this.isStopped) {
+            // time each step
+            const startStep = new Date().getTime();
             if (!refinedOutput || !refinedOutput.sub_problems) {
                 console.error("Error: No sub-problems returned.");
                 break;
@@ -381,21 +305,21 @@ class Agent {
             const task2Results = await this.runTask2(refinedOutput.sub_problems);
 
             // Task 4: Decide the importance of results
-            const task4Results = await this.runTask4(task2Results);
-
-            // Task 5: Evaluate if the question is sufficiently answered and propose next steps
-            const task5Results = await this.runTask5();
+            const answerHtml = await this.runTask4(task2Results);
 
             // Task 3: Find code context for propose next steps
             // And Task 6: Find code context for unresolved sub-problems
-            const task3Output = await this.runTask3(task5Results);
+            const task3Output = await this.runTask3();
             refinedOutput = task3Output;
-            refinedOutput.final_decision_sufficient = task5Results.final_decision_sufficient;
-            refinedOutput.answer = task5Results.answer;
+            refinedOutput.final_decision_sufficient = task3Output.final_decision_sufficient;
+            refinedOutput.answer = answerHtml;
 
             this._updateStepResults(refinedOutput)
 
-            if (task5Results.final_decision_sufficient || refinedOutput.sub_problems.length === 0) {
+            const endStep = new Date().getTime();
+            console.log(`Step ${this._stepCounter} took ${endStep - startStep}ms`);
+
+            if (task3Output.final_decision_sufficient || refinedOutput.sub_problems.length === 0) {
                 break;
             }
         }
@@ -405,23 +329,6 @@ class Agent {
         if (this._stepCounter >= MAX_STEPS) {
             console.log("Reached maximum exploration steps.");
         }
-    }
-
-    private _defineSearchFolders(fileUri: string): void {
-        const fileDir = path.dirname(fileUri);
-
-        // Primary search folder is the direct folder where the file is located
-        this._primarySearchFolder = fileDir;
-
-        // Secondary search folder (one level up) - used to locate related modules
-        this._secondarySearchFolder = path.resolve(fileDir, '..');
-
-        // Entire folder - assumed to be two levels up for project boundary or directory like 'packages'
-        let projectFolder = path.resolve(this._secondarySearchFolder, '..');
-        while (projectFolder && !['packages', 'src'].some(dir => projectFolder.endsWith(dir))) {
-            projectFolder = path.dirname(projectFolder);
-        }
-        this._entireFolder = projectFolder;
     }
 
     async runTask1(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
@@ -496,11 +403,11 @@ class Agent {
     async runTask2(subProblems: any[]) {
         console.warn("Running Task 2");
 
-        const task2Input: any = {
+        /* const task2Input: any = {
             task: 2,
             refined_question: this._refined_question,
             questions_and_results: [] // Only includes sub-problems that need further filtering by the agent
-        };
+        }; */
 
         const task2Results: any[] = []; // Stores final results to display in the sidebar
 
@@ -590,7 +497,7 @@ class Agent {
                     startLine: result.line_number,
                     endLine: result.line_number, // Assuming single line, adjust if multiline
                     variables: new Set([variableName]),
-                    codeSnippet: result.code_line,
+                    codeSnippet: result.full_statement,
                     isPlace: false, // Result nodes are not invoking places
                     edges: new Set(),
                     origins: []
@@ -609,7 +516,7 @@ class Agent {
             });
 
             // Check if the number of results exceeds the threshold for agent involvement
-            if (results.length > subProblem.num_results) {
+            /* if (results.length > subProblem.num_results) {
                 task2Input.questions_and_results.push({
                     sub_question: subProblem.sub_question,
                     tool: subProblem.tool,
@@ -617,23 +524,23 @@ class Agent {
                     num_results: subProblem.num_results,
                     results: results
                 });
-            } else {
-                // If no agent involvement is needed, add the filtered results directly
-                task2Results.push({
-                    sub_question: subProblem.sub_question,
-                    tool: subProblem.tool,
-                    code_context: subProblem.code_context,
-                    num_results: results.length,
-                    filtered_results: results
-                });
-            }
+            } else { */
+            // If no agent involvement is needed, add the filtered results directly
+            // New code: directly append the results to the task2Results
+            task2Results.push({
+                sub_question: subProblem.sub_question,
+                tool: subProblem.tool,
+                code_context: subProblem.code_context,
+                filtered_results: results
+            });
+            /* } */
         }
 
         // If any sub-questions need agent filtering, call the agent
-        if (task2Input.questions_and_results.length > 0) {
+        /* if (task2Input.questions_and_results.length > 0) {
             const agentResults = await this._callAgentAPI(task2Input, 2, task2JsonSchema);
             this._processAgentResults(JSON.parse(agentResults), task2Results);
-        }
+        } */
 
         // Update the sidebar with the final Task 2 results
         this._sidebarViewProvider.addTask2Results({ questions_and_results: task2Results });
@@ -674,7 +581,7 @@ class Agent {
     }
 
     // Helper function to process agent results and integrate them into task2Results
-    private _processAgentResults(agentResults: any, task2Results: any[]) {
+    /* private _processAgentResults(agentResults: any, task2Results: any[]) {
         if (Array.isArray(agentResults.questions_and_results)) {
             for (const subProblem of agentResults.questions_and_results) {
                 if (subProblem && "results" in subProblem) {
@@ -690,7 +597,7 @@ class Agent {
             }
             task2Results.push(agentResults.questions_and_results);
         }
-    }
+    } */
 
     // Helper function to add or update explored code lines
     private _addOrUpdateExploredCodeLines(fileUri: string, lineNumber: number, fullStatement: string, subProblem: any) {
@@ -736,9 +643,9 @@ class Agent {
             return !this._fileExtensionsToExclude.some(ext => fileUri.includes(ext));
         });
 
-        const primaryResults: any[] = [];
+        /* const primaryResults: any[] = [];
         const secondaryResults: any[] = [];
-        const entireResults: any[] = [];
+        const entireResults: any[] = []; */
 
         for (const location of filteredLocations) {
             const lineNumber = location instanceof vscode.Location ? location.range.start.line : (location as vscode.LocationLink).targetRange.start.line;
@@ -759,18 +666,19 @@ class Agent {
             this._addOrUpdateExploredCodeLines(fileUri, lineNumber, fullStatement, subProblem);
             this._addToExploredFiles(vscode.Uri.parse(fileUri), document);
 
-            // Categorize based on folder priority
+            /* // Categorize based on folder priority
             if (fileUri.startsWith(this._primarySearchFolder)) {
                 primaryResults.push(result);
             } else if (fileUri.startsWith(this._secondarySearchFolder)) {
                 secondaryResults.push(result);
             } else if (fileUri.startsWith(this._entireFolder)) {
                 entireResults.push(result);
-            }
+            } */
+            results.push(result);
         }
 
         // Build final results based on folder priority and num_results constraint
-        results.push(...primaryResults);
+        /* results.push(...primaryResults);
         if (subProblem.num_results && results.length >= subProblem.num_results) {
             return results.slice(0, subProblem.num_results);
         }
@@ -783,13 +691,13 @@ class Agent {
         results.push(...entireResults);
         if (subProblem.num_results && results.length >= subProblem.num_results) {
             return results.slice(0, subProblem.num_results);
-        }
+        } */
 
         // Return all results if they are still below num_results
         return results;
     }
 
-    async runTask3(task5Results: any) {
+    async runTask3() {
         console.warn("Running Task 3");
 
         const cleanExplorationHistory = {
@@ -800,8 +708,7 @@ class Agent {
         const inputJson = {
             task: 3,
             refined_question: this._refined_question ?? "",
-            exploration_history: cleanExplorationHistory,
-            next_exploration_steps: task5Results?.next_exploration_steps ?? []
+            exploration_history: cleanExplorationHistory
         };
 
         const response = await this._callAgentAPI(inputJson, 3, task3JsonSchema);
@@ -889,8 +796,6 @@ class Agent {
             response.sub_problems.map(async (subProblem: any) => {
                 const { file_uri, invoke_variable, line_number } = subProblem.code_context;
 
-                console.log("Processing sub-problem:", subProblem);
-
                 // Use fuzzyMatchCode to get the most accurate file URI, line number, and full statement
                 const matchedCode = await this.fuzzyMatchCode(file_uri, line_number, invoke_variable);
 
@@ -934,18 +839,18 @@ class Agent {
         return response;
     }
 
-    async runTask4(task2Results: any[]): Promise<void> {
+    async runTask4(task2Results: any[]): Promise<string> {
         console.warn("Running Task 4");
 
-        // Prepare input with refined question and results from task2
         const filteredResults = task2Results.flatMap(result =>
             result.filtered_results.map((res: { file_uri: string; line_number: number; code_line: string; full_statement: string }) => ({
                 file_uri: res.file_uri,
                 line_number: res.line_number,
                 code_line: res.code_line,
                 full_statement: res.full_statement,
-                explanation: "", // Default placeholder
-                relevance_score: 0 // Default placeholder
+                explanation: "",
+                relevance_score: 0,
+                findings: ""
             }))
         );
 
@@ -958,10 +863,9 @@ class Agent {
         const response = await this._callAgentAPI(inputJson, 4, task4JsonSchema);
         const task4Output = JSON.parse(response);
 
-        // Filter for only relevance score 3 results and remove duplicates before adding
         const highRelevanceResults = task4Output.ranked_results
             .filter((result: { relevance_score: number }) => result.relevance_score > 0)
-            .map((result: { relevance_score: number, code_line: string, line_number: number, explanation: string, file_uri: string }) => {
+            .map((result: any) => {
                 const verifiedCode = this._exploredCodeLines.find(
                     code =>
                         code.file_uri === result.file_uri &&
@@ -969,7 +873,6 @@ class Agent {
                         code.end_line >= result.line_number
                 );
 
-                // Only include results that match verified code in _exploredCodeLines
                 if (verifiedCode) {
                     return {
                         file_uri: verifiedCode.file_uri,
@@ -977,116 +880,57 @@ class Agent {
                         line_number: result.line_number,
                         full_statement: verifiedCode.code_snippet,
                         explanation: result.explanation,
-                        relevance_score: result.relevance_score
+                        relevance_score: result.relevance_score,
+                        finding: result.finding ?? result.explanation
                     };
                 }
             })
-            .filter(Boolean); // Remove any null results
+            .filter(Boolean);
 
-        const newResults = highRelevanceResults.filter((result: { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }) =>
-            !this._importantResults.some(r =>
-                r.file_uri === result!.file_uri &&
-                r.line_number === result!.line_number
-            )
-        );
+        let concatenatedHtml = '';
 
-        // Append only new unique results to _importantResults
-        this._importantResults.push(...newResults);
+        highRelevanceResults.forEach((result: any) => {
+            if (!result) return;
 
-        // Update _importantCodeSnippets with new unique results
-        newResults.forEach((result: { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }) => {
-            if (result.relevance_score === 3) {
+            const isNotInImportantResults = !this._importantResults.some(r =>
+                r.file_uri === result.file_uri &&
+                r.line_number === result.line_number
+            );
+
+            if (isNotInImportantResults) {
+                this._importantResults.push(result);
+            }
+
+            if (result.relevance_score > 0) {
                 const snippetKey = Array.from(this._importantCodeSnippets.entries()).find(
                     ([_, snippet]) =>
                         snippet.file_uri === result.file_uri &&
                         snippet.line_number === result.line_number
-                )?.[0] ?? this._importantCodeSnippets.size.toString(); // Use the existing key if it exists; otherwise, assign a new key
+                )?.[0] ?? this._importantCodeSnippets.size.toString();
 
                 this._importantCodeSnippets.set(snippetKey, result);
-                this._newImportantCodeSnippets.set(snippetKey, result); // Ensure consistent indexing
+                this._newImportantCodeSnippets.set(snippetKey, result);
+
+                concatenatedHtml += `
+                    <p>
+                        ${result.finding}
+                        <span class="citation-ref" data-ref="${snippetKey}">[${snippetKey}]</span>
+                    </p>
+                `;
+
+                const nodeId = `${result.file_uri}:${result.line_number}`;
+                const node = this._explorationGraph.getNode(nodeId);
+
+                if (node && !this._importantCodePaths.has(nodeId)) {
+                    const paths = this._explorationGraph.findShortestPathsToOrigins(nodeId);
+                    if (paths.length > 0) {
+                        this._importantCodePaths.set(nodeId, paths);
+                    }
+                }
             }
         });
-    }
 
-    async runTask5() {
-        console.warn("Running Task 5");
-
-        // Check if there are new _importantCodeSnippets
-        if (this._newImportantCodeSnippets.size === 0) {
-            console.log("No new important code snippets. Using the previous answer.");
-            return this._previousAnswerSections; // Return the previous answer
-        }
-
-        console.log(`New important code snippets found: ${Array.from(this._newImportantCodeSnippets.values())}`);
-
-        const inputJson = {
-            task: 5,
-            refined_question: this._refined_question ?? "",
-            prior_answers: this._previousAnswerSections,
-            important_results: Object.fromEntries(this._newImportantCodeSnippets) // Use synchronized indices
-        };
-
-        const response = await this._callAgentAPI(inputJson, 5, task5JsonSchema);
-        const task5Output = JSON.parse(response);
-
-        const constructAnswerString = (
-            previousAnswerSections: { statement: string, references: string[] }[],
-            newAnswerSections: { statement: string, references: string[] }[]
-        ): string => {
-            // Helper to split text into sentences
-            const splitIntoSentences = (text: string): string[] => {
-                return text.split(/(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s+/); // Split by sentence-ending punctuation
-            };
-
-            const findUpdatedContent = (newStatement: string, previousStatements: string[]): string[] => {
-                const previousSentences = new Set(
-                    previousStatements.flatMap(prev => splitIntoSentences(prev))
-                );
-                const newSentences = splitIntoSentences(newStatement);
-
-                return newSentences.map(sentence =>
-                    previousSentences.has(sentence)
-                        ? sentence // Original sentence
-                        : `<span class="highlight-new">${sentence}</span>` // Highlighted sentence
-                );
-            };
-
-            return newAnswerSections.map((section) => {
-                const { statement, references } = section;
-
-                // Find matching previous sections for comparison
-                const matchingPreviousStatements = previousAnswerSections
-                    .filter(prevSection => prevSection.references.sort().join(',') === references.sort().join(','))
-                    .map(prevSection => prevSection.statement);
-
-                const updatedSentences = findUpdatedContent(statement, matchingPreviousStatements);
-
-                // Add references after each sentence
-                const sentencesWithReferences = updatedSentences.map((sentence, index) => {
-                    const reference = references[index]
-                        ? `<span class="citation-ref" data-ref="${references[index]}">[${references[index]}]</span>`
-                        : '';
-                    return `${sentence} ${reference}`.trim();
-                });
-
-                // Combine sentences into a paragraph
-                return `<p>${sentencesWithReferences.join(' ')}</p>`;
-            }).join('');
-        };
-
-        const previousAnswerSections = this._previousAnswerSections || [];
-        const answerHtml = constructAnswerString(previousAnswerSections, task5Output.answer_sections);
-        this._previousAnswerSections = task5Output.answer_sections; // Update after generating the HTML
-
-        // Update the previous answer with the new output
-        this._previousAnswerSections = task5Output.answer_sections;
-
-        task5Output.answer = answerHtml;
-
-        // Clear _newImportantCodeSnippets after processing
-        this._newImportantCodeSnippets.clear();
-
-        return task5Output;
+        return concatenatedHtml;
     }
 
     async runTask6(unresolvedSubProblems: any[]) {
@@ -1137,24 +981,6 @@ class Agent {
     }
 
     private async _updateStepResults(refinedOutput: any) {
-
-        // Check each important code snippet and ensure its path is in _importantCodePaths
-        for (const [key, snippet] of this._importantCodeSnippets.entries()) {
-            if (snippet.relevance_score === 3) {
-                const nodeId = `${snippet.file_uri}:${snippet.line_number}`;
-                const node = this._explorationGraph.getNode(nodeId);
-
-                // Check if node is relevant and already has its path stored
-                if (node && !this._importantCodePaths.has(nodeId) &&
-                    node.startLine <= snippet.line_number && node.endLine >= snippet.line_number) {
-
-                    // Calculate the shortest paths for the relevant node and store them
-                    const paths = this._explorationGraph.findShortestPathsToOrigins(nodeId);
-                    this._importantCodePaths.set(nodeId, paths);
-                }
-            }
-        }
-
         // Update sidebar and graph visualization with refinedOutput and important code snippets
         this._sidebarViewProvider.addTask3Results(refinedOutput, this._importantCodeSnippets, this._importantCodePaths);
         this.updateGraphVisualization();
@@ -1189,78 +1015,80 @@ class Agent {
                 break;
             case 3:
                 taskInstructions = `
-                    Task 3: Based on the refined question and exploration history, propose additional sub-questions if further exploration is needed.
-                    
-                    Sub-Questions:
-                    - Generate sub-questions to continue the exploration of the refined question.
-                    - Ensure each sub-question can be answered with a single VSCode tool, either by exploring a code variable or structure relevant to the refined question.
+                    Task 3: Based on the refined question and exploration history, evaluate whether the current exploration sufficiently answers the question. If it is insufficient, propose additional sub-questions to guide further exploration.
+
+                    Evaluation:
+                    - Assess whether the current explored sub-questions and exploredCodeLines sufficiently address the refined question.
+                    - If sufficient, set "final_decision_sufficient" to true and do not propose new sub-questions.
+                    - If insufficient, set "final_decision_sufficient" to false and propose additional sub-questions to continue the exploration.
+
+                    Sub-Questions (if needed):
+                    - Generate sub-questions that target specific areas relevant to the refined question.
+                    - Ensure each sub-question can be answered with a single VSCode tool, either by exploring a code variable or structure.
                     - Avoid duplicating sub-questions from exploredSubQuestions.
 
                     For each sub-question:
-                    - First, search exploredCodeLines to identify an invoke_variable that has been previously explored:
+                    - Search exploredCodeLines to identify an invoke_variable that has been previously explored:
                         - If a relevant invoking location is found, complete the code_context fields (file_uri, invoke_variable, code_line, line_number, full_statement) for the sub-question and set "from_results" to true.
                         - If no invoking place is found, leave code_context empty and set "from_results" to false.
-                    - Specify a "reason" for each sub-question, clarifying the goal of exploration, and identify specific methods, patterns, or code structures needed to answer the refined question.
-                    - Set the appropriate tool for each sub-question from the following options:
+                    - Specify a "reason" for each sub-question, clarifying the goal of exploration and identifying specific methods, patterns, or code structures needed to answer the refined question.
+                    - Assign the appropriate tool for each sub-question from the following options:
                         - 0: Go to Definition
                         - 1: Find References
 
-                    Output format:
-                    - "sub_problems" should list sub-questions with their associated tools, contexts, and reasons.
-                    - Each sub-question in "sub_problems" must have a "from_results" field set to true if code_context is completed or false if it is left empty.
-                    - Provide a brief summary in "next_step_summary" based on "sub_problems" for suggested next steps.
+                    Output Format:
+                    {
+                        "final_decision_sufficient": true or false, // Whether the current exploration is sufficient
+                        "sub_problems": [ // List of additional sub-questions, if needed. Otherwise, an empty array.
+                            {
+                                "sub_question": "Describe the proposed sub-question...",
+                                "tool": 0 or 1, // The selected tool for exploration
+                                "code_context": {
+                                    "file_uri": "file URI if applicable",
+                                    "invoke_variable": "Variable to explore",
+                                    "code_line": "The line containing the invoke_variable",
+                                    "line_number": 123, // The line number
+                                    "full_statement": "Full statement from the code line"
+                                },
+                                "from_results": true or false, // Whether the code context is derived from exploredCodeLines
+                                "reason": "Clarify why this sub-question is needed"
+                            },
+                            ...
+                        ],
+                        "next_step_summary": "Brief summary of suggested next steps based on sub_problems, if applicable."
+                    }
                 `;
                 break;
             case 4:
                 taskInstructions = `
-                    Task 4: Rank the exploration results based on relevance to the refined question.
+                    Task 4: Rank the exploration results based on relevance to the refined question and summarize findings.
 
-                    For each result, assign a "relevance_score" from 0 to 3, where:
-                        - 0: Not relevant - Do not include in the selected results.
-                        - 1: Slightly relevant - The result has minor relevance but is unlikely to significantly help in answering the question.
-                        - 2: Moderately relevant - The result provides some useful context or partial insight related to the question.
-                        - 3: Highly relevant - The result is essential or very informative for answering the question.
+                    Assign a "relevance_score" of 0 or 1 to each result, where:
+                    - 0: Not relevant - The result is not useful or does not contribute to the understanding of the refined question. Exclude this result.
+                    - 1: Worth showing - The result contains valuable findings that provide meaningful insights for the programmer to understand the important aspects of the exploration.
                     
-                    For each result, provide an "explanation" of why it is helpful or how it contributes to understanding the question.
-                    
+                    For each result:
+                    - Provide an "explanation" of why it is helpful or how it contributes to understanding the question.
+                    - Summarize the finding in one sentence under the "finding" field. Use the structure: 
+                        "Function/Field/Variable ... + Verb + Function/Field/Variable ...", e.g., ".innerHTML sets the content of HTML as 'ABC'".
+                        Ensure the sentence is concise, informative, and clear.
+
                     Important: Do not modify the values of "file_uri", "code_line", "line_number", or "full_statement" for each result.
-                `;
-                break;
-            case 5:
-                taskInstructions = `
-                    Task 5: Incrementally update the preliminary answer based on the user's refined question and new important exploration results.
 
-                    Input:
-                    - The refined user question.
-                    - Prior segmented answers ("prior_answers") with statements and references summarizing the existing findings.
-                    - A collection of new relevant code snippets ("important_results") indexed by unique keys (e.g., "0", "1"). These indices correspond to the existing important code snippets and must be used consistently for traceability.
-
-                    Instructions:
-                    1. Update the prior answers in "prior_answers":
-                        - Add a new section for new findings from "important_results" with a statement summarizing the insight and referencing the snippet keys (e.g., ["3", "4"]).
-                        - Update existing sections to include new details or references if the new findings complement them.
-                        - Remove incorrect or obsolete information if new findings contradict existing statements.
-
-                    2. Reference Format:
-                        - Use snippet keys (e.g., "0", "1") to ensure traceability.
-
-                    3. Decision on Sufficiency:
-                        - Based on the updated "answer_sections" and "next_exploration_steps," set "final_decision_sufficient" to true if the answer sufficiently addresses the refined question. Otherwise, set it to false.
-
-                    Output Format:
+                    Output format:
                     {
-                        "answer_sections": [
+                        "ranked_results": [
                             {
-                                "statement": "Updated summary of a specific insight...",
-                                "references": ["3", "4"]
+                                "file_uri": "Original file URI",
+                                "line_number": 123, // Line number
+                                "code_line": "Original code line",
+                                "full_statement": "Original full statement",
+                                "relevance_score": 0 or 1,
+                                "explanation": "Explanation of why this result is helpful",
+                                "finding": "One-sentence summary of the result in the specified structure"
                             },
                             ...
-                        ],
-                        "next_exploration_steps": [
-                            "Description of an area that still needs exploration...",
-                            ...
-                        ],
-                        "final_decision_sufficient": true or false
+                        ]
                     }
                 `;
                 break;
@@ -1317,6 +1145,8 @@ class Agent {
             new HumanMessage(prompt)
         ];
 
+        // time the agent's response
+        const start = new Date().getTime();
         const result = await this._model.invoke(messages, {
             response_format: {
                 type: "json_schema",
@@ -1326,6 +1156,8 @@ class Agent {
                 }
             }
         });
+        const end = new Date().getTime();
+        console.log(`Task ${taskNumber} Response Time: ${end - start} ms`);
 
         const parser = new StringOutputParser();
         const response = await parser.invoke(result);

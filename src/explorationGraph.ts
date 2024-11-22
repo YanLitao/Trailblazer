@@ -245,7 +245,6 @@ export class ExplorationGraph {
     }
 
     private traversePathsFromNode(startId: string): Array<{ nodes: Node[], edges: Edge[] }> {
-        console.log(`Listing all upstream paths from ${startId}`);
 
         const startNode = this.getNode(startId);
         if (!startNode) {
@@ -298,8 +297,6 @@ export class ExplorationGraph {
         };
 
         traverse(startNode, [], []);
-
-        console.log(`Completed upstream path listing from ${startId}. Found paths:`, paths);
         return paths;
     }
 }

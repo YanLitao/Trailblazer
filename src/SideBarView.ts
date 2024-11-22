@@ -121,8 +121,24 @@ export class SidebarView implements vscode.WebviewViewProvider {
 
             const position = new vscode.Position(lineNumber, 0);
             const range = new vscode.Range(position, position);
+
+            // Reveal the range in the editor
             editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
             editor.selection = new vscode.Selection(position, position);
+
+            // Create a decoration type for highlighting the line
+            const highlightDecoration = vscode.window.createTextEditorDecorationType({
+                backgroundColor: 'rgba(255, 255, 0, 0.3)' // Yellow background with some transparency
+            });
+
+            // Apply the decoration to the line
+            const lineRange = new vscode.Range(lineNumber, 0, lineNumber, document.lineAt(lineNumber).range.end.character);
+            editor.setDecorations(highlightDecoration, [lineRange]);
+
+            // Optional: Clear the decoration after a delay
+            setTimeout(() => {
+                editor.setDecorations(highlightDecoration, []); // Clear the highlight
+            }, 5000); // Adjust the delay as needed (e.g., 5 seconds)
         } catch (error) {
             console.error(`Error opening file at line ${lineNumber}: `, error);
         }
@@ -469,7 +485,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 ? task3Output.final_decision_sufficient
                     ? `Final Answer: ${task3Output.answer}`
                     : `Preliminary Answer: ${task3Output.answer}`
-                : "No preliminary answer available";
+                : "";
 
             const nextStepSummary = task3Output.final_decision_sufficient
                 ? "Exploration completed."
@@ -604,7 +620,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
     }
 
     public async addTask4Results(importantCodeSnippets: Map<string, any>, importantCodePaths: Map<string, Array<{ nodes: Node[], edges: Edge[] }>>) {
-        const visibleLimit = 3; // Show this many results initially
+        const visibleLimit = 15; // Show this many results initially
         const score3Results = [...importantCodeSnippets.entries()].map(([index, result]) => ({ index, ...result }));
 
         const initialVisibleResults = score3Results.slice(0, visibleLimit);
@@ -659,7 +675,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 <p class="show-more-results" id="findings-show-more" onclick="toggleAdditionalInvocations('findings-show-more')">
                     ... also showing <strong>${remainingCount}</strong> other relevant snippets ...
                 </p>
-                <div id="findings-additional-results" style="display: none;">
+                <div id="findings-additional-invocations" style="display: none;">
             `;
 
             // Add hidden additional results with indices
@@ -680,14 +696,20 @@ export class SidebarView implements vscode.WebviewViewProvider {
 
     // Helper function to construct the HTML for paths
     private constructPathsHtml(paths: Array<{ nodes: Node[], edges: (Edge | null)[] }>): string {
-        console.log(paths);
+
         return paths.map((path, pathIndex) => {
             const pathHtml = path.nodes.map((node, nodeIndex) => {
                 const edge = path.edges[nodeIndex]; // Pair the current node with its corresponding edge
                 const tool = edge ? (edge.tool === 0 ? "Go to Definition" : "Find References") : "";
+                const invokingVariable = edge?.invokingVariable || "";
                 const toolInfo = edge
-                    ? `I used "<strong>${tool}</strong>" on "<strong>${edge.invokingVariable}</strong>" here:`
+                    ? `I used "<strong>${tool}</strong>" on "<strong>${invokingVariable}</strong>" here:`
                     : "That brought me to this snippet."; // If no edge or tool is available, leave it empty
+
+                // Highlight the invokingVariable in the node's codeSnippet
+                const highlightedCodeSnippet = invokingVariable
+                    ? this.highlightVariableInSnippet(node.codeSnippet, invokingVariable)
+                    : this.escapeHtml(node.codeSnippet);
 
                 return `
                     <div class="code-box">
@@ -696,7 +718,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                             <span class="tool-info">${toolInfo}</span>
                         </div>
                         <div class="code-wrapper" data-node-id="${node.fileUri}:${node.startLine}">
-                            <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(node.codeSnippet)}</code></pre>
+                            <pre class="line-numbers language-ts"><code class="language-ts">${highlightedCodeSnippet}</code></pre>
                         </div>
                     </div>
                 `;
@@ -708,6 +730,23 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 </div>
             `;
         }).join('');
+    }
+
+    /**
+     * Highlights a variable in the given code snippet.
+     * Escapes the code snippet for HTML safety and wraps the variable with a span for highlighting.
+     */
+    private highlightVariableInSnippet(codeSnippet: string, variable: string): string {
+        const escapedSnippet = this.escapeHtml(codeSnippet);
+        const variableRegex = new RegExp(`\\b${this.escapeForRegex(variable)}\\b`, 'g'); // Match whole word
+        return escapedSnippet.replace(variableRegex, `<span class="highlighted-variable">${variable}</span>`);
+    }
+
+    /**
+     * Escapes a string for safe use in a regular expression.
+     */
+    private escapeForRegex(str: string): string {
+        return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
     // Helper function to extract the file name from the URI
