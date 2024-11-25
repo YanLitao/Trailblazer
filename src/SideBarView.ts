@@ -208,7 +208,10 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     <p id="agent-status">
                         Status: <span id="agent-status-text" class="idle-status">Idle</span>
                     </p>
-                    <p id="preliminary-answer"><span id="preliminary-answer-text"></span></p>
+                    <p id="preliminary-answer">
+                        Findings:
+                        <span id="preliminary-answer-text"></span>
+                    </p>
                     <p>Snippets:</p>
                     <div id="findings"></div>
                     <p id="still-to-be-found">Still to be found: <span id="exploration-summary"></span></p>
@@ -484,7 +487,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
             const answerText = task3Output.answer
                 ? task3Output.final_decision_sufficient
                     ? `Final Answer: ${task3Output.answer}`
-                    : `Preliminary Answer: ${task3Output.answer}`
+                    : `${task3Output.answer}`
                 : "";
 
             const nextStepSummary = task3Output.final_decision_sufficient

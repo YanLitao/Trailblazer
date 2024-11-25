@@ -25,7 +25,7 @@ window.addEventListener('message', event => {
             });
 
             // Prepend the new findings to the existing content
-            answerDiv.innerHTML = message.answer + answerDiv.innerHTML;
+            answerDiv.innerHTML += message.answer;
             break;
         case 'updateExplorationSummary':
             document.getElementById('exploration-summary').innerText = message.summary;

@@ -222,8 +222,7 @@ class Agent {
     private _importantResults: Array<{ file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }> = [];
     private _importantCodeSnippets = new Map<string, { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }>();
     private _newImportantCodeSnippets: Map<string, any> = new Map();
-    private _fileExtensionsToExclude = ['.test.ts', '.spec.tsx', '.test.js', '.spec.js'];
-
+    private _fileExtensionsToExclude = ['.test.ts', '.spec.ts', '.test.tsx', '.spec.tsx', '.test.js', '.spec.js', '.test.jsx', '.spec.jsx', '.d.ts'];
     private _importantCodePaths: Map<string, Array<{ nodes: Node[], edges: (Edge | null)[] }>> = new Map();  // Map of nodeId to paths
 
     constructor(sidebarViewProvider: SidebarView) {
@@ -410,6 +409,7 @@ class Agent {
         }; */
 
         const task2Results: any[] = []; // Stores final results to display in the sidebar
+        const newtask2Results: any[] = [];
 
         for (const subProblem of subProblems) {
             const variableName = subProblem.code_context.invoke_variable;
@@ -533,6 +533,13 @@ class Agent {
                 code_context: subProblem.code_context,
                 filtered_results: results
             });
+
+            newtask2Results.push({
+                sub_question: subProblem.sub_question,
+                tool: subProblem.tool,
+                code_context: subProblem.code_context,
+                filtered_results: results
+            });
             /* } */
         }
 
@@ -545,7 +552,7 @@ class Agent {
         // Update the sidebar with the final Task 2 results
         this._sidebarViewProvider.addTask2Results({ questions_and_results: task2Results });
 
-        return task2Results;
+        return newtask2Results;
     }
 
     // Helper function to add document content to _exploredFiles if not already present
@@ -843,16 +850,25 @@ class Agent {
         console.warn("Running Task 4");
 
         const filteredResults = task2Results.flatMap(result =>
-            result.filtered_results.map((res: { file_uri: string; line_number: number; code_line: string; full_statement: string }) => ({
-                file_uri: res.file_uri,
-                line_number: res.line_number,
-                code_line: res.code_line,
-                full_statement: res.full_statement,
-                explanation: "",
-                relevance_score: 0,
-                findings: ""
-            }))
+            result.filtered_results
+                .filter((res: { file_uri: string; line_number: number }) =>
+                    !this._importantResults.some(r =>
+                        r.file_uri === res.file_uri &&
+                        r.line_number === res.line_number
+                    )
+                )
+                .map((res: { file_uri: string; line_number: number; code_line: string; full_statement: string }) => ({
+                    file_uri: res.file_uri,
+                    line_number: res.line_number,
+                    code_line: res.code_line,
+                    full_statement: res.full_statement,
+                    explanation: "",
+                    relevance_score: 0,
+                    findings: ""
+                }))
         );
+
+        console.log("Filtered results:", filteredResults.length);
 
         const inputJson = {
             task: 4,
@@ -912,7 +928,7 @@ class Agent {
                 this._newImportantCodeSnippets.set(snippetKey, result);
 
                 concatenatedHtml += `
-                    <p>
+                    <p class="highlight-new">
                         ${result.finding}
                         <span class="citation-ref" data-ref="${snippetKey}">[${snippetKey}]</span>
                     </p>
@@ -941,6 +957,11 @@ class Agent {
             explored_files: this._exploredFiles,
             unresolved_sub_problems: unresolvedSubProblems
         };
+
+        //log the token length of inputJson
+        const inputJsonString = JSON.stringify(inputJson);
+        const tokenLength = inputJsonString.split(/\s+/).length;
+        console.log("Task 6 input token length: ", tokenLength);
 
         const response = await this._callAgentAPI(inputJson, 6, task6JsonSchema);
 
