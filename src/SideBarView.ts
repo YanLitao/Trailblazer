@@ -36,7 +36,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
             enableScripts: true,
             localResourceRoots: [this._context.extensionUri]
         };
-
         // Initial content for the sidebar
         webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
@@ -662,6 +661,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     <div class="code-wrapper" data-node-id="${resultNodeId}">
                         <span class="code-index" data-ref="${result.index}">[${result.index}]</span>
                         <pre class="line-numbers language-ts"><code class="language-ts">${highlightedStatement}</code></pre>
+                        <a href="#" class="line-link" data-file-uri="${result.file_uri}" data-line="${result.line_number}">
+                            Open this code snippet in the editor.
+                        </a>
                         <div class="parent-node-info" style="display: none;">
                             <p>Paths:</p>
                             ${pathsHtml}
@@ -722,6 +724,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
                         </div>
                         <div class="code-wrapper" data-node-id="${node.fileUri}:${node.startLine}">
                             <pre class="line-numbers language-ts"><code class="language-ts">${highlightedCodeSnippet}</code></pre>
+                            <a href="#" class="line-link" data-file-uri="${node.fileUri}" data-line="${node.startLine}">
+                                Open this code snippet in the editor.
+                            </a>
                         </div>
                     </div>
                 `;

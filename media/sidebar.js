@@ -150,6 +150,8 @@ function appendFindingsHtml(html) {
             }
         });
     });
+
+    setupJumpToLine();
 }
 
 function appendPath(pathHtml, nodeId) {

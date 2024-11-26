@@ -3,9 +3,8 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
-import { getFileNameFromUri, getSurroundingCode, stripSingleLineIndentation, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, getDestructuringAssignment } from './codeContextUtils';
+import { getFileNameFromUri, getSurroundingCode, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, getDestructuringAssignment } from './codeContextUtils';
 import { ExplorationGraph, Node, Edge } from './explorationGraph';
-import * as path from 'path';
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
 
@@ -14,20 +13,24 @@ if (!API_KEY) {
 }
 
 export function activate(context: vscode.ExtensionContext) {
-    // Initialize the SidebarView and Agent with only the context
+    // Initialize the SidebarView and Agent
     const sidebarViewProvider = new SidebarView(context);
-    const agent = new Agent(sidebarViewProvider); // Instantiate Agent once here
+    const agent = new Agent(sidebarViewProvider);
 
     // Register the webview provider for the sidebar
     context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider(SidebarView.viewType, sidebarViewProvider)
+        vscode.window.registerWebviewViewProvider(
+            SidebarView.viewType, // Match with the "id" defined in package.json for the view
+            sidebarViewProvider
+        )
     );
 
     // Register the command to ask a question about code
-    const askQuestionDisposable = vscode.commands.registerCommand('search-copilot.helloWorld', () => {
-        askQuestionAboutCode(context, sidebarViewProvider, agent); // Pass the Agent instance
-    });
-    context.subscriptions.push(askQuestionDisposable);
+    context.subscriptions.push(
+        vscode.commands.registerCommand('search-copilot.askQuestion', () => {
+            askQuestionAboutCode(context, sidebarViewProvider, agent);
+        })
+    );
 
     // Register commands for pause, continue, and stop
     context.subscriptions.push(
@@ -44,6 +47,9 @@ export function activate(context: vscode.ExtensionContext) {
             vscode.window.showInformationMessage('Agent stopped.');
         })
     );
+
+    // Log a message to confirm activation
+    console.log('Search Copilot extension is now active!');
 }
 
 export async function getQuestion(code: string) {

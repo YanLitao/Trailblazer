@@ -14,8 +14,8 @@
   "contributes": {
     "commands": [
       {
-        "command": "search-copilot.helloWorld",
-        "title": "Hello World"
+        "command": "search-copilot.askQuestion",
+        "title": "Ask search copilot a question"
       }
     ],
     "viewsContainers": {
@@ -23,7 +23,7 @@
         {
           "id": "search-copilot-sidebar",
           "title": "Search Copilot",
-          "icon": ""
+          "icon": "resources/icon.svg"
         }
       ]
     },
