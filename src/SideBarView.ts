@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getSurroundingCode, stripSingleLineIndentation, alignCodeLeft } from './codeContextUtils';
+import { getSurroundingCode, stripLineIndentation, alignCodeLeft } from './codeContextUtils';
 import { Node, Edge } from './explorationGraph';
 
 const allowedTools = {
@@ -207,9 +207,16 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     <p id="agent-status">
                         Status: <span id="agent-status-text" class="idle-status">Idle</span>
                     </p>
+                    <div id="actions" style="display: flex; justify-content: space-around; padding: 10px;">
+                        <button id="continue-agent" class="action-btn">Continue</button>
+                        <button id="pause-agent" class="action-btn">Pause</button>
+                        <button id="stop-agent" class="action-btn">Stop</button>
+                        <button id="toggle-log" class="action-btn">See full log</button>
+                        <button id="save-pdf" class="action-btn">Save Log</button>
+                    </div>
                     <p id="preliminary-answer">
                         Findings:
-                        <span id="preliminary-answer-text"></span>
+                        <ul id="preliminary-answer-text"></ul>
                     </p>
                     <p>Snippets:</p>
                     <div id="findings"></div>
@@ -226,13 +233,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     <div id="current-task-content">
                     </div>
                 </div>
-                <div id="actions" style="display: flex; justify-content: space-around; padding: 10px;">
-                    <button id="continue-agent" class="action-btn">Continue</button>
-                    <button id="pause-agent" class="action-btn">Pause</button>
-                    <button id="stop-agent" class="action-btn">Stop</button>
-                    <button id="toggle-log" class="action-btn">See full log</button>
-                    <button id="save-pdf" class="action-btn">Save Log</button>
-                </div>
                 <div id="graph-container" style="width: 100%; height: 400px;"></div>
                 <div id="exploration-steps" style="display:none;">
                     <div class="task">
@@ -246,7 +246,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                                 </a>:
                             </p>
                             <div class="code-box">
-                                <pre class="line-numbers language-ts"><code class="language-ts">${stripSingleLineIndentation(this._selectedCode)}</code></pre>
+                                <pre class="line-numbers language-ts"><code class="language-ts">${stripLineIndentation(this._selectedCode)}</code></pre>
                             </div>
                         </div>
                 </div> <!-- This div will hold all exploration steps --> 
@@ -295,7 +295,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                             </a></strong>:
                         </p>
                         <div class="code-box">
-                            <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(contextText))}</code></pre>
+                            <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(contextText)}</code></pre>
                         </div>
                         <p class="code-info"><strong>Purpose:</strong> ${firstSubProblem.reason}</p>
                     </div>
@@ -327,7 +327,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                                     </a></strong>:
                                 </p>
                                 <div class="code-box">
-                                    <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(otherContextText))}</code></pre>
+                                    <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(otherContextText)}</code></pre>
                                 </div>
                                 <p class="code-info"><strong>Purpose:</strong> ${subProblem.reason}</p>
                             </div>
@@ -357,7 +357,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                                 </a></strong>:
                             </p>
                             <div class="code-box">
-                                <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(codeContext.full_statement))}</code></pre>
+                                <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(codeContext.full_statement)}</code></pre>
                             </div>
                         </div>
                     `;
@@ -427,7 +427,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                         <div id="${uniqueId}-sub-question-${i}" class="task-details" style="display: none">
                             <p class="before-hide"><strong>Sub-question:</strong> ${result.sub_question}</p>
                             <div class="code-box">
-                                <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(codeLine))}</code></pre>
+                                <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(codeLine)}</code></pre>
                             </div>
                             <p class="code-info">Found <strong>${result.filtered_results.length}</strong> results:</p>
                             <div class="filtered-results">
@@ -483,17 +483,25 @@ export class SidebarView implements vscode.WebviewViewProvider {
             var i = -1;
 
             // Update the preliminary answer text in the webview
-            const answerText = task3Output.answer
-                ? task3Output.final_decision_sufficient
-                    ? `Final Answer: ${task3Output.answer}`
-                    : `${task3Output.answer}`
-                : "";
+            let answerText = "";
+            if (task3Output.answer) {
+                if (task3Output.final_decision_sufficient) {
+                    answerText = task3Output.answer;
+                } else {
+                    if (importantCodeSnippets && importantCodePaths) {
+                        answerText = task3Output.answer;
+                    }
+                }
+            }
 
             const nextStepSummary = task3Output.final_decision_sufficient
                 ? "Exploration completed."
                 : (task3Output.next_step_summary || "Exploration completed.");
 
-            const findingsHtml = await this.addTask4Results(importantCodeSnippets, importantCodePaths);
+            let findingsHtml = "";
+            if (importantCodeSnippets && importantCodePaths) {
+                findingsHtml = await this.addTask4Results(importantCodeSnippets, importantCodePaths);
+            }
 
             // Generate HTML for exploration steps
             let explorationStepsHtml = `
@@ -532,7 +540,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                                     </a></strong>:
                                 </p>
                                 <div class="code-box">
-                                    <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(contextText))}</code></pre>
+                                    <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(contextText)}</code></pre>
                                 </div>
                             </div>
                         </div>
@@ -566,7 +574,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                             </a></strong>:
                         </p>
                         <div class="code-box">
-                            <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(contextText))}</code></pre>
+                            <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(contextText)}</code></pre>
                         </div>
                         <p class="code-info"><strong>Why to explore:</strong> ${firstSubProblem.reason}</p>
                     </div>
@@ -598,7 +606,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                                     </a></strong>:
                                 </p>
                                 <div class="code-box">
-                                    <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(stripSingleLineIndentation(otherCodeContext.full_statement))}</code></pre>
+                                    <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(otherCodeContext.full_statement)}</code></pre>
                                 </div>
                                 <p class="code-info"><strong>Why to explore:</strong> ${subProblem.reason}</p>
                             </div>
@@ -645,11 +653,10 @@ export class SidebarView implements vscode.WebviewViewProvider {
 
             // Extract the subset of lines and join them into a truncated statement
             const truncatedStatement = lines.slice(startLine, endLine + 1).join('\n');
-
             // Highlight the code_line within the truncated statement
             let highlightedStatement = truncatedStatement.replace(
                 result.code_line,
-                `<span class="highlighted-code">${this.escapeHtml(result.code_line)}</span>`
+                `<span class="highlighted-code">${result.code_line}</span>`
             );
 
             // Retrieve paths for the current node and generate HTML for each path
@@ -660,9 +667,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 <div class="code-box">
                     <div class="code-wrapper" data-node-id="${resultNodeId}">
                         <span class="code-index" data-ref="${result.index}">[${result.index}]</span>
-                        <pre class="line-numbers language-ts"><code class="language-ts">${highlightedStatement}</code></pre>
+                        <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(highlightedStatement)}</code></pre>
                         <a href="#" class="line-link" data-file-uri="${result.file_uri}" data-line="${result.line_number}">
-                            Open this code snippet in the editor.
+                            open in editor.
                         </a>
                         <div class="parent-node-info" style="display: none;">
                             <p>Paths:</p>
@@ -725,7 +732,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                         <div class="code-wrapper" data-node-id="${node.fileUri}:${node.startLine}">
                             <pre class="line-numbers language-ts"><code class="language-ts">${highlightedCodeSnippet}</code></pre>
                             <a href="#" class="line-link" data-file-uri="${node.fileUri}" data-line="${node.startLine}">
-                                Open this code snippet in the editor.
+                                open in editor.
                             </a>
                         </div>
                     </div>
@@ -768,6 +775,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
 
     // Escape HTML to prevent XSS or code rendering issues
     private escapeHtml(unsafe: string): string {
+        unsafe = stripLineIndentation(unsafe);
         return unsafe
             .replace(/&/g, "&amp;")
             .replace(/</g, "&lt;")

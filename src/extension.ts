@@ -230,6 +230,7 @@ class Agent {
     private _newImportantCodeSnippets: Map<string, any> = new Map();
     private _fileExtensionsToExclude = ['.test.ts', '.spec.ts', '.test.tsx', '.spec.tsx', '.test.js', '.spec.js', '.test.jsx', '.spec.jsx', '.d.ts'];
     private _importantCodePaths: Map<string, Array<{ nodes: Node[], edges: (Edge | null)[] }>> = new Map();  // Map of nodeId to paths
+    private _updateFindings: boolean = false;
 
     constructor(sidebarViewProvider: SidebarView) {
         this._model = new ChatOpenAI({
@@ -292,8 +293,8 @@ class Agent {
 
         // Loop to explore sub-problems
         while (!sufficient && this._stepCounter < MAX_STEPS && !this.isStopped) {
-            // time each step
             const startStep = new Date().getTime();
+
             if (!refinedOutput || !refinedOutput.sub_problems) {
                 console.error("Error: No sub-problems returned.");
                 break;
@@ -309,17 +310,17 @@ class Agent {
             // Task 2: Explore sub-problems
             const task2Results = await this.runTask2(refinedOutput.sub_problems);
 
-            // Task 4: Decide the importance of results
-            const answerHtml = await this.runTask4(task2Results);
+            // Run Task 4 and Task 3 concurrently
+            const [answerHtml, task3Output] = await Promise.all([
+                this.runTask4(task2Results), // Task 4: Decide the importance of results
+                this.runTask3()             // Task 3: Propose next steps
+            ]);
 
-            // Task 3: Find code context for propose next steps
-            // And Task 6: Find code context for unresolved sub-problems
-            const task3Output = await this.runTask3();
             refinedOutput = task3Output;
             refinedOutput.final_decision_sufficient = task3Output.final_decision_sufficient;
             refinedOutput.answer = answerHtml;
 
-            this._updateStepResults(refinedOutput)
+            this._updateStepResults(refinedOutput);
 
             const endStep = new Date().getTime();
             console.log(`Step ${this._stepCounter} took ${endStep - startStep}ms`);
@@ -613,7 +614,7 @@ class Agent {
     } */
 
     // Helper function to add or update explored code lines
-    private _addOrUpdateExploredCodeLines(fileUri: string, lineNumber: number, fullStatement: string, subProblem: any) {
+    private _addOrUpdateExploredCodeLines(fileUri: string, lineNumber: number, fullStatement: string) {
         const linesInStatement = fullStatement.split('\n');
         const endLineOfStatement = lineNumber + linesInStatement.length - 1;
 
@@ -638,7 +639,7 @@ class Agent {
             // If there's an overlap, extend the existing node if necessary
             existingCode.start_line = Math.min(existingCode.start_line, lineNumber);
             existingCode.end_line = Math.max(existingCode.end_line, endLineOfStatement);
-            existingCode.code_snippet = `${existingCode.code_snippet}\n${fullStatement}`.trim();
+            existingCode.code_snippet = fullStatement.trim(); // this line has a problem
         }
     }
 
@@ -676,7 +677,7 @@ class Agent {
             };
 
             // Add or update the explored code lines and files
-            this._addOrUpdateExploredCodeLines(fileUri, lineNumber, fullStatement, subProblem);
+            this._addOrUpdateExploredCodeLines(fileUri, lineNumber, fullStatement);
             this._addToExploredFiles(vscode.Uri.parse(fileUri), document);
 
             /* // Categorize based on folder priority
@@ -874,8 +875,6 @@ class Agent {
                 }))
         );
 
-        console.log("Filtered results:", filteredResults.length);
-
         const inputJson = {
             task: 4,
             refined_question: this._refined_question ?? "",
@@ -934,10 +933,10 @@ class Agent {
                 this._newImportantCodeSnippets.set(snippetKey, result);
 
                 concatenatedHtml += `
-                    <p class="highlight-new">
+                    <li class="highlight-new finding-summary">
                         ${result.finding}
                         <span class="citation-ref" data-ref="${snippetKey}">[${snippetKey}]</span>
-                    </p>
+                    </li>
                 `;
 
                 const nodeId = `${result.file_uri}:${result.line_number}`;
@@ -952,6 +951,12 @@ class Agent {
             }
         });
 
+        if (highRelevanceResults.length > 0 && concatenatedHtml.length > 0) {
+            this._updateFindings = true;
+        } else {
+            this._updateFindings = false;
+        }
+
         return concatenatedHtml;
     }
 
@@ -963,11 +968,6 @@ class Agent {
             explored_files: this._exploredFiles,
             unresolved_sub_problems: unresolvedSubProblems
         };
-
-        //log the token length of inputJson
-        const inputJsonString = JSON.stringify(inputJson);
-        const tokenLength = inputJsonString.split(/\s+/).length;
-        console.log("Task 6 input token length: ", tokenLength);
 
         const response = await this._callAgentAPI(inputJson, 6, task6JsonSchema);
 
@@ -1009,7 +1009,11 @@ class Agent {
 
     private async _updateStepResults(refinedOutput: any) {
         // Update sidebar and graph visualization with refinedOutput and important code snippets
-        this._sidebarViewProvider.addTask3Results(refinedOutput, this._importantCodeSnippets, this._importantCodePaths);
+        if (this._updateFindings) {
+            this._sidebarViewProvider.addTask3Results(refinedOutput, this._importantCodeSnippets, this._importantCodePaths);
+        } else {
+            this._sidebarViewProvider.addTask3Results(refinedOutput, null, null);
+        }
         this.updateGraphVisualization();
     }
 

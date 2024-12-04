@@ -35,12 +35,34 @@ export async function getSurroundingCode(uri: vscode.Uri, startLine: number, end
     };
 }
 
-export function stripSingleLineIndentation(code: string): string {
-    // decide if the code is single line
-    if (code.includes('\n')) {
+export function stripLineIndentation(code: string): string {
+    // Split the code into lines
+    const lines = code.split('\n');
+
+    // Find the minimum indent by looking for the non-empty line with the least leading whitespace
+    let minIndent = Infinity;
+    for (let line of lines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine.length > 0) {
+            const match = line.match(/^\s*/);
+            const leadingWhitespace = match ? match[0].length : 0;
+            minIndent = Math.min(minIndent, leadingWhitespace);
+        }
+    }
+
+    // If there is no indent, we return the code as it is
+    if (minIndent === Infinity) {
         return code;
     }
-    return code.replace(/\s+/g, ' ').trim();
+
+    // Remove the indent from each line
+    const alignedLines = lines.map(line => line.startsWith(' '.repeat(minIndent)) || line.startsWith('\t'.repeat(minIndent))
+        ? line.slice(minIndent)
+        : line
+    );
+
+    // Join the lines back into a single string
+    return alignedLines.join('\n').replace(/\s+/g, ' ').trim();
 }
 
 export function getAccurateLineNumber(context: string, selectedCodeLine: string, fuzzyLineNum: number, contextStartLineNum: number): number | null {

@@ -18,11 +18,13 @@ window.addEventListener('message', event => {
             const answerDiv = document.getElementById('preliminary-answer-text');
 
             // De-highlight previous findings
-            const highlightedElements = answerDiv.querySelectorAll('.highlight-new');
-            highlightedElements.forEach(element => {
-                // Remove the highlight-new class
-                element.classList.remove('highlight-new');
-            });
+            if (message.answer) {
+                const highlightedElements = answerDiv.querySelectorAll('.highlight-new');
+                highlightedElements.forEach(element => {
+                    // Remove the highlight-new class
+                    element.classList.remove('highlight-new');
+                });
+            }
 
             // Prepend the new findings to the existing content
             answerDiv.innerHTML += message.answer;
@@ -134,6 +136,9 @@ function appendHtml(html, id, num) {
 
 function appendFindingsHtml(html) {
     // Append the HTML content to findings
+    if (!html) {
+        return;
+    }
     const findingsContainer = document.getElementById('findings');
     findingsContainer.innerHTML = html;
 
