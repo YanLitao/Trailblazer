@@ -485,18 +485,12 @@ export class SidebarView implements vscode.WebviewViewProvider {
             // Update the preliminary answer text in the webview
             let answerText = "";
             if (task3Output.answer) {
-                if (task3Output.final_decision_sufficient) {
-                    answerText = task3Output.answer;
-                } else {
-                    if (importantCodeSnippets && importantCodePaths) {
-                        answerText = task3Output.answer;
-                    }
-                }
+                answerText = task3Output.answer;
             }
 
             const nextStepSummary = task3Output.final_decision_sufficient
                 ? "Exploration completed."
-                : (task3Output.next_step_summary || "Exploration completed.");
+                : (task3Output.next_step_summary || "");
 
             let findingsHtml = "";
             if (importantCodeSnippets && importantCodePaths) {

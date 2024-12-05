@@ -182,6 +182,37 @@ const task4JsonSchema = {
     required: ["ranked_results"]
 };
 
+const task5JsonSchema = {
+    "type": "object",
+    "properties": {
+        "filtered_findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "snippetKey": {
+                        "type": "array",
+                        "items": {
+                            "type": "number"
+                        },
+                        "description": "Array of snippet keys referencing the finding"
+                    },
+                    "statement": {
+                        "type": "string",
+                        "description": "Consolidated or elided finding statement"
+                    },
+                    "outOfDate": {
+                        "type": "boolean",
+                        "description": "Marks if the finding is outdated or meaningless"
+                    }
+                },
+                "required": ["snippetKey", "statement", "outOfDate"]
+            }
+        }
+    },
+    "required": ["filtered_findings"]
+};
+
 const task6JsonSchema = {
     type: "object",
     properties: {
@@ -230,6 +261,7 @@ class Agent {
     private _newImportantCodeSnippets: Map<string, any> = new Map();
     private _fileExtensionsToExclude = ['.test.ts', '.spec.ts', '.test.tsx', '.spec.tsx', '.test.js', '.spec.js', '.test.jsx', '.spec.jsx', '.d.ts'];
     private _importantCodePaths: Map<string, Array<{ nodes: Node[], edges: (Edge | null)[] }>> = new Map();  // Map of nodeId to paths
+    private _findingsSummary: { snippetKey: number[], statement: string, outOfDate: boolean }[] = [];
     private _updateFindings: boolean = false;
 
     constructor(sidebarViewProvider: SidebarView) {
@@ -853,7 +885,7 @@ class Agent {
         return response;
     }
 
-    async runTask4(task2Results: any[]): Promise<string> {
+    async runTask4(task2Results: any[]) {
         console.warn("Running Task 4");
 
         const filteredResults = task2Results.flatMap(result =>
@@ -884,6 +916,7 @@ class Agent {
         const response = await this._callAgentAPI(inputJson, 4, task4JsonSchema);
         const task4Output = JSON.parse(response);
 
+        // Process high-relevance results
         const highRelevanceResults = task4Output.ranked_results
             .filter((result: { relevance_score: number }) => result.relevance_score > 0)
             .map((result: any) => {
@@ -908,8 +941,7 @@ class Agent {
             })
             .filter(Boolean);
 
-        let concatenatedHtml = '';
-
+        // Update important results and snippets
         highRelevanceResults.forEach((result: any) => {
             if (!result) return;
 
@@ -932,13 +964,6 @@ class Agent {
                 this._importantCodeSnippets.set(snippetKey, result);
                 this._newImportantCodeSnippets.set(snippetKey, result);
 
-                concatenatedHtml += `
-                    <li class="highlight-new finding-summary">
-                        ${result.finding}
-                        <span class="citation-ref" data-ref="${snippetKey}">[${snippetKey}]</span>
-                    </li>
-                `;
-
                 const nodeId = `${result.file_uri}:${result.line_number}`;
                 const node = this._explorationGraph.getNode(nodeId);
 
@@ -948,15 +973,112 @@ class Agent {
                         this._importantCodePaths.set(nodeId, paths);
                     }
                 }
+
+                // Add the finding to the summary list
+                this._findingsSummary.push({
+                    snippetKey: [parseInt(snippetKey)],
+                    statement: result.finding,
+                    outOfDate: false
+                });
             }
         });
 
-        if (highRelevanceResults.length > 0 && concatenatedHtml.length > 0) {
+        if (highRelevanceResults.length > 0) {
             this._updateFindings = true;
         } else {
             this._updateFindings = false;
         }
 
+        const task5Output = await this.runTask5();
+        return task5Output;
+    }
+
+    updateFindingsSummary = (newFindings: any[]): any[] => {
+        const updatedFindings: { snippetKey: number[], statement: string, outOfDate: boolean, isUpdated?: boolean }[] = []; // To store the updated findings with `isUpdated` key
+
+        // Match and compare existing findings
+        newFindings.forEach(newFinding => {
+            const existingFinding = this._findingsSummary.find(existing =>
+                JSON.stringify(existing.snippetKey.sort()) === JSON.stringify(newFinding.snippetKey.sort())
+            );
+
+            if (existingFinding) {
+                // Detect updates if the statement is different or the finding is not out of date
+                const isUpdated =
+                    existingFinding.statement !== newFinding.statement || !newFinding.outOfDate;
+
+                // Add the `isUpdated` key
+                updatedFindings.push({
+                    ...newFinding,
+                    isUpdated
+                });
+
+                // Update the existing finding
+                if (isUpdated) {
+                    existingFinding.statement = newFinding.statement;
+                    existingFinding.outOfDate = newFinding.outOfDate;
+                }
+            } else {
+                const isUpdated = !newFinding.outOfDate;
+                // Mark new findings as updated
+                updatedFindings.push({
+                    ...newFinding,
+                    isUpdated: isUpdated
+                });
+            }
+        });
+
+        // Sort the new findings by the smallest snippetKey
+        updatedFindings.sort((a, b) => Math.min(...a.snippetKey) - Math.min(...b.snippetKey));
+
+        // Update the findings summary without the `isUpdated` key
+        this._findingsSummary = updatedFindings.map(({ isUpdated, ...rest }) => rest);
+
+        // Return the updated findings with the `isUpdated` key
+        return updatedFindings;
+    };
+
+    async runTask5(): Promise<string> {
+        console.warn("Running Task 5");
+
+        const inputJson = {
+            task: 5,
+            refined_question: this._refined_question ?? "",
+            findings: this._findingsSummary
+        };
+
+        const response = await this._callAgentAPI(inputJson, 5, task5JsonSchema);
+        const task5Output = JSON.parse(response);
+
+        if (!task5Output || !task5Output.filtered_findings) {
+            console.error("Invalid output from Task 5.");
+            return "";
+        }
+
+        // Update `this._findingsSummary` and regenerate the findings HTML
+        const updatedFindings = this.updateFindingsSummary(task5Output.filtered_findings);
+
+        // Generate the updated HTML for the new findings list
+        let concatenatedHtml = "";
+
+        // Loop through the updated findings summary
+        updatedFindings.forEach((finding: any) => {
+            const snippetKeys = `[${finding.snippetKey.map((key: number) => `<span class="citation-ref" data-ref="${key}">${key}</span>`).join(", ")}]`;
+
+            // Determine the HTML structure based on `outOfDate` status
+            const statementHtml = finding.outOfDate
+                ? `<span class="additional-finding">[1 additional finding]</span>
+                    <span class="hidden-statement" style="display: none;">${snippetKeys} ${finding.statement}</span>`
+                : `${snippetKeys} ${finding.statement}`;
+
+            concatenatedHtml += `
+                <li class="${finding.isUpdated ? "highlight-new finding-summary" : "finding-summary"}">
+                    ${statementHtml}
+                </li>
+            `;
+        });
+
+        // Return or display the concatenated HTML for new findings
         return concatenatedHtml;
     }
 
@@ -1102,7 +1224,7 @@ class Agent {
                     - Provide an "explanation" of why it is helpful or how it contributes to understanding the question.
                     - Summarize the finding in one sentence under the "finding" field. Use the structure: 
                         "Function/Field/Variable ... + Verb + Function/Field/Variable ...", e.g., ".innerHTML sets the content of HTML as 'ABC'".
-                        Ensure the sentence is concise, informative, and clear.
+                        Ensure the sentence is concise, informative, and clear. Do not include a clause.
 
                     Important: Do not modify the values of "file_uri", "code_line", "line_number", or "full_statement" for each result.
 
@@ -1122,6 +1244,85 @@ class Agent {
                         ]
                     }
                 `;
+                break;
+            case 5:
+                taskInstructions = `
+                Task 5: Filter, consolidate, and refine findings based on the exploration results.
+
+                Input:
+                - A collection of findings, where each finding is associated with references (snippet keys).
+                - Findings may contain overlapping, outdated, or redundant information.
+                
+                Instructions:
+                1. **Filter Findings:**
+                   - Review all input findings.
+                   - Mark any finding that is outdated or meaningless as outOfDate: true.
+                   - Retain all findings in the output, even those marked as outOfDate.
+                
+                2. **Consolidate Findings:**
+                   - Combine findings that describe similar or related concepts **only if they follow the same structure**.
+                   - A structure is defined as a shared grammatical pattern or template (e.g., "XX sets width to XXpx" in the example below).
+                   - Consolidate findings by combining their snippet keys and creating a concise statement that adheres to the original structure. Do not introduce new grammatical patterns or combine findings with differing structures. Do not include any clauses in the consolidated statement.
+                   - For example:
+                     - Input:
+                       [
+                           {
+                               "snippetKey": [0],
+                               "statement": "'sm' sets width to 24px.",
+                               "outOfDate": false
+                           },
+                           {
+                               "snippetKey": [1],
+                               "statement": "'md' sets width to 48px.",
+                               "outOfDate": false
+                           },
+                           {
+                               "snippetKey": [2],
+                               "statement": "'lg' sets width to 72px.",
+                               "outOfDate": false
+                           }
+                       ]
+                     - Consolidated Output:
+                       {
+                           "snippetKey": [0, 1, 2],
+                           "statement": "'sm', 'md', 'lg' sets width to 24, 48, 72px.",
+                           "outOfDate": false
+                       }
+                
+                3. **Elide Findings:**
+                   - Mark findings as outOfDate: true if they are irrelevant to the refined_question, redundant, or do not contribute meaningful insight.
+                   - For example:
+                     - Input:
+                       {
+                           "snippetKey": [3],
+                           "statement": "size is used to set icon size.",
+                           "outOfDate": false
+                       }
+                     - Output:
+                       {
+                           "snippetKey": [3],
+                           "statement": "size is used to set icon size.",
+                           "outOfDate": true
+                       }
+                
+                4. **Output Requirements:**
+                   - Include all input findings in the output, either consolidated or retained as-is.
+                   - Use a single sentence for each statement, avoiding clauses except for listing.
+                   - Retain meaningful numbers or unique information in statement.
+                   - Ensure consolidated findings follow the shared structure of the input findings.
+                
+                Output Format:
+                {
+                    "filtered_findings": [
+                        {
+                            "snippetKey": ["array of snippet keys referencing the finding"],
+                            "statement": "Consolidated or original finding statement",
+                            "outOfDate": true or false
+                        },
+                        ...
+                    ]
+                }
+                    `;
                 break;
             case 6:
                 taskInstructions = `

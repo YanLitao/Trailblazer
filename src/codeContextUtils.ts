@@ -61,8 +61,8 @@ export function stripLineIndentation(code: string): string {
         : line
     );
 
-    // Join the lines back into a single string
-    return alignedLines.join('\n').replace(/\s+/g, ' ').trim();
+    // Join the lines back into a multiple-line string
+    return alignedLines.join('\n').trim();
 }
 
 export function getAccurateLineNumber(context: string, selectedCodeLine: string, fuzzyLineNum: number, contextStartLineNum: number): number | null {
@@ -172,17 +172,18 @@ export function preProcessCodeLine(subProblem: any, surroundingCode: string): st
 
 export async function getDestructuringAssignment(document: vscode.TextDocument, startLine: number): Promise<string> {
     const totalLines = document.lineCount;
-    let start = startLine;
-    let end = startLine;
 
-    // If the line contains ";", return the range of the line as is
-    if (document.lineAt(startLine).text.includes(';')) {
-        return document.lineAt(startLine).text;
-    }
+    // Helper: Check if a line starts a class or function definition
+    const isClassOrFunctionLine = (lineText: string): boolean => {
+        return /^\s*(class|function|.*=>)/.test(lineText.trim());
+    };
 
-    let openBracesCount = 0;
-    let foundStartBrace = false;
+    // Helper: Check if a line is part of a destructuring assignment
+    const isDestructuringLine = (lineText: string): boolean => {
+        return lineText.includes('=') && lineText.includes('{') && !isClassOrFunctionLine(lineText);
+    };
 
+    // Helper: Count braces in a line
     const countBraces = (lineText: string) => {
         let open = 0, close = 0;
         for (const char of lineText) {
@@ -192,41 +193,57 @@ export async function getDestructuringAssignment(document: vscode.TextDocument, 
         return { open, close };
     };
 
+    let start = startLine;
+    let openBracesCount = 0;
+    let foundStart = false;
+
+    // Backtrack to find the start of the relevant block
     while (start >= 0) {
         const lineText = document.lineAt(start).text;
+
+        if (isClassOrFunctionLine(lineText)) {
+            // If it's a class or function definition, return the line at startLine
+            return document.lineAt(startLine).text.trim();
+        }
+
         const { open, close } = countBraces(lineText);
         openBracesCount += open - close;
 
-        if (openBracesCount > 0 && lineText.includes('{')) {
-            foundStartBrace = true;
+        if (openBracesCount > 0 && isDestructuringLine(lineText)) {
+            foundStart = true;
             break;
         }
+
         start--;
     }
 
-    if (!foundStartBrace) {
-        return document.lineAt(startLine).text;
+    if (!foundStart) {
+        return document.lineAt(startLine).text.trim(); // Return the original line if no destructuring is found
     }
 
+    let end = start;
     openBracesCount = 0;
 
+    // Move forward to find the end of the destructuring block
     while (end < totalLines) {
         const lineText = document.lineAt(end).text;
         const { open, close } = countBraces(lineText);
         openBracesCount += open - close;
 
-        if (openBracesCount === 0 && lineText.includes('}')) {
+        if (openBracesCount === 0) {
             break;
         }
+
         end++;
     }
 
-    // Ensure the start and end lines are within the document bounds
+    // Ensure bounds are within the document
     start = Math.max(0, start);
     end = Math.min(totalLines - 1, end);
 
+    // Extract the range of the destructuring block
     const range = new vscode.Range(start, 0, end, document.lineAt(end).text.length);
-    return document.getText(range);
+    return document.getText(range).trim();
 }
 
 export function alignCodeLeft(code: string): string {

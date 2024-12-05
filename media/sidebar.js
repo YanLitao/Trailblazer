@@ -19,15 +19,17 @@ window.addEventListener('message', event => {
 
             // De-highlight previous findings
             if (message.answer) {
-                const highlightedElements = answerDiv.querySelectorAll('.highlight-new');
-                highlightedElements.forEach(element => {
-                    // Remove the highlight-new class
-                    element.classList.remove('highlight-new');
+                answerDiv.innerHTML = message.answer;
+                document.querySelectorAll('.additional-finding').forEach(finding => {
+                    finding.addEventListener('click', function () {
+                        const hiddenStatement = this.nextElementSibling;
+                        if (hiddenStatement) {
+                            hiddenStatement.style.display =
+                                hiddenStatement.style.display === 'none' ? 'block' : 'none';
+                        }
+                    });
                 });
             }
-
-            // Prepend the new findings to the existing content
-            answerDiv.innerHTML += message.answer;
             break;
         case 'updateExplorationSummary':
             document.getElementById('exploration-summary').innerText = message.summary;

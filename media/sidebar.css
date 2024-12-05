@@ -316,6 +316,10 @@ current-task {
     color: gray;
 }
 
+.additional-finding {
+    cursor: pointer;
+}
+
 #findings .code-box {
     display: block;
     padding: 0;
