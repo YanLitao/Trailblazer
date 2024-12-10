@@ -5,6 +5,7 @@ import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
 import { getFileNameFromUri, getSurroundingCode, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, getDestructuringAssignment } from './codeContextUtils';
 import { ExplorationGraph, Node, Edge } from './explorationGraph';
+import { analyze } from './localCodeContextAnalyzer';
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
 
@@ -535,7 +536,7 @@ class Agent {
                     fileUri: result.file_uri,
                     startLine: result.line_number,
                     endLine: result.line_number, // Assuming single line, adjust if multiline
-                    variables: new Set([variableName]),
+                    variables: new Set([result.variable]),
                     codeSnippet: result.full_statement,
                     isPlace: false, // Result nodes are not invoking places
                     edges: new Set(),
@@ -685,61 +686,49 @@ class Agent {
         // Filter locations to exclude unwanted file extensions
         const filteredLocations = locations.filter(location => {
             const fileUri = location instanceof vscode.Location ? location.uri.toString() : (location as vscode.LocationLink).targetUri.toString();
-            // if the string in the _fileExtensionsToExclude is found in the fileUri, exclude it
             return !this._fileExtensionsToExclude.some(ext => fileUri.includes(ext));
         });
 
-        /* const primaryResults: any[] = [];
-        const secondaryResults: any[] = [];
-        const entireResults: any[] = []; */
-
         for (const location of filteredLocations) {
             const lineNumber = location instanceof vscode.Location ? location.range.start.line : (location as vscode.LocationLink).targetRange.start.line;
-            const fileUri = location instanceof vscode.Location ? location.uri.toString() : (location as vscode.LocationLink).targetUri.toString();
+            const range = location instanceof vscode.Location ? location.range : location.targetRange;
+            const uri = location instanceof vscode.Location ? location.uri : location.targetUri;
+            const fileUri = uri.toString();
 
             // Open document to retrieve code content and statements
             const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(fileUri));
+            const variable = document.getText(range).trim(); // Extract variable from range
             const fullStatement = await getDestructuringAssignment(document, lineNumber);
 
-            const result = {
+            // Analyze the code context for relevant variables
+            const relevantVariables = await analyze(uri, lineNumber, variable);
+
+            // Construct the original result object
+            const baseResult = {
                 file_uri: fileUri,
                 line_number: lineNumber,
                 code_line: document.lineAt(lineNumber).text.trim(),
-                full_statement: fullStatement
+                full_statement: fullStatement,
+                variable: variable // Include extracted variable
             };
+            results.push(baseResult);
+
+            // Add each relevant variable as a separate result
+            relevantVariables.forEach((variableInfo: any) => {
+                results.push({
+                    file_uri: fileUri,
+                    line_number: variableInfo.lineNumber,
+                    code_line: document.lineAt(variableInfo.lineNumber).text.trim(),
+                    full_statement: fullStatement,
+                    variable: variableInfo.variable // Include the relevant variable
+                });
+            });
 
             // Add or update the explored code lines and files
             this._addOrUpdateExploredCodeLines(fileUri, lineNumber, fullStatement);
             this._addToExploredFiles(vscode.Uri.parse(fileUri), document);
-
-            /* // Categorize based on folder priority
-            if (fileUri.startsWith(this._primarySearchFolder)) {
-                primaryResults.push(result);
-            } else if (fileUri.startsWith(this._secondarySearchFolder)) {
-                secondaryResults.push(result);
-            } else if (fileUri.startsWith(this._entireFolder)) {
-                entireResults.push(result);
-            } */
-            results.push(result);
         }
 
-        // Build final results based on folder priority and num_results constraint
-        /* results.push(...primaryResults);
-        if (subProblem.num_results && results.length >= subProblem.num_results) {
-            return results.slice(0, subProblem.num_results);
-        }
-
-        results.push(...secondaryResults);
-        if (subProblem.num_results && results.length >= subProblem.num_results) {
-            return results.slice(0, subProblem.num_results);
-        }
-
-        results.push(...entireResults);
-        if (subProblem.num_results && results.length >= subProblem.num_results) {
-            return results.slice(0, subProblem.num_results);
-        } */
-
-        // Return all results if they are still below num_results
         return results;
     }
 

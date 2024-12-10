@@ -650,7 +650,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
             // Highlight the code_line within the truncated statement
             let highlightedStatement = truncatedStatement.replace(
                 result.code_line,
-                `<span class="highlighted-code">${result.code_line}</span>`
+                result.code_line
             );
 
             // Retrieve paths for the current node and generate HTML for each path
