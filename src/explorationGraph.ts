@@ -2,8 +2,7 @@
 export interface Node {
     id: string;                  // Unique ID (e.g., fileUri + startLine)
     fileUri: string;
-    startLine: number;
-    endLine: number;
+    lineNumber: number;
     variables: Set<string>;      // Variables in the statement (e.g., A, B, C)
     codeSnippet: string;         // Full statement as a code snippet
     isPlace: boolean;            // If true, the node is an invoking place
@@ -62,6 +61,9 @@ export class ExplorationGraph {
             } else {
                 // If no sourceId is provided, default to the node itself as the origin
                 nodeData.origins = [nodeId];
+                console.log("No sourceId provided for node", nodeId);
+                // log all existing node IDs
+                console.log("Node IDs:", Array.from(this.nodes.keys()));
             }
 
             this.nodes.set(nodeId, nodeData);
@@ -187,8 +189,7 @@ export class ExplorationGraph {
             nodes: Array.from(this.nodes.values()).map(node => ({
                 id: node.id,
                 fileUri: node.fileUri,
-                startLine: node.startLine,
-                endLine: node.endLine,
+                lineNumber: node.lineNumber,
                 isPlace: node.isPlace,
                 variables: Array.from(node.variables),
                 codeSnippet: node.codeSnippet

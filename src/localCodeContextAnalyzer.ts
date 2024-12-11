@@ -166,12 +166,12 @@ function removeComments(text: string): string {
     return text.replace(/\/\/.*|\/\*[\s\S]*?\*\//g, '');
 }
 
-// Function to traverse the AST and extract assignment details
-async function extractAssignments(
+// First part: Find assignment node text
+export async function findCompleteLineText(
     fileUri: vscode.Uri,
     lineNumber: number,
-    inputVariable: string
-): Promise<{ fileUri: string; lineNumber: number; variable: string }[]> {
+    assignmentFlag: boolean = false
+): Promise<string> {
     const document = await vscode.workspace.openTextDocument(fileUri);
     const fileContent = document.getText();
     const sourceFile = ts.createSourceFile(
@@ -183,17 +183,15 @@ async function extractAssignments(
     const rangeStart = getRangeStart(sourceFile, lineNumber);
     const rangeEnd = getRangeEnd(sourceFile, lineNumber);
 
-    function visit(node: ts.Node): { fileUri: string; lineNumber: number; variable: string }[] | null {
+    function visit(node: ts.Node): string {
         const start = node.getStart(sourceFile);
         const end = node.getEnd();
 
         // Check if the node overlaps with the specified range
         if (start <= rangeEnd && end >= rangeStart) {
             // Ensure the node contains a valid assignment (complete sentence with "=")
-            if (containsSingleCompleteSentence(node, sourceFile) && node.getText().includes('=')) {
-                const { left, right } = splitNodeByEqualSign(node.getText());
-                const results = processOtherSide(left, right, inputVariable, fileUri.toString(), lineNumber);
-                return results;
+            if (containsSingleCompleteSentence(node, sourceFile) && (!assignmentFlag || node.getText().includes('='))) {
+                return node.getText(sourceFile); // Return the text of the matching node
             }
         }
 
@@ -205,11 +203,35 @@ async function extractAssignments(
             }
         }
 
-        return null; // No valid results found
+        return ""; // No valid text found
     }
 
-    const results = visit(sourceFile) || [];
+    return visit(sourceFile);
+}
+
+// Second part: Process the assignment text
+function processAssignmentText(
+    nodeText: string,
+    inputVariable: string,
+    fileUri: string,
+    lineNumber: number
+): { fileUri: string; lineNumber: number; variable: string }[] {
+    const { left, right } = splitNodeByEqualSign(nodeText);
+    const results = processOtherSide(left, right, inputVariable, fileUri, lineNumber);
     return results;
+}
+
+// Combined function using both parts
+async function extractAssignments(
+    fileUri: vscode.Uri,
+    lineNumber: number,
+    inputVariable: string
+): Promise<{ fileUri: string; lineNumber: number; variable: string }[]> {
+    const assignmentText = await findCompleteLineText(fileUri, lineNumber, true);
+    if (assignmentText) {
+        return processAssignmentText(assignmentText, inputVariable, fileUri.toString(), lineNumber);
+    }
+    return [];
 }
 
 // Main function to parse the file and extract assignments

@@ -3,9 +3,9 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
-import { getFileNameFromUri, getSurroundingCode, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, getDestructuringAssignment } from './codeContextUtils';
+import { getFileNameFromUri, getSurroundingCode, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine } from './codeContextUtils';
 import { ExplorationGraph, Node, Edge } from './explorationGraph';
-import { analyze } from './localCodeContextAnalyzer';
+import { analyze, findCompleteLineText } from './localCodeContextAnalyzer';
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
 
@@ -253,7 +253,7 @@ class Agent {
     private _exploredVariables: any[] = [];
     private _exploredFiles: { file_uri: string, file_content: string }[] = []; // Simplified _exploredFiles
     private _exploredSubQuestions: string[] = [];
-    private _exploredCodeLines: { file_uri: string, start_line: number, end_line: number, code_snippet: string }[] = [];
+    private _exploredCodeLines: { file_uri: string, line_number: number, code_snippet: string }[] = [];
     private _explorationGraph: ExplorationGraph;
     private isPaused: boolean = false;     // Track if the agent is paused
     private isStopped: boolean = false;    // Track if the agent is stopped
@@ -312,12 +312,11 @@ class Agent {
 
         // Add the selected code into _exploredCodeLines
         const selectedCodeSnippet = document.getText(new vscode.Range(startLine, 0, endLine, document.lineAt(endLine).range.end.character));
-        this._exploredCodeLines.push({
-            file_uri: fileUriString,
-            start_line: startLine,
-            end_line: endLine,
-            code_snippet: selectedCodeSnippet
-        });
+        // add each line of the selected code snippet to _exploredCodeLines
+        const selectedCodeLines = selectedCodeSnippet.split('\n');
+        for (let i = 0; i < selectedCodeLines.length; i++) {
+            this._addOrUpdateExploredCodeLines(fileUriString, startLine + i, selectedCodeLines[i]);
+        }
 
         this._sidebarViewProvider.agentIsRunning();
 
@@ -350,6 +349,7 @@ class Agent {
             ]);
 
             refinedOutput = task3Output;
+            console.log(`matched task3Output: ${JSON.stringify(task3Output)}`);
             refinedOutput.final_decision_sufficient = task3Output.final_decision_sufficient;
             refinedOutput.answer = answerHtml;
 
@@ -409,7 +409,7 @@ class Agent {
 
                 if (accurateLineNumber !== null) {
                     subProblem.code_context.line_number = accurateLineNumber;
-                    const fullStatement = await getDestructuringAssignment(document, accurateLineNumber);
+                    const fullStatement = await findCompleteLineText(uri, accurateLineNumber);
                     subProblem.code_context.full_statement = fullStatement;
 
                     // Create a node for each sub-problem and mark it as an invoking place
@@ -417,8 +417,7 @@ class Agent {
                     const newNode: Node = {
                         id: nodeId,
                         fileUri: uri.toString(),
-                        startLine: accurateLineNumber,
-                        endLine: accurateLineNumber,
+                        lineNumber: accurateLineNumber,
                         variables: new Set([subProblem.code_context.invoke_variable]),
                         codeSnippet: fullStatement,
                         isPlace: true,  // Mark as invoking place
@@ -524,28 +523,6 @@ class Agent {
                 continue;
             }
 
-            // Process each result as a node in the exploration graph
-            const sourceId = `${subProblem.code_context.file_uri}:${subProblem.code_context.line_number}`;
-
-            results.forEach(result => {
-                const resultNodeId = `${result.file_uri}:${result.line_number}`;
-
-                // Create result node if it doesn't already exist in the graph
-                const resultNode: Node = {
-                    id: resultNodeId,
-                    fileUri: result.file_uri,
-                    startLine: result.line_number,
-                    endLine: result.line_number, // Assuming single line, adjust if multiline
-                    variables: new Set([result.variable]),
-                    codeSnippet: result.full_statement,
-                    isPlace: false, // Result nodes are not invoking places
-                    edges: new Set(),
-                    origins: []
-                };
-
-                this._explorationGraph.upsertNode(resultNodeId, resultNode, sourceId, this._stepCounter, subProblem.tool, false, variableName);
-            });
-
             // Add the variable and results to _exploredVariables
             this._exploredVariables.push({
                 invoke_variable: variableName,
@@ -647,32 +624,21 @@ class Agent {
     } */
 
     // Helper function to add or update explored code lines
-    private _addOrUpdateExploredCodeLines(fileUri: string, lineNumber: number, fullStatement: string) {
-        const linesInStatement = fullStatement.split('\n');
-        const endLineOfStatement = lineNumber + linesInStatement.length - 1;
+    private _addOrUpdateExploredCodeLines(fileUri: string, lineNumber: number, codeOfLine: string) {
 
         // Check if the line is already covered in an existing code line
         const existingCode = this._exploredCodeLines.find(
-            code => code.file_uri === fileUri &&
-                ((code.start_line <= lineNumber && code.end_line >= lineNumber) ||
-                    (code.start_line <= endLineOfStatement && code.end_line >= endLineOfStatement) ||
-                    (code.start_line >= lineNumber && code.end_line <= endLineOfStatement))
+            code => code.file_uri === fileUri && code.line_number == lineNumber
         );
 
         if (!existingCode) {
             // Add the new code to _exploredCodeLines if it's unique
             this._exploredCodeLines.push({
                 file_uri: fileUri,
-                start_line: lineNumber,
-                end_line: endLineOfStatement,
-                code_snippet: fullStatement
+                line_number: lineNumber,
+                code_snippet: codeOfLine
             });
 
-        } else {
-            // If there's an overlap, extend the existing node if necessary
-            existingCode.start_line = Math.min(existingCode.start_line, lineNumber);
-            existingCode.end_line = Math.max(existingCode.end_line, endLineOfStatement);
-            existingCode.code_snippet = fullStatement.trim(); // this line has a problem
         }
     }
 
@@ -698,7 +664,7 @@ class Agent {
             // Open document to retrieve code content and statements
             const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(fileUri));
             const variable = document.getText(range).trim(); // Extract variable from range
-            const fullStatement = await getDestructuringAssignment(document, lineNumber);
+            const fullStatement = await findCompleteLineText(uri, lineNumber);
 
             // Analyze the code context for relevant variables
             const relevantVariables = await analyze(uri, lineNumber, variable);
@@ -713,15 +679,51 @@ class Agent {
             };
             results.push(baseResult);
 
+            const sourceId = `${subProblem.code_context.file_uri}:${subProblem.code_context.line_number}`;
+            const resultNodeId = `${baseResult.file_uri}:${baseResult.line_number}`;
+            // Create result node if it doesn't already exist in the graph
+            const resultNode: Node = {
+                id: resultNodeId,
+                fileUri: baseResult.file_uri,
+                lineNumber: baseResult.line_number,
+                variables: new Set([baseResult.variable]),
+                codeSnippet: baseResult.full_statement,
+                isPlace: false, // Result nodes are not invoking places
+                edges: new Set(),
+                origins: []
+            };
+
+            this._explorationGraph.upsertNode(resultNodeId, resultNode, sourceId, this._stepCounter, subProblem.tool, false, subProblem.code_context.invoke_variable);
+
             // Add each relevant variable as a separate result
             relevantVariables.forEach((variableInfo: any) => {
+                const lineText = document.lineAt(variableInfo.lineNumber).text.trim();
                 results.push({
-                    file_uri: fileUri,
+                    file_uri: variableInfo.fileUri,
                     line_number: variableInfo.lineNumber,
-                    code_line: document.lineAt(variableInfo.lineNumber).text.trim(),
+                    code_line: lineText,
                     full_statement: fullStatement,
                     variable: variableInfo.variable // Include the relevant variable
                 });
+
+                this._addOrUpdateExploredCodeLines(fileUri, variableInfo.lineNumber, fullStatement);
+
+                const baseResultId = `${baseResult.file_uri}:${baseResult.line_number}`;
+                // Create result node if it doesn't already exist in the graph
+                const relevantResultNodeId = `${baseResult.file_uri}:${variableInfo.lineNumber}`;
+                const relevantResultNode: Node = {
+                    id: resultNodeId,
+                    fileUri: variableInfo.fileUri,
+                    lineNumber: variableInfo.line_number,
+                    variables: new Set([variableInfo.variable]),
+                    codeSnippet: lineText,
+                    isPlace: false, // Result nodes are not invoking places
+                    edges: new Set(),
+                    origins: []
+                };
+
+                this._explorationGraph.upsertNode(relevantResultNodeId, relevantResultNode, baseResultId, this._stepCounter, subProblem.tool, false, baseResult.variable);
+
             });
 
             // Add or update the explored code lines and files
@@ -762,7 +764,7 @@ class Agent {
                     file_uri: matchingCodeLine.file_uri,
                     invoke_variable: subProblem.invoke_variable,
                     code_line: matchingCodeLine.code_snippet,
-                    line_number: matchingCodeLine.start_line,
+                    line_number: matchingCodeLine.line_number,
                     full_statement: matchingCodeLine.code_snippet
                 };
                 subProblem.from_results = true;
@@ -808,7 +810,8 @@ class Agent {
         }
 
         // Step 3: Find the accurate line number using `getAccurateLineNumber`
-        const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(matchedFile.file_uri));
+        const uri = vscode.Uri.parse(matchedFile.file_uri);
+        const document = await vscode.workspace.openTextDocument(uri);
         const preciseLineNumber = getAccurateLineNumber(document.getText(), invokeVariable, lineNumber, 0);
         if (preciseLineNumber === null) {
             console.error(`Accurate line number for "${invokeVariable}" not found in "${matchedFile.file_uri}".`);
@@ -816,7 +819,7 @@ class Agent {
         }
 
         // Step 4: Retrieve the full code statement at the matched line
-        const fullStatement = await getDestructuringAssignment(document, preciseLineNumber);
+        const fullStatement = await findCompleteLineText(uri, preciseLineNumber);
 
         return {
             fileUri: matchedFile.file_uri,
@@ -842,14 +845,13 @@ class Agent {
 
                 // Step 4: Update the exploration graph with the new node as an invoking place
                 const nodeId = `${matchedCode.fileUri}:${matchedCode.lineNumber}`;
-                const fromResults = this._exploredCodeLines.some(code => code.file_uri === matchedCode.fileUri && code.start_line <= matchedCode.lineNumber && code.end_line >= matchedCode.lineNumber);
+                const fromResults = this._exploredCodeLines.some(code => code.file_uri === matchedCode.fileUri && code.line_number == matchedCode.lineNumber);
 
                 // Create a new node or update an existing one in the graph
                 const newNode: Node = {
                     id: nodeId,
                     fileUri: matchedCode.fileUri,
-                    startLine: matchedCode.lineNumber,
-                    endLine: matchedCode.lineNumber,
+                    lineNumber: matchedCode.lineNumber,
                     variables: new Set([invoke_variable]),
                     codeSnippet: matchedCode.fullStatement,
                     isPlace: true,
@@ -912,8 +914,7 @@ class Agent {
                 const verifiedCode = this._exploredCodeLines.find(
                     code =>
                         code.file_uri === result.file_uri &&
-                        code.start_line <= result.line_number &&
-                        code.end_line >= result.line_number
+                        code.line_number == result.line_number
                 );
 
                 if (verifiedCode) {

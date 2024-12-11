@@ -648,10 +648,10 @@ export class SidebarView implements vscode.WebviewViewProvider {
             // Extract the subset of lines and join them into a truncated statement
             const truncatedStatement = lines.slice(startLine, endLine + 1).join('\n');
             // Highlight the code_line within the truncated statement
-            let highlightedStatement = truncatedStatement.replace(
+            /* let highlightedStatement = truncatedStatement.replace(
                 result.code_line,
-                result.code_line
-            );
+                `<span class="highlighted-code-line">${result.code_line}</span>` // need to remove the span tag in the code snippet
+            ); */
 
             // Retrieve paths for the current node and generate HTML for each path
             const pathsHtml = this.constructPathsHtml(importantCodePaths.get(resultNodeId) || []);
@@ -661,7 +661,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 <div class="code-box">
                     <div class="code-wrapper" data-node-id="${resultNodeId}">
                         <span class="code-index" data-ref="${result.index}">[${result.index}]</span>
-                        <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(highlightedStatement)}</code></pre>
+                        <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(truncatedStatement)}</code></pre>
                         <a href="#" class="line-link" data-file-uri="${result.file_uri}" data-line="${result.line_number}">
                             open in editor.
                         </a>
@@ -723,9 +723,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
                             <span class="styled-index">${nodeIndex + 1}</span> <!-- 1-based indexing -->
                             <span class="tool-info">${toolInfo}</span>
                         </div>
-                        <div class="code-wrapper" data-node-id="${node.fileUri}:${node.startLine}">
+                        <div class="code-wrapper" data-node-id="${node.fileUri}:${node.lineNumber}">
                             <pre class="line-numbers language-ts"><code class="language-ts">${highlightedCodeSnippet}</code></pre>
-                            <a href="#" class="line-link" data-file-uri="${node.fileUri}" data-line="${node.startLine}">
+                            <a href="#" class="line-link" data-file-uri="${node.fileUri}" data-line="${node.lineNumber}">
                                 open in editor.
                             </a>
                         </div>
