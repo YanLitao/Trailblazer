@@ -3,9 +3,8 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
-import { getFileNameFromUri, getSurroundingCode, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine } from './codeContextUtils';
+import { getFileNameFromUri, getSurroundingCode, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, analyze, findCompleteLineText } from './codeContextUtils';
 import { ExplorationGraph, Node, Edge } from './explorationGraph';
-import { analyze, findCompleteLineText } from './localCodeContextAnalyzer';
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
 
@@ -128,36 +127,33 @@ const task1JsonSchema = {
 };
 
 const task3JsonSchema = {
-    type: "object",
-    properties: {
-        final_decision_sufficient: { type: "boolean" },
-        sub_problems: {
-            type: "array",
-            items: {
-                type: "object",
-                properties: {
-                    sub_question: { type: "string" },
-                    tool: { type: "integer" },
-                    code_context: {
-                        type: "object",
-                        properties: {
-                            file_uri: { type: "string" },
-                            invoke_variable: { type: "string" },
-                            code_line: { type: "string" },
-                            line_number: { type: "integer" },
-                            full_statement: { type: "string" }
+    "type": "object",
+    "properties": {
+        "final_decision_sufficient": { "type": "boolean" },
+        "evaluations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "file_uri": { "type": "string" },
+                    "line_number": { "type": "integer" },
+                    "valuable": { "type": "boolean" },
+                    "next_step": {
+                        "type": ["object", "null"],
+                        "properties": {
+                            "variable": { "type": "string" },
+                            "tool": { "type": "integer", "enum": [0, 1] },
+                            "reason": { "type": "string" }
                         },
-                        required: []
-                    },
-                    from_results: { type: "boolean" },
-                    reason: { type: "string" }
+                        "required": ["variable", "tool", "reason"]
+                    }
                 },
-                required: ["sub_question", "tool", "from_results", "reason"]
+                "required": ["file_uri", "line_number", "valuable", "next_step"]
             }
         },
-        next_step_summary: { type: "string" }
+        "next_step_summary": { "type": "string" }
     },
-    required: ["final_decision_sufficient", "sub_problems", "next_step_summary"]
+    "required": ["final_decision_sufficient", "evaluations", "next_step_summary"]
 };
 
 const task4JsonSchema = {
@@ -253,7 +249,7 @@ class Agent {
     private _exploredVariables: any[] = [];
     private _exploredFiles: { file_uri: string, file_content: string }[] = []; // Simplified _exploredFiles
     private _exploredSubQuestions: string[] = [];
-    private _exploredCodeLines: { file_uri: string, line_number: number, code_snippet: string }[] = [];
+    private _exploredCodeLines: { file_uri: string, start_line: number, end_line: number; code_snippet: string }[] = [];
     private _explorationGraph: ExplorationGraph;
     private isPaused: boolean = false;     // Track if the agent is paused
     private isStopped: boolean = false;    // Track if the agent is stopped
@@ -310,14 +306,6 @@ class Agent {
             });
         }
 
-        // Add the selected code into _exploredCodeLines
-        const selectedCodeSnippet = document.getText(new vscode.Range(startLine, 0, endLine, document.lineAt(endLine).range.end.character));
-        // add each line of the selected code snippet to _exploredCodeLines
-        const selectedCodeLines = selectedCodeSnippet.split('\n');
-        for (let i = 0; i < selectedCodeLines.length; i++) {
-            this._addOrUpdateExploredCodeLines(fileUriString, startLine + i, selectedCodeLines[i]);
-        }
-
         this._sidebarViewProvider.agentIsRunning();
 
         // Task 1: Refine the question and identify sub-problems
@@ -349,7 +337,6 @@ class Agent {
             ]);
 
             refinedOutput = task3Output;
-            console.log(`matched task3Output: ${JSON.stringify(task3Output)}`);
             refinedOutput.final_decision_sufficient = task3Output.final_decision_sufficient;
             refinedOutput.answer = answerHtml;
 
@@ -406,11 +393,11 @@ class Agent {
 
             if (codeLine) {
                 const accurateLineNumber = getAccurateLineNumber(surroundingCode, codeLine, subProblem.code_context.line_number, startContextLine);
-
                 if (accurateLineNumber !== null) {
                     subProblem.code_context.line_number = accurateLineNumber;
-                    const fullStatement = await findCompleteLineText(uri, accurateLineNumber);
-                    subProblem.code_context.full_statement = fullStatement;
+                    const { statementText, startLineNum, endLineNum } = await findCompleteLineText(uri, accurateLineNumber);
+                    subProblem.code_context.full_statement = statementText;
+                    this._addOrUpdateExploredCodeLines(uri.toString(), startLineNum, endLineNum, statementText);
 
                     // Create a node for each sub-problem and mark it as an invoking place
                     const nodeId = `${uri.toString()}:${accurateLineNumber}`;
@@ -419,7 +406,7 @@ class Agent {
                         fileUri: uri.toString(),
                         lineNumber: accurateLineNumber,
                         variables: new Set([subProblem.code_context.invoke_variable]),
-                        codeSnippet: fullStatement,
+                        codeSnippet: statementText,
                         isPlace: true,  // Mark as invoking place
                         edges: new Set(),
                         origins: [nodeId]
@@ -624,21 +611,21 @@ class Agent {
     } */
 
     // Helper function to add or update explored code lines
-    private _addOrUpdateExploredCodeLines(fileUri: string, lineNumber: number, codeOfLine: string) {
+    private _addOrUpdateExploredCodeLines(fileUri: string, startLine: number, endLine: number, fullStatement: string) {
 
         // Check if the line is already covered in an existing code line
         const existingCode = this._exploredCodeLines.find(
-            code => code.file_uri === fileUri && code.line_number == lineNumber
+            code => code.file_uri === fileUri && code.start_line == startLine && code.end_line == endLine
         );
 
         if (!existingCode) {
             // Add the new code to _exploredCodeLines if it's unique
             this._exploredCodeLines.push({
                 file_uri: fileUri,
-                line_number: lineNumber,
-                code_snippet: codeOfLine
+                start_line: startLine,
+                end_line: endLine,
+                code_snippet: fullStatement
             });
-
         }
     }
 
@@ -664,7 +651,7 @@ class Agent {
             // Open document to retrieve code content and statements
             const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(fileUri));
             const variable = document.getText(range).trim(); // Extract variable from range
-            const fullStatement = await findCompleteLineText(uri, lineNumber);
+            const { statementText, startLineNum, endLineNum } = await findCompleteLineText(uri, lineNumber);
 
             // Analyze the code context for relevant variables
             const relevantVariables = await analyze(uri, lineNumber, variable);
@@ -674,7 +661,7 @@ class Agent {
                 file_uri: fileUri,
                 line_number: lineNumber,
                 code_line: document.lineAt(lineNumber).text.trim(),
-                full_statement: fullStatement,
+                full_statement: statementText,
                 variable: variable // Include extracted variable
             };
             results.push(baseResult);
@@ -702,11 +689,9 @@ class Agent {
                     file_uri: variableInfo.fileUri,
                     line_number: variableInfo.lineNumber,
                     code_line: lineText,
-                    full_statement: fullStatement,
+                    full_statement: statementText,
                     variable: variableInfo.variable // Include the relevant variable
                 });
-
-                this._addOrUpdateExploredCodeLines(fileUri, variableInfo.lineNumber, fullStatement);
 
                 const baseResultId = `${baseResult.file_uri}:${baseResult.line_number}`;
                 // Create result node if it doesn't already exist in the graph
@@ -725,9 +710,7 @@ class Agent {
                 this._explorationGraph.upsertNode(relevantResultNodeId, relevantResultNode, baseResultId, this._stepCounter, subProblem.tool, false, baseResult.variable);
 
             });
-
-            // Add or update the explored code lines and files
-            this._addOrUpdateExploredCodeLines(fileUri, lineNumber, fullStatement);
+            this._addOrUpdateExploredCodeLines(fileUri, startLineNum, endLineNum, statementText);
             this._addToExploredFiles(vscode.Uri.parse(fileUri), document);
         }
 
@@ -737,51 +720,104 @@ class Agent {
     async runTask3() {
         console.warn("Running Task 3");
 
-        const cleanExplorationHistory = {
-            exploredSubQuestions: this._exploredSubQuestions,
-            exploredCodeLines: this._exploredCodeLines
-        };
-
         const inputJson = {
             task: 3,
             refined_question: this._refined_question ?? "",
-            exploration_history: cleanExplorationHistory
+            explored_code: this._exploredCodeLines
         };
 
         const response = await this._callAgentAPI(inputJson, 3, task3JsonSchema);
-        const task3Output = JSON.parse(response);
+        const agentOutput = JSON.parse(response);
 
-        const unresolvedSubProblems: any[] = [];
-
-        // Process sub-problems to either set code context or add to unresolved list
-        task3Output.sub_problems.forEach((subProblem: any) => {
-            const matchingCodeLine = this._exploredCodeLines.find(
-                line => line.code_snippet.includes(subProblem.invoke_variable)
-            );
-
-            if ("invoke_variable" in subProblem && subProblem.invoke_variable && matchingCodeLine) {
-                subProblem.code_context = {
-                    file_uri: matchingCodeLine.file_uri,
-                    invoke_variable: subProblem.invoke_variable,
-                    code_line: matchingCodeLine.code_snippet,
-                    line_number: matchingCodeLine.line_number,
-                    full_statement: matchingCodeLine.code_snippet
-                };
-                subProblem.from_results = true;
-            } else {
-                unresolvedSubProblems.push(subProblem);
-                // remove the subProblem from the task3Output
-                task3Output.sub_problems = task3Output.sub_problems.filter((sp: any) => sp.sub_question !== subProblem.sub_question);
-            }
-        });
-
-        // Run Task 6 if there are unresolved sub-problems
-        if (unresolvedSubProblems.length > 0) {
-            const task6Results = await this.runTask6(unresolvedSubProblems);
-            task3Output.sub_problems.push(...task6Results);
+        interface SubProblem {
+            sub_question: string;
+            tool: number;
+            code_context: {
+                file_uri: string;
+                invoke_variable: string;
+                code_line: string;
+                line_number: number;
+                full_statement: string;
+            };
+            from_results: boolean;
+            reason: string;
         }
-        const processedResponse = await this.postProcessResults(task3Output);
-        return processedResponse;
+
+        const task3Output: { sub_problems: SubProblem[], final_decision_sufficient: boolean, next_step_summary: string, answer: string } = {
+            sub_problems: [],
+            final_decision_sufficient: agentOutput.final_decision_sufficient,
+            next_step_summary: agentOutput.next_step_summary,
+            answer: ""
+        };
+
+        for (const item of agentOutput.evaluations) {
+            if (item.valuable && item.next_step) {
+
+                try {
+                    let full_statement = await findCompleteLineText(vscode.Uri.parse(item.file_uri), item.line_number);
+                    // get the line of code with the line_number and the file_uri
+                    const code_document = await vscode.workspace.openTextDocument(vscode.Uri.parse(item.file_uri));
+                    let codeLine = code_document.lineAt(item.line_number).text.trim();
+                    // check if the code line is not empty and variable is in the code line
+                    if (!codeLine || !codeLine.includes(item.next_step.variable)) {
+                        // find the accurate line number
+                        const accurateLineNumber = getAccurateLineNumber(code_document.getText(), item.next_step.variable, item.line_number, 0);
+                        if (accurateLineNumber !== null) {
+                            item.line_number = accurateLineNumber;
+                            full_statement = await findCompleteLineText(vscode.Uri.parse(item.file_uri), accurateLineNumber);
+                            codeLine = code_document.lineAt(accurateLineNumber).text.trim();
+                        }
+                    }
+                    const matchedCode = this._exploredCodeLines.find(
+                        code => code.file_uri === item.file_uri && (code.start_line <= item.line_number && code.end_line >= item.line_number)
+                    );
+
+                    // Determine if the result is from explored code or matched using fuzzy matching
+                    const from_results = !!matchedCode || !!(await this.fuzzyMatchCode(item.file_uri, item.line_number, item.next_step.variable));
+
+                    // add to nodes
+                    const nodeId = `${item.file_uri}:${item.line_number}`;
+
+                    // Create a new node or update an existing one in the graph
+                    const newNode: Node = {
+                        id: nodeId,
+                        fileUri: item.file_uri,
+                        lineNumber: item.line_number,
+                        variables: new Set([item.next_step.variable]),
+                        codeSnippet: codeLine,
+                        isPlace: true,
+                        edges: new Set(),
+                        origins: []
+                    };
+                    this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, item.next_step.tool, true, item.next_step.variable);
+
+                    let task3Item = {
+                        sub_question: "",
+                        tool: item.next_step.tool,
+                        code_context: {
+                            file_uri: item.file_uri,
+                            invoke_variable: item.next_step.variable,
+                            code_line: codeLine, // get the code line from the file
+                            line_number: item.line_number,
+                            full_statement: full_statement.statementText
+                        },
+                        from_results: from_results,
+                        reason: item.next_step.reason
+                    };
+                    task3Output.sub_problems.push(task3Item);
+                } catch (error) {
+                    console.error(`Error finding complete line text for ${item.file_uri}:${item.line_number}`);
+                }
+            }
+        }
+
+        // check the number of valuable results if it is greater than 0 when the final decision is not sufficient
+        if (task3Output.sub_problems.length == 0 && !task3Output.final_decision_sufficient) {
+            console.warn("No valuable results found in Task 3. Stopping the agent.");
+        }
+
+        console.log(`Task 3 Output: ${JSON.stringify(task3Output, null, 2)}`);
+        return task3Output;
     }
 
     private async fuzzyMatchCode(fileUri: string, lineNumber: number, invokeVariable: string): Promise<{ fileUri: string; lineNumber: number; fullStatement: string } | null> {
@@ -819,12 +855,12 @@ class Agent {
         }
 
         // Step 4: Retrieve the full code statement at the matched line
-        const fullStatement = await findCompleteLineText(uri, preciseLineNumber);
+        const { statementText, startLineNum, endLineNum } = await findCompleteLineText(uri, preciseLineNumber);
 
         return {
             fileUri: matchedFile.file_uri,
             lineNumber: preciseLineNumber,
-            fullStatement
+            fullStatement: statementText
         };
     }
 
@@ -845,7 +881,7 @@ class Agent {
 
                 // Step 4: Update the exploration graph with the new node as an invoking place
                 const nodeId = `${matchedCode.fileUri}:${matchedCode.lineNumber}`;
-                const fromResults = this._exploredCodeLines.some(code => code.file_uri === matchedCode.fileUri && code.line_number == matchedCode.lineNumber);
+                const fromResults = this._exploredCodeLines.some(code => code.file_uri === matchedCode.fileUri && code.start_line <= matchedCode.lineNumber && code.end_line >= matchedCode.lineNumber);
 
                 // Create a new node or update an existing one in the graph
                 const newNode: Node = {
@@ -914,7 +950,8 @@ class Agent {
                 const verifiedCode = this._exploredCodeLines.find(
                     code =>
                         code.file_uri === result.file_uri &&
-                        code.line_number == result.line_number
+                        code.start_line <= result.line_number &&
+                        code.end_line >= result.line_number
                 );
 
                 if (verifiedCode) {
@@ -1158,47 +1195,54 @@ class Agent {
                 break;
             case 3:
                 taskInstructions = `
-                    Task 3: Based on the refined question and exploration history, evaluate whether the current exploration sufficiently answers the question. If it is insufficient, propose additional sub-questions to guide further exploration.
+                    Task 3: Evaluate the explored code lines based on the refined question and determine the next steps for further exploration or provide the final answer if exploration is sufficient.
 
-                    Evaluation:
-                    - Assess whether the current explored sub-questions and exploredCodeLines sufficiently address the refined question.
-                    - If sufficient, set "final_decision_sufficient" to true and do not propose new sub-questions.
-                    - If insufficient, set "final_decision_sufficient" to false and propose additional sub-questions to continue the exploration.
+                    ### Instructions:
 
-                    Sub-Questions (if needed):
-                    - Generate sub-questions that target specific areas relevant to the refined question.
-                    - Ensure each sub-question can be answered with a single VSCode tool, either by exploring a code variable or structure.
-                    - Avoid duplicating sub-questions from exploredSubQuestions.
+                    1. **Input Evaluation**:
+                    - You are given a refined question and a list of explored code lines.
+                    - Assess whether the explored lines collectively provide a sufficient answer to the refined question.
 
-                    For each sub-question:
-                    - Search exploredCodeLines to identify an invoke_variable that has been previously explored:
-                        - If a relevant invoking location is found, complete the code_context fields (file_uri, invoke_variable, code_line, line_number, full_statement) for the sub-question and set "from_results" to true.
-                        - If no invoking place is found, leave code_context empty and set "from_results" to false.
-                    - Specify a "reason" for each sub-question, clarifying the goal of exploration and identifying specific methods, patterns, or code structures needed to answer the refined question.
-                    - Assign the appropriate tool for each sub-question from the following options:
-                        - 0: Go to Definition
-                        - 1: Find References
+                    2. **Output Requirements**:
+                    - If the explored lines are sufficient:
+                        - Set "final_decision_sufficient" to true.
+                        - Provide the final answer in "next_step_summary" based on the explored lines.
+                    - If the explored lines are insufficient:
+                        - Set "final_decision_sufficient" to false.
+                        - Provide evaluations for each explored line:
+                        - For each line, specify if it is valuable for further exploration.
+                        - If valuable, specify the variable, the exploration tool, and a reason.
+                        - Ensure at least one line is marked as valuable to explore next.
+                        - Summarize the proposed next steps in "next_step_summary".
 
-                    Output Format:
+                    3. **Line-by-Line Evaluation**:
+                    - For each explored code line:
+                        - Specify whether the line is valuable for further exploration.
+                        - If valuable:
+                        - Identify the variable to explore next.
+                        - Select the appropriate tool:
+                            - **0**: Go to Definition
+                            - **1**: Find References
+                        - Provide a reason for choosing the variable and tool.
+
+                    4. **Output Format**:
+
                     {
-                        "final_decision_sufficient": true or false, // Whether the current exploration is sufficient
-                        "sub_problems": [ // List of additional sub-questions, if needed. Otherwise, an empty array.
+                        "final_decision_sufficient": true or false, // Whether the explored lines sufficiently answer the question
+                        "evaluations": [ // Evaluations of explored code lines
                             {
-                                "sub_question": "Describe the proposed sub-question...",
-                                "tool": 0 or 1, // The selected tool for exploration
-                                "code_context": {
-                                    "file_uri": "file URI if applicable",
-                                    "invoke_variable": "Variable to explore",
-                                    "code_line": "The line containing the invoke_variable",
-                                    "line_number": 123, // The line number
-                                    "full_statement": "Full statement from the code line"
-                                },
-                                "from_results": true or false, // Whether the code context is derived from exploredCodeLines
-                                "reason": "Clarify why this sub-question is needed"
+                                "file_uri": "string", // File URI of the code line
+                                "line_number": number, // Line number of the code line
+                                "valuable": true or false, // Whether the code line is valuable for further exploration
+                                "next_step": {
+                                    "variable": "string", // Variable to explore next
+                                    "tool": 0 or 1, // Tool to explore the variable
+                                    "reason": "string" // Reason for choosing the variable and tool
+                                } or null // Null if the line is not valuable for further exploration
                             },
                             ...
                         ],
-                        "next_step_summary": "Brief summary of suggested next steps based on sub_problems, if applicable."
+                        "next_step_summary": "string" // Summary of the final answer or proposed next steps
                     }
                 `;
                 break;

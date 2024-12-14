@@ -61,9 +61,6 @@ export class ExplorationGraph {
             } else {
                 // If no sourceId is provided, default to the node itself as the origin
                 nodeData.origins = [nodeId];
-                console.log("No sourceId provided for node", nodeId);
-                // log all existing node IDs
-                console.log("Node IDs:", Array.from(this.nodes.keys()));
             }
 
             this.nodes.set(nodeId, nodeData);
