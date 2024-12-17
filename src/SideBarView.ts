@@ -625,10 +625,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
 
     public async addTask4Results(importantCodeSnippets: Map<string, any>, importantCodePaths: Map<string, Array<{ nodes: Node[], edges: Edge[] }>>) {
         const visibleLimit = 15; // Show this many results initially
-        const score3Results = [...importantCodeSnippets.entries()].map(([index, result]) => ({ index, ...result }));
-
-        const initialVisibleResults = score3Results.slice(0, visibleLimit);
-        const additionalResults = score3Results.slice(visibleLimit);
+        const results = [...importantCodeSnippets.entries()].map(([index, result]) => ({ index, ...result }));
+        const initialVisibleResults = results.slice(0, visibleLimit);
+        const additionalResults = results.slice(visibleLimit);
 
         // HTML content for visible code boxes with index
         let findingsHtml = ``;
@@ -706,8 +705,17 @@ export class SidebarView implements vscode.WebviewViewProvider {
         return paths.map((path, pathIndex) => {
             const pathHtml = path.nodes.map((node, nodeIndex) => {
                 const edge = path.edges[nodeIndex]; // Pair the current node with its corresponding edge
-                const tool = edge ? (edge.tool === 0 ? "Go to Definition" : "Find References") : "";
-                const invokingVariable = edge?.invokingVariable || "";
+                let tool = "";
+                if (edge?.tool) {
+                    if (edge.tool == "definition") {
+                        tool = "Go to definition";
+                    } else if (edge.tool == "reference") {
+                        tool = "Find references";
+                    } else {
+                        tool = "Get the assignment";
+                    }
+                }
+                const invokingVariable = edge?.variable || "";
                 const toolInfo = edge
                     ? `I used "<strong>${tool}</strong>" on "<strong>${invokingVariable}</strong>" here:`
                     : "That brought me to this snippet."; // If no edge or tool is available, leave it empty
@@ -780,9 +788,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
 
     public updateGraphVisualization(graphData: { nodes: any[], edges: any[] }) {
         // Send the graph data to the webview for visualization
-        this._view?.webview.postMessage({
+        /* this._view?.webview.postMessage({
             command: 'renderGraph',
             data: graphData
-        });
+        }); */
     }
 }

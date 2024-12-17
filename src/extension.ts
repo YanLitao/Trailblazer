@@ -3,7 +3,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
-import { getFileNameFromUri, getSurroundingCode, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, analyze, findCompleteLineText } from './codeContextUtils';
+import { getFileNameFromUri, getSurroundingCode, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, analyze, findCompleteStatementText } from './codeContextUtils';
 import { ExplorationGraph, Node, Edge } from './explorationGraph';
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
@@ -170,9 +170,10 @@ const task4JsonSchema = {
                     full_statement: { type: "string" },
                     explanation: { type: "string" },    // Explanation of why this result is helpful
                     relevance_score: { type: "integer" },
-                    finding: { type: "string" }
+                    finding: { type: "string" },
+                    variable: { type: "string" }        // New: Variable to track for the result
                 },
-                required: ["file_uri", "code_line", "line_number", "full_statement", "explanation", "relevance_score", "finding"]
+                required: ["file_uri", "code_line", "line_number", "full_statement", "explanation", "relevance_score", "finding", "variable"]
             }
         }
     },
@@ -211,34 +212,33 @@ const task5JsonSchema = {
 };
 
 const task6JsonSchema = {
-    type: "object",
-    properties: {
-        sub_problems: {
-            type: "array",
-            items: {
-                type: "object",
-                properties: {
-                    sub_question: { type: "string" },
-                    tool: { type: "integer" },
-                    code_context: {
-                        type: "object",
-                        properties: {
-                            file_uri: { type: "string" },
-                            invoke_variable: { type: "string" },
-                            code_line: { type: "string" },
-                            line_number: { type: "integer" },
-                            full_statement: { type: "string" }
+    "type": "object",
+    "properties": {
+        "final_decision_sufficient": { "type": "boolean" },
+        "evaluations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "file_uri": { "type": "string" },
+                    "line_number": { "type": "integer" },
+                    "valuable": { "type": "boolean" },
+                    "next_step": {
+                        "type": ["object", "null"],
+                        "properties": {
+                            "variable": { "type": "string" },
+                            "tool": { "type": "integer", "enum": [0, 1] },
+                            "reason": { "type": "string" }
                         },
-                        required: ["file_uri", "invoke_variable", "code_line", "line_number", "full_statement"]
-                    },
-                    from_results: { type: "boolean" },
-                    reason: { type: "string" }
+                        "required": ["variable", "tool", "reason"]
+                    }
                 },
-                required: ["sub_question", "tool", "code_context", "from_results", "reason"]
+                "required": ["file_uri", "line_number", "valuable", "next_step"]
             }
-        }
+        },
+        "next_step_summary": { "type": "string" }
     },
-    required: ["sub_problems"]
+    "required": ["final_decision_sufficient", "evaluations", "next_step_summary"]
 };
 
 class Agent {
@@ -249,15 +249,15 @@ class Agent {
     private _exploredVariables: any[] = [];
     private _exploredFiles: { file_uri: string, file_content: string }[] = []; // Simplified _exploredFiles
     private _exploredSubQuestions: string[] = [];
-    private _exploredCodeLines: { file_uri: string, start_line: number, end_line: number; code_snippet: string }[] = [];
+    private _exploredCodeLines: { file_uri: string, start_line: number, end_line: number; code_snippet: string; variables: Set<string> }[] = [];
+    private _newExploredCodeLines: { file_uri: string, start_line: number, end_line: number; code_snippet: string; variables: Set<string> }[] = [];
     private _explorationGraph: ExplorationGraph;
     private isPaused: boolean = false;     // Track if the agent is paused
     private isStopped: boolean = false;    // Track if the agent is stopped
-    private _importantResults: Array<{ file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }> = [];
-    private _importantCodeSnippets = new Map<string, { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }>();
-    private _newImportantCodeSnippets: Map<string, any> = new Map();
+    private _importantCodeSnippets = new Map<number, { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }>();
+    private _newImportantCodeSnippets: Map<number, { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }> = new Map();
     private _fileExtensionsToExclude = ['.test.ts', '.spec.ts', '.test.tsx', '.spec.tsx', '.test.js', '.spec.js', '.test.jsx', '.spec.jsx', '.d.ts'];
-    private _importantCodePaths: Map<string, Array<{ nodes: Node[], edges: (Edge | null)[] }>> = new Map();  // Map of nodeId to paths
+    private _importantCodePaths: Map<string, Array<{ nodes: Node[]; edges: (Edge | null)[] }>> = new Map();
     private _findingsSummary: { snippetKey: number[], statement: string, outOfDate: boolean }[] = [];
     private _updateFindings: boolean = false;
 
@@ -395,24 +395,39 @@ class Agent {
                 const accurateLineNumber = getAccurateLineNumber(surroundingCode, codeLine, subProblem.code_context.line_number, startContextLine);
                 if (accurateLineNumber !== null) {
                     subProblem.code_context.line_number = accurateLineNumber;
-                    const { statementText, startLineNum, endLineNum } = await findCompleteLineText(uri, accurateLineNumber);
+                    const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, accurateLineNumber);
                     subProblem.code_context.full_statement = statementText;
-                    this._addOrUpdateExploredCodeLines(uri.toString(), startLineNum, endLineNum, statementText);
 
                     // Create a node for each sub-problem and mark it as an invoking place
-                    const nodeId = `${uri.toString()}:${accurateLineNumber}`;
+                    const nodeId = `${uri.toString()}:${accurateLineNumber}:${subProblem.code_context.invoke_variable}`;
                     const newNode: Node = {
                         id: nodeId,
                         fileUri: uri.toString(),
                         lineNumber: accurateLineNumber,
-                        variables: new Set([subProblem.code_context.invoke_variable]),
+                        variable: subProblem.code_context.invoke_variable,
                         codeSnippet: statementText,
-                        isPlace: true,  // Mark as invoking place
                         edges: new Set(),
-                        origins: [nodeId]
                     };
-                    this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, subProblem.tool, true, subProblem.code_context.invoke_variable);
-                    this._explorationGraph.addGraphOrigin(nodeId);
+                    this._explorationGraph.addOrigin(newNode);
+
+                    const relevantVariables = await analyze(uri, accurateLineNumber, subProblem.code_context.invoke_variable);
+                    relevantVariables.forEach((variableInfo: any) => {
+                        const relevantNodeId = `${variableInfo.fileUri}:${variableInfo.lineNumber}:${variableInfo.variable}`;
+                        const lineText = document.lineAt(variableInfo.lineNumber).text.trim();
+                        const relevantNode: Node = {
+                            id: relevantNodeId,
+                            fileUri: variableInfo.fileUri,
+                            lineNumber: variableInfo.lineNumber,
+                            variable: variableInfo.variable,
+                            codeSnippet: lineText,
+                            edges: new Set(),
+                        };
+                        this._explorationGraph.upsertNode(relevantNode);
+                        this._explorationGraph.addEdge({ from: nodeId, to: relevantNodeId, variable: variableInfo.variable, tool: "assignment" });
+                    });
+
+                    const variables = [subProblem.code_context.invoke_variable, ...relevantVariables.map((variableInfo: any) => variableInfo.variable)];
+                    this._addOrUpdateExploredCodeLines(uri.toString(), startLineNum, endLineNum, statementText, variables);
                 }
             }
         }
@@ -435,7 +450,7 @@ class Agent {
         }; */
 
         const task2Results: any[] = []; // Stores final results to display in the sidebar
-        const newtask2Results: any[] = [];
+        const newExploredLines: Array<{ file_uri: string, line_number: number, code_line: string, full_statement: string, variables: Set<string> }> = [];
 
         for (const subProblem of subProblems) {
             const variableName = subProblem.code_context.invoke_variable;
@@ -519,18 +534,6 @@ class Agent {
                 tool: subProblem.tool
             });
 
-            // Check if the number of results exceeds the threshold for agent involvement
-            /* if (results.length > subProblem.num_results) {
-                task2Input.questions_and_results.push({
-                    sub_question: subProblem.sub_question,
-                    tool: subProblem.tool,
-                    code_context: subProblem.code_context,
-                    num_results: subProblem.num_results,
-                    results: results
-                });
-            } else { */
-            // If no agent involvement is needed, add the filtered results directly
-            // New code: directly append the results to the task2Results
             task2Results.push({
                 sub_question: subProblem.sub_question,
                 tool: subProblem.tool,
@@ -538,25 +541,27 @@ class Agent {
                 filtered_results: results
             });
 
-            newtask2Results.push({
-                sub_question: subProblem.sub_question,
-                tool: subProblem.tool,
-                code_context: subProblem.code_context,
-                filtered_results: results
+            // add each result to the newExploredLines by file_uri and line_number. Add the variables to the variables array and remove duplicates
+            results.forEach(result => {
+                const existingLine = newExploredLines.find(line => line.file_uri === result.file_uri && line.line_number === result.line_number);
+                if (existingLine) {
+                    existingLine.variables.add(result.variable);
+                } else {
+                    newExploredLines.push({
+                        file_uri: result.file_uri,
+                        code_line: result.code_line,
+                        line_number: result.line_number,
+                        full_statement: result.full_statement,
+                        variables: new Set([result.variable])
+                    });
+                }
             });
-            /* } */
         }
-
-        // If any sub-questions need agent filtering, call the agent
-        /* if (task2Input.questions_and_results.length > 0) {
-            const agentResults = await this._callAgentAPI(task2Input, 2, task2JsonSchema);
-            this._processAgentResults(JSON.parse(agentResults), task2Results);
-        } */
 
         // Update the sidebar with the final Task 2 results
         this._sidebarViewProvider.addTask2Results({ questions_and_results: task2Results });
 
-        return newtask2Results;
+        return newExploredLines;
     }
 
     // Helper function to add document content to _exploredFiles if not already present
@@ -574,7 +579,7 @@ class Agent {
     private async _runTool(fileUri: vscode.Uri, line: number, offset: number, subProblem: any): Promise<any[]> {
         const pos = new vscode.Position(line, offset);
         const loc = new vscode.Location(fileUri, pos);
-        let results = [];
+        let results: Array<{ file_uri: string, line_number: number, code_line: string, full_statement: string, variable: string }> = [];
 
         if (subProblem.tool === 0) { // Go to Definition
             const definitionLocations = await vscode.commands.executeCommand<vscode.Location[] | vscode.LocationLink[]>(
@@ -591,27 +596,8 @@ class Agent {
         return results;
     }
 
-    // Helper function to process agent results and integrate them into task2Results
-    /* private _processAgentResults(agentResults: any, task2Results: any[]) {
-        if (Array.isArray(agentResults.questions_and_results)) {
-            for (const subProblem of agentResults.questions_and_results) {
-                if (subProblem && "results" in subProblem) {
-                    subProblem.filtered_results = subProblem.results;
-                    delete subProblem.results;
-                }
-                task2Results.push(subProblem);
-            }
-        } else if (agentResults.questions_and_results && typeof agentResults.questions_and_results === 'object') {
-            if ("results" in agentResults.questions_and_results) {
-                agentResults.questions_and_results.filtered_results = agentResults.questions_and_results.results;
-                delete agentResults.questions_and_results.results;
-            }
-            task2Results.push(agentResults.questions_and_results);
-        }
-    } */
-
     // Helper function to add or update explored code lines
-    private _addOrUpdateExploredCodeLines(fileUri: string, startLine: number, endLine: number, fullStatement: string) {
+    private _addOrUpdateExploredCodeLines(fileUri: string, startLine: number, endLine: number, fullStatement: string, variables: string[] = []) {
 
         // Check if the line is already covered in an existing code line
         const existingCode = this._exploredCodeLines.find(
@@ -624,13 +610,38 @@ class Agent {
                 file_uri: fileUri,
                 start_line: startLine,
                 end_line: endLine,
-                code_snippet: fullStatement
+                code_snippet: fullStatement,
+                variables: new Set(variables)
+            });
+        } else {
+            // If the code already exists, update the variables
+            variables.forEach(variable => {
+                existingCode.variables.add(variable);
+            });
+        }
+
+        // For each loop, add the new code to _newExploredCodeLines if it's unique
+        const existingNewCode = this._newExploredCodeLines.find(
+            code => code.file_uri === fileUri && code.start_line == startLine && code.end_line == endLine
+        );
+
+        if (!existingNewCode) {
+            this._newExploredCodeLines.push({
+                file_uri: fileUri,
+                start_line: startLine,
+                end_line: endLine,
+                code_snippet: fullStatement,
+                variables: new Set(variables)
+            });
+        } else {
+            variables.forEach(variable => {
+                existingNewCode.variables.add(variable);
             });
         }
     }
 
     async _prepareResults(locations: vscode.Location[] | vscode.LocationLink[], subProblem: any) {
-        const results: any[] = [];
+        const results: Array<{ file_uri: string, line_number: number, code_line: string, full_statement: string, variable: string }> = [];
         if (!locations || locations.length === 0) {
             console.warn(`No locations found for sub-problem: ${subProblem.sub_question}`);
             return results;
@@ -644,46 +655,60 @@ class Agent {
 
         for (const location of filteredLocations) {
             const lineNumber = location instanceof vscode.Location ? location.range.start.line : (location as vscode.LocationLink).targetRange.start.line;
-            const range = location instanceof vscode.Location ? location.range : location.targetRange;
             const uri = location instanceof vscode.Location ? location.uri : location.targetUri;
             const fileUri = uri.toString();
 
             // Open document to retrieve code content and statements
             const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(fileUri));
-            const variable = document.getText(range).trim(); // Extract variable from range
-            const { statementText, startLineNum, endLineNum } = await findCompleteLineText(uri, lineNumber);
+            const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, lineNumber);
 
-            // Analyze the code context for relevant variables
-            const relevantVariables = await analyze(uri, lineNumber, variable);
+            if (lineNumber == subProblem.code_context.line_number && fileUri == subProblem.code_context.file_uri) {
+                // we don't want to add the same line and same variable as a result, since using either Go to Definition or Find References on the variable will return the same variable name.
+                continue;
+            }
+            const variable = subProblem.code_context.invoke_variable;
+            const codeLine = document.lineAt(lineNumber).text.trim();
 
             // Construct the original result object
             const baseResult = {
                 file_uri: fileUri,
                 line_number: lineNumber,
-                code_line: document.lineAt(lineNumber).text.trim(),
+                code_line: codeLine,
                 full_statement: statementText,
-                variable: variable // Include extracted variable
+                variable: variable
             };
             results.push(baseResult);
 
-            const sourceId = `${subProblem.code_context.file_uri}:${subProblem.code_context.line_number}`;
-            const resultNodeId = `${baseResult.file_uri}:${baseResult.line_number}`;
+            const sourceId = `${subProblem.code_context.file_uri}:${subProblem.code_context.line_number}:${variable}`;
+            const resultNodeId = `${fileUri}:${lineNumber}:${variable}`;
             // Create result node if it doesn't already exist in the graph
             const resultNode: Node = {
                 id: resultNodeId,
-                fileUri: baseResult.file_uri,
-                lineNumber: baseResult.line_number,
-                variables: new Set([baseResult.variable]),
+                fileUri: fileUri,
+                lineNumber: lineNumber,
+                variable: variable,
                 codeSnippet: baseResult.full_statement,
-                isPlace: false, // Result nodes are not invoking places
-                edges: new Set(),
-                origins: []
+                edges: new Set([])
             };
 
-            this._explorationGraph.upsertNode(resultNodeId, resultNode, sourceId, this._stepCounter, subProblem.tool, false, subProblem.code_context.invoke_variable);
+            const resultEdge: Edge = {
+                from: sourceId,
+                to: resultNodeId,
+                variable: variable,
+                tool: subProblem.tool == 0 ? "definition" : "reference",
+            }
 
+            this._explorationGraph.upsertNode(resultNode);
+            this._explorationGraph.addEdge(resultEdge);
+
+            // Analyze the code context for relevant variables
+            const relevantVariables = await analyze(uri, lineNumber, variable);
             // Add each relevant variable as a separate result
             relevantVariables.forEach((variableInfo: any) => {
+                const relevantResultNodeId = `${variableInfo.fileUri}:${variableInfo.lineNumber}:${variableInfo.variable}`;
+                if (relevantResultNodeId === resultNodeId) {
+                    return;
+                }
                 const lineText = document.lineAt(variableInfo.lineNumber).text.trim();
                 results.push({
                     file_uri: variableInfo.fileUri,
@@ -692,42 +717,37 @@ class Agent {
                     full_statement: statementText,
                     variable: variableInfo.variable // Include the relevant variable
                 });
-
-                const baseResultId = `${baseResult.file_uri}:${baseResult.line_number}`;
                 // Create result node if it doesn't already exist in the graph
-                const relevantResultNodeId = `${baseResult.file_uri}:${variableInfo.lineNumber}`;
+
                 const relevantResultNode: Node = {
-                    id: resultNodeId,
+                    id: relevantResultNodeId,
                     fileUri: variableInfo.fileUri,
                     lineNumber: variableInfo.line_number,
-                    variables: new Set([variableInfo.variable]),
+                    variable: variableInfo.variable,
                     codeSnippet: lineText,
-                    isPlace: false, // Result nodes are not invoking places
-                    edges: new Set(),
-                    origins: []
+                    edges: new Set([]),
                 };
 
-                this._explorationGraph.upsertNode(relevantResultNodeId, relevantResultNode, baseResultId, this._stepCounter, subProblem.tool, false, baseResult.variable);
+                const relevantResultEdge: Edge = {
+                    from: resultNodeId,
+                    to: relevantResultNodeId,
+                    variable: variableInfo.variable,
+                    tool: "assignment",
+                }
+                this._explorationGraph.upsertNode(relevantResultNode);
+                this._explorationGraph.addEdge(relevantResultEdge);
 
             });
-            this._addOrUpdateExploredCodeLines(fileUri, startLineNum, endLineNum, statementText);
+            // Add both the base result variable and the relevant variables to the variable name list
+            const variables = [variable, ...relevantVariables.map((variableInfo: any) => variableInfo.variable)];
+            this._addOrUpdateExploredCodeLines(fileUri, startLineNum, endLineNum, statementText, variables);
             this._addToExploredFiles(vscode.Uri.parse(fileUri), document);
         }
 
         return results;
     }
 
-    async runTask3() {
-        console.warn("Running Task 3");
-
-        const inputJson = {
-            task: 3,
-            refined_question: this._refined_question ?? "",
-            explored_code: this._exploredCodeLines
-        };
-
-        const response = await this._callAgentAPI(inputJson, 3, task3JsonSchema);
-        const agentOutput = JSON.parse(response);
+    private async processTask3andTask6Output(agentOutput: any) {
 
         interface SubProblem {
             sub_question: string;
@@ -743,7 +763,7 @@ class Agent {
             reason: string;
         }
 
-        const task3Output: { sub_problems: SubProblem[], final_decision_sufficient: boolean, next_step_summary: string, answer: string } = {
+        const taskOutput: { sub_problems: SubProblem[], final_decision_sufficient: boolean, next_step_summary: string, answer: string } = {
             sub_problems: [],
             final_decision_sufficient: agentOutput.final_decision_sufficient,
             next_step_summary: agentOutput.next_step_summary,
@@ -754,7 +774,7 @@ class Agent {
             if (item.valuable && item.next_step) {
 
                 try {
-                    let full_statement = await findCompleteLineText(vscode.Uri.parse(item.file_uri), item.line_number);
+                    let full_statement = await findCompleteStatementText(vscode.Uri.parse(item.file_uri), item.line_number);
                     // get the line of code with the line_number and the file_uri
                     const code_document = await vscode.workspace.openTextDocument(vscode.Uri.parse(item.file_uri));
                     let codeLine = code_document.lineAt(item.line_number).text.trim();
@@ -764,7 +784,7 @@ class Agent {
                         const accurateLineNumber = getAccurateLineNumber(code_document.getText(), item.next_step.variable, item.line_number, 0);
                         if (accurateLineNumber !== null) {
                             item.line_number = accurateLineNumber;
-                            full_statement = await findCompleteLineText(vscode.Uri.parse(item.file_uri), accurateLineNumber);
+                            full_statement = await findCompleteStatementText(vscode.Uri.parse(item.file_uri), accurateLineNumber);
                             codeLine = code_document.lineAt(accurateLineNumber).text.trim();
                         }
                     }
@@ -772,26 +792,14 @@ class Agent {
                         code => code.file_uri === item.file_uri && (code.start_line <= item.line_number && code.end_line >= item.line_number)
                     );
 
+                    if (!matchedCode) {
+                        continue;
+                    }
+
                     // Determine if the result is from explored code or matched using fuzzy matching
                     const from_results = !!matchedCode || !!(await this.fuzzyMatchCode(item.file_uri, item.line_number, item.next_step.variable));
 
-                    // add to nodes
-                    const nodeId = `${item.file_uri}:${item.line_number}`;
-
-                    // Create a new node or update an existing one in the graph
-                    const newNode: Node = {
-                        id: nodeId,
-                        fileUri: item.file_uri,
-                        lineNumber: item.line_number,
-                        variables: new Set([item.next_step.variable]),
-                        codeSnippet: codeLine,
-                        isPlace: true,
-                        edges: new Set(),
-                        origins: []
-                    };
-                    this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, item.next_step.tool, true, item.next_step.variable);
-
-                    let task3Item = {
+                    let taskItem = {
                         sub_question: "",
                         tool: item.next_step.tool,
                         code_context: {
@@ -804,19 +812,41 @@ class Agent {
                         from_results: from_results,
                         reason: item.next_step.reason
                     };
-                    task3Output.sub_problems.push(task3Item);
+                    taskOutput.sub_problems.push(taskItem);
                 } catch (error) {
                     console.error(`Error finding complete line text for ${item.file_uri}:${item.line_number}`);
                 }
             }
         }
 
+        return taskOutput;
+    }
+
+    async runTask3() {
+        console.warn("Running Task 3");
+
+        const inputJson = {
+            task: 3,
+            refined_question: this._refined_question ?? "",
+            explored_code: this._newExploredCodeLines
+        };
+
+        const response = await this._callAgentAPI(inputJson, 3, task3JsonSchema);
+        const agentOutput = JSON.parse(response);
+
+        const task3Output = await this.processTask3andTask6Output(agentOutput);
+
         // check the number of valuable results if it is greater than 0 when the final decision is not sufficient
         if (task3Output.sub_problems.length == 0 && !task3Output.final_decision_sufficient) {
-            console.warn("No valuable results found in Task 3. Stopping the agent.");
+            // run task 6
+            const task6Output = await this.runTask6();
+            if ("sub_problems" in task6Output) {
+                task3Output.sub_problems = task6Output.sub_problems;
+            }
         }
 
         console.log(`Task 3 Output: ${JSON.stringify(task3Output, null, 2)}`);
+        this._newExploredCodeLines = []; // Reset the new explored code lines
         return task3Output;
     }
 
@@ -855,7 +885,7 @@ class Agent {
         }
 
         // Step 4: Retrieve the full code statement at the matched line
-        const { statementText, startLineNum, endLineNum } = await findCompleteLineText(uri, preciseLineNumber);
+        const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, preciseLineNumber);
 
         return {
             fileUri: matchedFile.file_uri,
@@ -864,157 +894,104 @@ class Agent {
         };
     }
 
-    private async postProcessResults(response: any) {
-
-        response.sub_problems = await Promise.all(
-            response.sub_problems.map(async (subProblem: any) => {
-                const { file_uri, invoke_variable, line_number } = subProblem.code_context;
-
-                // Use fuzzyMatchCode to get the most accurate file URI, line number, and full statement
-                const matchedCode = await this.fuzzyMatchCode(file_uri, line_number, invoke_variable);
-
-                // If no match is found, skip this sub-problem
-                if (!matchedCode) {
-                    console.warn(`No matched code found for file: "${file_uri}" with variable: "${invoke_variable}".`);
-                    return null;
-                }
-
-                // Step 4: Update the exploration graph with the new node as an invoking place
-                const nodeId = `${matchedCode.fileUri}:${matchedCode.lineNumber}`;
-                const fromResults = this._exploredCodeLines.some(code => code.file_uri === matchedCode.fileUri && code.start_line <= matchedCode.lineNumber && code.end_line >= matchedCode.lineNumber);
-
-                // Create a new node or update an existing one in the graph
-                const newNode: Node = {
-                    id: nodeId,
-                    fileUri: matchedCode.fileUri,
-                    lineNumber: matchedCode.lineNumber,
-                    variables: new Set([invoke_variable]),
-                    codeSnippet: matchedCode.fullStatement,
-                    isPlace: true,
-                    edges: new Set(),
-                    origins: []
-                };
-                this._explorationGraph.upsertNode(nodeId, newNode, null, this._stepCounter, subProblem.tool, true, invoke_variable);
-
-                // Update `code_context` with matched details
-                subProblem.code_context.file_uri = matchedCode.fileUri;
-                subProblem.code_context.line_number = matchedCode.lineNumber;
-                subProblem.code_context.full_statement = matchedCode.fullStatement;
-                subProblem.code_context.from_results = fromResults;
-
-                return subProblem;
-            })
-        );
-
-        // Filter out any null sub-problems that couldn't be matched
-        response.sub_problems = response.sub_problems.filter((subProblem: any) => subProblem !== null);
-
-        return response;
-    }
-
-    async runTask4(task2Results: any[]) {
+    async runTask4(task2Results: Array<{ file_uri: string; line_number: number; code_line: string; full_statement: string; variables: Set<string> }>) {
         console.warn("Running Task 4");
 
-        const filteredResults = task2Results.flatMap(result =>
-            result.filtered_results
-                .filter((res: { file_uri: string; line_number: number }) =>
-                    !this._importantResults.some(r =>
-                        r.file_uri === res.file_uri &&
-                        r.line_number === res.line_number
-                    )
+        const filteredResults = task2Results.filter(
+            result =>
+                !Array.from(this._importantCodeSnippets.values()).some(
+                    r => r.file_uri === result.file_uri && r.line_number === result.line_number
                 )
-                .map((res: { file_uri: string; line_number: number; code_line: string; full_statement: string }) => ({
-                    file_uri: res.file_uri,
-                    line_number: res.line_number,
-                    code_line: res.code_line,
-                    full_statement: res.full_statement,
-                    explanation: "",
-                    relevance_score: 0,
-                    findings: ""
-                }))
         );
 
         const inputJson = {
             task: 4,
             refined_question: this._refined_question ?? "",
-            explored_code_lines: filteredResults
+            results: filteredResults.map(result => ({
+                file_uri: result.file_uri,
+                line_number: result.line_number,
+                code_line: result.code_line,
+                full_statement: result.full_statement,
+                variables: Array.from(result.variables),
+                explanation: "",
+                relevance_score: 0,
+                findings: ""
+            }))
         };
 
         const response = await this._callAgentAPI(inputJson, 4, task4JsonSchema);
         const task4Output = JSON.parse(response);
 
-        // Process high-relevance results
-        const highRelevanceResults = task4Output.ranked_results
-            .filter((result: { relevance_score: number }) => result.relevance_score > 0)
-            .map((result: any) => {
-                const verifiedCode = this._exploredCodeLines.find(
-                    code =>
-                        code.file_uri === result.file_uri &&
-                        code.start_line <= result.line_number &&
-                        code.end_line >= result.line_number
-                );
 
-                if (verifiedCode) {
-                    return {
-                        file_uri: verifiedCode.file_uri,
-                        code_line: result.code_line,
-                        line_number: result.line_number,
-                        full_statement: verifiedCode.code_snippet,
-                        explanation: result.explanation,
-                        relevance_score: result.relevance_score,
-                        finding: result.finding ?? result.explanation
-                    };
-                }
-            })
-            .filter(Boolean);
+        task4Output.ranked_results.forEach((result: {
+            file_uri: string;
+            line_number: number;
+            code_line: string;
+            full_statement: string;
+            variable: string;
+            explanation: string;
+            relevance_score: number;
+            finding: string;
+        }) => {
+            if (result.relevance_score < 0) {
+                return;
+            }
+            // Define the path key and node ID
+            const pathId = `${result.file_uri}:${result.line_number}`;
 
-        // Update important results and snippets
-        highRelevanceResults.forEach((result: any) => {
-            if (!result) return;
-
-            const isNotInImportantResults = !this._importantResults.some(r =>
-                r.file_uri === result.file_uri &&
-                r.line_number === result.line_number
+            // Check if the snippet already exists
+            const existingEntry = Array.from(this._importantCodeSnippets.entries()).find(
+                ([, value]) => value.file_uri === result.file_uri && value.line_number === result.line_number
             );
 
-            if (isNotInImportantResults) {
-                this._importantResults.push(result);
-            }
+            let snippetKey: number;
 
-            if (result.relevance_score > 0) {
-                const snippetKey = Array.from(this._importantCodeSnippets.entries()).find(
-                    ([_, snippet]) =>
-                        snippet.file_uri === result.file_uri &&
-                        snippet.line_number === result.line_number
-                )?.[0] ?? this._importantCodeSnippets.size.toString();
+            if (!existingEntry) {
+                snippetKey = this._importantCodeSnippets.size;
+                this._importantCodeSnippets.set(snippetKey, {
+                    file_uri: result.file_uri,
+                    code_line: result.code_line,
+                    line_number: result.line_number,
+                    full_statement: result.full_statement,
+                    explanation: result.explanation,
+                    relevance_score: result.relevance_score
+                });
 
-                this._importantCodeSnippets.set(snippetKey, result);
                 this._newImportantCodeSnippets.set(snippetKey, result);
 
-                const nodeId = `${result.file_uri}:${result.line_number}`;
-                const node = this._explorationGraph.getNode(nodeId);
-
-                if (node && !this._importantCodePaths.has(nodeId)) {
-                    const paths = this._explorationGraph.findShortestPathsToOrigins(nodeId);
-                    if (paths.length > 0) {
-                        this._importantCodePaths.set(nodeId, paths);
-                    }
-                }
-
-                // Add the finding to the summary list
                 this._findingsSummary.push({
-                    snippetKey: [parseInt(snippetKey)],
-                    statement: result.finding,
+                    snippetKey: [snippetKey],
+                    statement: result.finding ?? result.explanation,
                     outOfDate: false
                 });
+            } else {
+                snippetKey = existingEntry[0];
+            }
+
+            // Find the path for this variable only if not already stored
+            if (!this._importantCodePaths.has(pathId)) {
+                const nodeId = this._explorationGraph.findNodeByLine(result.file_uri, result.line_number);
+                if (nodeId === null) {
+                    console.error(`Node ID not found for line ${result.line_number} in ${result.file_uri}`);
+                    return {};
+                }
+                const paths = this._explorationGraph.findShortestPathFromNode(nodeId);
+
+                if (paths.length > 0) {
+                    this._importantCodePaths.set(pathId, paths.map(path => {
+                        const nodes: Node[] = [];
+                        const edges: (Edge | null)[] = [];
+
+                        for (const entry of path) {
+                            nodes.push(entry.node);
+                            edges.push(entry.edge || null);
+                        }
+
+                        return { nodes, edges };
+                    }));
+                }
             }
         });
-
-        if (highRelevanceResults.length > 0) {
-            this._updateFindings = true;
-        } else {
-            this._updateFindings = false;
-        }
 
         const task5Output = await this.runTask5();
         return task5Output;
@@ -1042,10 +1019,12 @@ class Agent {
 
                 // Update the existing finding
                 if (isUpdated) {
+                    this._updateFindings = true;
                     existingFinding.statement = newFinding.statement;
                     existingFinding.outOfDate = newFinding.outOfDate;
                 }
             } else {
+                this._updateFindings = true;
                 const isUpdated = !newFinding.outOfDate;
                 // Mark new findings as updated
                 updatedFindings.push({
@@ -1074,6 +1053,8 @@ class Agent {
             findings: this._findingsSummary
         };
 
+        console.log("finding summary", this._findingsSummary);
+
         const response = await this._callAgentAPI(inputJson, 5, task5JsonSchema);
         const task5Output = JSON.parse(response);
 
@@ -1082,20 +1063,17 @@ class Agent {
             return "";
         }
 
-        // Update `this._findingsSummary` and regenerate the findings HTML
+        // Update the findings summary
         const updatedFindings = this.updateFindingsSummary(task5Output.filtered_findings);
 
-        // Generate the updated HTML for the new findings list
+        // Generate the HTML for the findings
         let concatenatedHtml = "";
-
-        // Loop through the updated findings summary
-        updatedFindings.forEach((finding: any) => {
+        updatedFindings.forEach(finding => {
             const snippetKeys = `[${finding.snippetKey.map((key: number) => `<span class="citation-ref" data-ref="${key}">${key}</span>`).join(", ")}]`;
 
-            // Determine the HTML structure based on `outOfDate` status
             const statementHtml = finding.outOfDate
                 ? `<span class="additional-finding">[1 additional finding]</span>
-                    <span class="hidden-statement" style="display: none;">${snippetKeys} ${finding.statement}</span>`
+                   <span class="hidden-statement" style="display: none;">${snippetKeys} ${finding.statement}</span>`
                 : `${snippetKeys} ${finding.statement}`;
 
             concatenatedHtml += `
@@ -1105,55 +1083,32 @@ class Agent {
             `;
         });
 
-        // Return or display the concatenated HTML for new findings
         return concatenatedHtml;
     }
 
-    async runTask6(unresolvedSubProblems: any[]) {
+    async runTask6() {
         console.warn("Running Task 6");
 
         const inputJson = {
             task: 6,
-            explored_files: this._exploredFiles,
-            unresolved_sub_problems: unresolvedSubProblems
+            refined_question: this._refined_question ?? "",
+            explored_code_lines: this._exploredCodeLines,
         };
 
         const response = await this._callAgentAPI(inputJson, 6, task6JsonSchema);
 
         // Validate JSON format
-        let task6Output;
+        let agentOutput;
         try {
-            task6Output = JSON.parse(response);
+            agentOutput = JSON.parse(response);
         } catch (e) {
             console.error("Failed to parse JSON response for Task 6:", e, response);
             return [];
         }
 
-        // Check if sub_problems exists in task6Output
-        if (!task6Output || !Array.isArray(task6Output.sub_problems)) {
-            console.error("Expected sub_problems array is missing in task6Output:", task6Output);
-            return []; // Return an empty array or handle this error as needed
-        }
+        const task6Output = await this.processTask3andTask6Output(agentOutput);
 
-        // Apply fallback handling for undefined fields within verifiedResults filter
-        const verifiedResults = task6Output.sub_problems.filter((subProblem: any) => {
-            const code_context = subProblem?.code_context || {};
-            const isContextComplete = code_context.file_uri && code_context.code_line && code_context.line_number !== undefined;
-
-            // If code_context is incomplete, log a warning and skip this sub_problem
-            if (!isContextComplete) {
-                console.warn("Incomplete code_context in sub_problem:", subProblem);
-                return false;
-            }
-
-            /* // Check that the code context is not in exploredCodeLines
-            const isNotInExplored = !this._exploredCodeLines.some(
-                (line) => line.file_uri === code_context.file_uri && line.start_line <= code_context.line_number && line.end_line >= code_context.line_number 
-            ); */
-            return true;
-        });
-
-        return verifiedResults;
+        return task6Output;
     }
 
     private async _updateStepResults(refinedOutput: any) {
@@ -1163,7 +1118,8 @@ class Agent {
         } else {
             this._sidebarViewProvider.addTask3Results(refinedOutput, null, null);
         }
-        this.updateGraphVisualization();
+        this._updateFindings = false;
+        //this.updateGraphVisualization();
     }
 
     async _callAgentAPI(inputJson: any, taskNumber: number, selectedSchema: any): Promise<string> {
@@ -1211,7 +1167,7 @@ class Agent {
                         - Set "final_decision_sufficient" to false.
                         - Provide evaluations for each explored line:
                         - For each line, specify if it is valuable for further exploration.
-                        - If valuable, specify the variable, the exploration tool, and a reason.
+                        - If valuable, specify at least one variables from the variables array in the input explored code lines, the exploration tool, and a reason.
                         - Ensure at least one line is marked as valuable to explore next.
                         - Summarize the proposed next steps in "next_step_summary".
 
@@ -1235,7 +1191,7 @@ class Agent {
                                 "line_number": number, // Line number of the code line
                                 "valuable": true or false, // Whether the code line is valuable for further exploration
                                 "next_step": {
-                                    "variable": "string", // Variable to explore next
+                                    "variable": "string", // Variable to explore next, pick from the input explored code lines
                                     "tool": 0 or 1, // Tool to explore the variable
                                     "reason": "string" // Reason for choosing the variable and tool
                                 } or null // Null if the line is not valuable for further exploration
@@ -1253,14 +1209,31 @@ class Agent {
                     Assign a "relevance_score" of 0 or 1 to each result, where:
                     - 0: Not relevant - The result is not useful or does not contribute to the understanding of the refined question. Exclude this result.
                     - 1: Worth showing - The result contains valuable findings that provide meaningful insights for the programmer to understand the important aspects of the exploration.
-                    
-                    For each result:
+
+                    For each result in the "results" array:
                     - Provide an "explanation" of why it is helpful or how it contributes to understanding the question.
                     - Summarize the finding in one sentence under the "finding" field. Use the structure: 
                         "Function/Field/Variable ... + Verb + Function/Field/Variable ...", e.g., ".innerHTML sets the content of HTML as 'ABC'".
                         Ensure the sentence is concise, informative, and clear. Do not include a clause.
+                    - Add the **specific variable** being tracked for this result under the "variable" field. Only select one variable. 
+                        **Important**: The variable must be selected only from the "variables" array provided in the result. Do not use or infer any other variables.
 
-                    Important: Do not modify the values of "file_uri", "code_line", "line_number", or "full_statement" for each result.
+                    Important:
+                    - Do not modify the values of "file_uri", "code_line", "line_number", "full_statement", or "variables" for each result.
+
+                    Input example:
+                    {
+                        "results": [
+                            {
+                                "file_uri": "Original file URI",
+                                "line_number": 123, // Line number
+                                "code_line": "Original code line",
+                                "full_statement": "Original full statement",
+                                "variables": ["variable1", "variable2"] // List of variables in this result
+                            },
+                            ...
+                        ]
+                    }
 
                     Output format:
                     {
@@ -1272,7 +1245,8 @@ class Agent {
                                 "full_statement": "Original full statement",
                                 "relevance_score": 0 or 1,
                                 "explanation": "Explanation of why this result is helpful",
-                                "finding": "One-sentence summary of the result in the specified structure"
+                                "finding": "One-sentence summary of the result in the specified structure",
+                                "variable": "One selected variable from the 'variables' array"
                             },
                             ...
                         ]
@@ -1359,29 +1333,57 @@ class Agent {
                     `;
                 break;
             case 6:
-                taskInstructions = `
-                    Task 6: Identify relevant invoking locations for unresolved sub-questions from previously explored files.
+                taskInstructions = taskInstructions = `
+                Task 6: Evaluate the explored code lines based on the refined question and determine the next steps for further exploration or provide the final answer if exploration is sufficient.
 
-                    Input:
-                    - A list of unresolved sub-questions with empty code contexts (code_context: empty, from_results: false).
-                    - A collection of explored files, each containing the file URI and file content.
+                ### Instructions:
 
-                    Goal:
-                    - For each unresolved sub-question, locate a relevant code context (e.g., a line or function) within the explored files that aligns with the sub-question.
-                    
-                    Instructions:
-                    - Strictly follow JSON format in the output, ensuring that every item adheres to the specified schema.
-                    - Ensure the output has:
-                    - A top-level object with a "sub_problems" array, containing each sub-question as an object.
-                    - Each "sub_problem" object with a "sub_question", "tool", and "code_context" that includes:
-                        - "file_uri": URI of the file containing the context.
-                        - "invoke_variable": The relevant variable or function.
-                        - "code_line": The exact line containing the "invoke_variable".
-                        - "line_number": The line number of "code_line".
-                        - "full_statement": The complete statement where the invoke_variable is located.
-                    - The field "from_results" should remain false for each sub_problem.
-                    - All fields in "code_context" must be correctly filled with valid values. Use null only if absolutely no match is found.
-                `;
+                1. **Input Evaluation**:
+                - You are given a refined question and a list of explored code lines.
+                - Assess whether the explored lines collectively provide a sufficient answer to the refined question.
+
+                2. **Output Requirements**:
+                - If the explored lines are sufficient:
+                    - Set "final_decision_sufficient" to true.
+                    - Provide the final answer in "next_step_summary" based on the explored lines.
+                - If the explored lines are insufficient:
+                    - Set "final_decision_sufficient" to false.
+                    - Provide evaluations for each explored line:
+                    - For each line, specify if it is valuable for further exploration.
+                    - If valuable, specify at least one variables, the exploration tool, and a reason.
+                    - Ensure at least one line is marked as valuable to explore next.
+                    - Summarize the proposed next steps in "next_step_summary".
+
+                3. **Line-by-Line Evaluation**:
+                - For each explored code line:
+                    - Specify whether the line is valuable for further exploration.
+                    - If valuable:
+                    - Identify the variable to explore next.
+                    - Select the appropriate tool:
+                        - **0**: Go to Definition
+                        - **1**: Find References
+                    - Provide a reason for choosing the variable and tool.
+
+                4. **Output Format**:
+
+                {
+                    "final_decision_sufficient": true or false, // Whether the explored lines sufficiently answer the question
+                    "evaluations": [ // Evaluations of explored code lines
+                        {
+                            "file_uri": "string", // File URI of the code line
+                            "line_number": number, // Line number of the code line
+                            "valuable": true or false, // Whether the code line is valuable for further exploration
+                            "next_step": {
+                                "variable": "string", // Variable to explore next
+                                "tool": 0 or 1, // Tool to explore the variable
+                                "reason": "string" // Reason for choosing the variable and tool
+                            } or null // Null if the line is not valuable for further exploration
+                        },
+                        ...
+                    ],
+                    "next_step_summary": "string" // Summary of the final answer or proposed next steps
+                }
+            `;
                 break;
             default:
                 throw new Error("Unknown task number provided.");
@@ -1435,11 +1437,11 @@ class Agent {
     }
 
     // Method to update the exploration graph and pass visualization data to SidebarView
-    private updateGraphVisualization() {
+    /* private updateGraphVisualization() {
         const graphData = this._explorationGraph.toVisualizationData();
         this._sidebarViewProvider.updateGraphVisualization(graphData); // Pass nodes and edges data directly
     }
-
+ */
 }
 
 export function deactivate() { }

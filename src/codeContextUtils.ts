@@ -20,6 +20,11 @@ export function getFileNameFromUri(fileUri: string | undefined): string {
     }
 }
 
+export async function getLineText(fileUri: vscode.Uri, lineNumber: number): Promise<string> {
+    const document = await vscode.workspace.openTextDocument(fileUri);
+    return document.lineAt(lineNumber).text;
+}
+
 export async function getSurroundingCode(uri: vscode.Uri, startLine: number, endLine: number): Promise<{ contextText: string, startContextLine: number }> {
     const document = await vscode.workspace.openTextDocument(uri);
     const totalLines = document.lineCount;
@@ -414,7 +419,7 @@ async function findAssignmentNode(
     return visit(sourceFile);
 }
 
-export async function findCompleteLineText(
+export async function findCompleteStatementText(
     fileUri: vscode.Uri,
     lineNumber: number
 ): Promise<{ statementText: string; startLineNum: number; endLineNum: number }> {
