@@ -3,7 +3,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
-import { getFileNameFromUri, getSurroundingCode, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, analyze, findCompleteStatementText } from './codeContextUtils';
+import { getFileNameFromUri, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, analyze, findCompleteStatementText } from './codeContextUtils';
 import { ExplorationGraph, Node, Edge } from './explorationGraph';
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
@@ -157,6 +157,36 @@ const task3JsonSchema = {
 };
 
 const task4JsonSchema = {
+    "type": "object",
+    "properties": {
+        "final_decision_sufficient": { "type": "boolean" },
+        "evaluations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "file_uri": { "type": "string" },
+                    "line_number": { "type": "integer" },
+                    "valuable": { "type": "boolean" },
+                    "next_step": {
+                        "type": ["object", "null"],
+                        "properties": {
+                            "variable": { "type": "string" },
+                            "tool": { "type": "integer", "enum": [0, 1] },
+                            "reason": { "type": "string" }
+                        },
+                        "required": ["variable", "tool", "reason"]
+                    }
+                },
+                "required": ["file_uri", "line_number", "valuable", "next_step"]
+            }
+        },
+        "next_step_summary": { "type": "string" }
+    },
+    "required": ["final_decision_sufficient", "evaluations", "next_step_summary"]
+};
+
+const task5JsonSchema = {
     type: "object",
     properties: {
         ranked_results: {
@@ -180,7 +210,7 @@ const task4JsonSchema = {
     required: ["ranked_results"]
 };
 
-const task5JsonSchema = {
+const task6JsonSchema = {
     "type": "object",
     "properties": {
         "filtered_findings": {
@@ -211,38 +241,9 @@ const task5JsonSchema = {
     "required": ["filtered_findings"]
 };
 
-const task6JsonSchema = {
-    "type": "object",
-    "properties": {
-        "final_decision_sufficient": { "type": "boolean" },
-        "evaluations": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "file_uri": { "type": "string" },
-                    "line_number": { "type": "integer" },
-                    "valuable": { "type": "boolean" },
-                    "next_step": {
-                        "type": ["object", "null"],
-                        "properties": {
-                            "variable": { "type": "string" },
-                            "tool": { "type": "integer", "enum": [0, 1] },
-                            "reason": { "type": "string" }
-                        },
-                        "required": ["variable", "tool", "reason"]
-                    }
-                },
-                "required": ["file_uri", "line_number", "valuable", "next_step"]
-            }
-        },
-        "next_step_summary": { "type": "string" }
-    },
-    "required": ["final_decision_sufficient", "evaluations", "next_step_summary"]
-};
-
 class Agent {
     private _model: ChatOpenAI;
+    private _fasterModel: ChatOpenAI
     private _stepCounter: number = 0;
     private _refined_question: string | null = null;
     private _sidebarViewProvider: SidebarView;
@@ -263,6 +264,14 @@ class Agent {
 
     constructor(sidebarViewProvider: SidebarView) {
         this._model = new ChatOpenAI({
+            model: "gpt-4o",
+            apiKey: API_KEY,
+            maxTokens: 16384,
+            temperature: 1.0,
+            topP: 1,
+        });
+
+        this._fasterModel = new ChatOpenAI({
             model: "gpt-4o-mini",
             apiKey: API_KEY,
             maxTokens: 16384,
@@ -330,9 +339,9 @@ class Agent {
             // Task 2: Explore sub-problems
             const task2Results = await this.runTask2(refinedOutput.sub_problems);
 
-            // Run Task 4 and Task 3 concurrently
+            // Run task 5 and Task 3 concurrently
             const [answerHtml, task3Output] = await Promise.all([
-                this.runTask4(task2Results), // Task 4: Decide the importance of results
+                this.runTask5(task2Results), // task 5: Decide the importance of results
                 this.runTask3()             // Task 3: Propose next steps
             ]);
 
@@ -360,7 +369,7 @@ class Agent {
     async runTask1(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
         const document = await vscode.workspace.openTextDocument(uri);
         console.warn("Running Task 1");
-        const { contextText: surroundingCode, startContextLine } = await getSurroundingCode(uri, startLine, endLine);
+        const surroundingCode = await getLineTextFromRange(uri, startLine, endLine);
 
         const inputJson = {
             "task": 1,
@@ -392,7 +401,7 @@ class Agent {
             const codeLine = preProcessCodeLine(subProblem, surroundingCode);
 
             if (codeLine) {
-                const accurateLineNumber = getAccurateLineNumber(surroundingCode, codeLine, subProblem.code_context.line_number, startContextLine);
+                const accurateLineNumber = getAccurateLineNumber(surroundingCode, codeLine, subProblem.code_context.line_number, startLine);
                 if (accurateLineNumber !== null) {
                     subProblem.code_context.line_number = accurateLineNumber;
                     const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, accurateLineNumber);
@@ -753,7 +762,7 @@ class Agent {
         return results;
     }
 
-    private async processTask3andTask6Output(agentOutput: any) {
+    private async processTask3andTask4Output(agentOutput: any) {
 
         interface SubProblem {
             sub_question: string;
@@ -840,14 +849,14 @@ class Agent {
         const response = await this._callAgentAPI(inputJson, 3, task3JsonSchema);
         const agentOutput = JSON.parse(response);
 
-        const task3Output = await this.processTask3andTask6Output(agentOutput);
+        const task3Output = await this.processTask3andTask4Output(agentOutput);
 
         // check the number of valuable results if it is greater than 0 when the final decision is not sufficient
         if (task3Output.sub_problems.length == 0 && !task3Output.final_decision_sufficient) {
-            // run task 6
-            const task6Output = await this.runTask6();
-            if ("sub_problems" in task6Output) {
-                task3Output.sub_problems = task6Output.sub_problems;
+            // run task 4
+            const task4Output = await this.runTask4();
+            if ("sub_problems" in task4Output) {
+                task3Output.sub_problems = task4Output.sub_problems;
             }
         }
 
@@ -900,8 +909,33 @@ class Agent {
         };
     }
 
-    async runTask4(task2Results: Array<{ file_uri: string; line_number: number; code_line: string; full_statement: string; variables: Set<string> }>) {
-        console.warn("Running Task 4");
+    async runTask4() {
+        console.warn("Running task 4");
+
+        const inputJson = {
+            task: 4,
+            refined_question: this._refined_question ?? "",
+            explored_code_lines: this._exploredCodeLines,
+        };
+
+        const response = await this._callAgentAPI(inputJson, 4, task4JsonSchema);
+
+        // Validate JSON format
+        let agentOutput;
+        try {
+            agentOutput = JSON.parse(response);
+        } catch (e) {
+            console.error("Failed to parse JSON response for task 4:", e, response);
+            return [];
+        }
+
+        const task4Output = await this.processTask3andTask4Output(agentOutput);
+
+        return task4Output;
+    }
+
+    async runTask5(task2Results: Array<{ file_uri: string; line_number: number; code_line: string; full_statement: string; variables: Set<string> }>) {
+        console.warn("Running task 5");
 
         const filteredResults = task2Results.filter(
             result =>
@@ -911,7 +945,7 @@ class Agent {
         );
 
         const inputJson = {
-            task: 4,
+            task: 5,
             refined_question: this._refined_question ?? "",
             results: filteredResults.map(result => ({
                 file_uri: result.file_uri,
@@ -925,10 +959,10 @@ class Agent {
             }))
         };
 
-        const response = await this._callAgentAPI(inputJson, 4, task4JsonSchema);
-        const task4Output = JSON.parse(response);
+        const response = await this._callAgentAPI(inputJson, 5, task5JsonSchema);
+        const task5Output = JSON.parse(response);
 
-        task4Output.ranked_results.forEach((result: {
+        task5Output.ranked_results.forEach((result: {
             file_uri: string;
             line_number: number;
             code_line: string;
@@ -969,6 +1003,8 @@ class Agent {
                     statement: result.finding ?? result.explanation,
                     outOfDate: false
                 });
+
+                this._updateFindings = true;
             } else {
                 snippetKey = existingEntry[0];
             }
@@ -998,8 +1034,11 @@ class Agent {
             }
         });
 
-        const task5Output = await this.runTask5();
-        return task5Output;
+        let task6Output = "";
+        if (this._updateFindings) {
+            task6Output = await this.runTask6();
+        }
+        return task6Output;
     }
 
     updateFindingsSummary = (newFindings: any[]): any[] => {
@@ -1024,12 +1063,10 @@ class Agent {
 
                 // Update the existing finding
                 if (isUpdated) {
-                    this._updateFindings = true;
                     existingFinding.statement = newFinding.statement;
                     existingFinding.outOfDate = newFinding.outOfDate;
                 }
             } else {
-                this._updateFindings = true;
                 const isUpdated = !newFinding.outOfDate;
                 // Mark new findings as updated
                 updatedFindings.push({
@@ -1049,29 +1086,29 @@ class Agent {
         return updatedFindings;
     };
 
-    async runTask5(): Promise<string> {
-        console.warn("Running Task 5");
+    async runTask6(): Promise<string> {
+        console.warn("Running Task 6");
 
         if (this._findingsSummary.length === 0) {
             return "";
         }
 
         const inputJson = {
-            task: 5,
+            task: 6,
             refined_question: this._refined_question ?? "",
             findings: this._findingsSummary
         };
 
-        const response = await this._callAgentAPI(inputJson, 5, task5JsonSchema);
-        const task5Output = JSON.parse(response);
+        const response = await this._callAgentAPI(inputJson, 6, task6JsonSchema);
+        const task6Output = JSON.parse(response);
 
-        if (!task5Output || !task5Output.filtered_findings) {
-            console.error("Invalid output from Task 5.");
+        if (!task6Output || !task6Output.filtered_findings) {
+            console.error("Invalid output from task 6.");
             return "";
         }
 
         // Update the findings summary
-        const updatedFindings = this.updateFindingsSummary(task5Output.filtered_findings);
+        const updatedFindings = this.updateFindingsSummary(task6Output.filtered_findings);
 
         // Generate the HTML for the findings
         let concatenatedHtml = "";
@@ -1091,31 +1128,6 @@ class Agent {
         });
 
         return concatenatedHtml;
-    }
-
-    async runTask6() {
-        console.warn("Running Task 6");
-
-        const inputJson = {
-            task: 6,
-            refined_question: this._refined_question ?? "",
-            explored_code_lines: this._exploredCodeLines,
-        };
-
-        const response = await this._callAgentAPI(inputJson, 6, task6JsonSchema);
-
-        // Validate JSON format
-        let agentOutput;
-        try {
-            agentOutput = JSON.parse(response);
-        } catch (e) {
-            console.error("Failed to parse JSON response for Task 6:", e, response);
-            return [];
-        }
-
-        const task6Output = await this.processTask3andTask6Output(agentOutput);
-
-        return task6Output;
     }
 
     private async _updateStepResults(refinedOutput: any) {
@@ -1210,8 +1222,61 @@ class Agent {
                 `;
                 break;
             case 4:
+                taskInstructions = taskInstructions = `
+                    task 4: Evaluate the explored code lines based on the refined question and determine the next steps for further exploration or provide the final answer if exploration is sufficient.
+    
+                    ### Instructions:
+    
+                    1. **Input Evaluation**:
+                    - You are given a refined question and a list of explored code lines.
+                    - Assess whether the explored lines collectively provide a sufficient answer to the refined question.
+    
+                    2. **Output Requirements**:
+                    - If the explored lines are sufficient:
+                        - Set "final_decision_sufficient" to true.
+                        - Provide the final answer in "next_step_summary" based on the explored lines.
+                    - If the explored lines are insufficient:
+                        - Set "final_decision_sufficient" to false.
+                        - Provide evaluations for each explored line:
+                        - For each line, specify if it is valuable for further exploration.
+                        - If valuable, specify at least one variables, the exploration tool, and a reason.
+                        - Ensure at least one line is marked as valuable to explore next.
+                        - Summarize the proposed next steps in "next_step_summary".
+    
+                    3. **Line-by-Line Evaluation**:
+                    - For each explored code line:
+                        - Specify whether the line is valuable for further exploration.
+                        - If valuable:
+                        - Identify the variable to explore next.
+                        - Select the appropriate tool:
+                            - **0**: Go to Definition
+                            - **1**: Find References
+                        - Provide a reason for choosing the variable and tool.
+    
+                    4. **Output Format**:
+    
+                    {
+                        "final_decision_sufficient": true or false, // Whether the explored lines sufficiently answer the question
+                        "evaluations": [ // Evaluations of explored code lines
+                            {
+                                "file_uri": "string", // File URI of the code line
+                                "line_number": number, // Line number of the code line
+                                "valuable": true or false, // Whether the code line is valuable for further exploration
+                                "next_step": {
+                                    "variable": "string", // Variable to explore next
+                                    "tool": 0 or 1, // Tool to explore the variable
+                                    "reason": "string" // Reason for choosing the variable and tool
+                                } or null // Null if the line is not valuable for further exploration
+                            },
+                            ...
+                        ],
+                        "next_step_summary": "string" // Summary of the final answer or proposed next steps
+                    }
+                `;
+                break;
+            case 5:
                 taskInstructions = `
-                    Task 4: Rank the exploration results based on relevance to the refined question and summarize findings.
+                    task 5: Rank the exploration results based on relevance to the refined question and summarize findings.
 
                     Assign a "relevance_score" of 0 or 1 to each result, where:
                     - 0: Not relevant - The result is not useful or does not contribute to the understanding of the refined question. Exclude this result.
@@ -1260,9 +1325,9 @@ class Agent {
                     }
                 `;
                 break;
-            case 5:
+            case 6:
                 taskInstructions = `
-                Task 5: Filter, consolidate, and refine findings based on the exploration results.
+                task 6: Filter, consolidate, and refine findings based on the exploration results.
 
                 Input:
                 - A collection of findings, where each finding is associated with references (snippet keys).
@@ -1339,59 +1404,6 @@ class Agent {
                 }
                     `;
                 break;
-            case 6:
-                taskInstructions = taskInstructions = `
-                Task 6: Evaluate the explored code lines based on the refined question and determine the next steps for further exploration or provide the final answer if exploration is sufficient.
-
-                ### Instructions:
-
-                1. **Input Evaluation**:
-                - You are given a refined question and a list of explored code lines.
-                - Assess whether the explored lines collectively provide a sufficient answer to the refined question.
-
-                2. **Output Requirements**:
-                - If the explored lines are sufficient:
-                    - Set "final_decision_sufficient" to true.
-                    - Provide the final answer in "next_step_summary" based on the explored lines.
-                - If the explored lines are insufficient:
-                    - Set "final_decision_sufficient" to false.
-                    - Provide evaluations for each explored line:
-                    - For each line, specify if it is valuable for further exploration.
-                    - If valuable, specify at least one variables, the exploration tool, and a reason.
-                    - Ensure at least one line is marked as valuable to explore next.
-                    - Summarize the proposed next steps in "next_step_summary".
-
-                3. **Line-by-Line Evaluation**:
-                - For each explored code line:
-                    - Specify whether the line is valuable for further exploration.
-                    - If valuable:
-                    - Identify the variable to explore next.
-                    - Select the appropriate tool:
-                        - **0**: Go to Definition
-                        - **1**: Find References
-                    - Provide a reason for choosing the variable and tool.
-
-                4. **Output Format**:
-
-                {
-                    "final_decision_sufficient": true or false, // Whether the explored lines sufficiently answer the question
-                    "evaluations": [ // Evaluations of explored code lines
-                        {
-                            "file_uri": "string", // File URI of the code line
-                            "line_number": number, // Line number of the code line
-                            "valuable": true or false, // Whether the code line is valuable for further exploration
-                            "next_step": {
-                                "variable": "string", // Variable to explore next
-                                "tool": 0 or 1, // Tool to explore the variable
-                                "reason": "string" // Reason for choosing the variable and tool
-                            } or null // Null if the line is not valuable for further exploration
-                        },
-                        ...
-                    ],
-                    "next_step_summary": "string" // Summary of the final answer or proposed next steps
-                }
-            `;
-                break;
             default:
                 throw new Error("Unknown task number provided.");
         }
@@ -1414,33 +1426,55 @@ class Agent {
             Ensure that your output matches the provided JSON schema.
         `);
 
+
         const prompt = JSON.stringify(inputJson);
-        const messages = [
-            systemMessage,
-            new HumanMessage(prompt)
-        ];
+        const messages = [systemMessage, new HumanMessage(prompt)];
 
-        // time the agent's response
-        const start = new Date().getTime();
-        const result = await this._model.invoke(messages, {
-            response_format: {
-                type: "json_schema",
-                json_schema: {
-                    name: `task_${taskNumber}_schema`,
-                    schema: selectedSchema
-                }
+        let result: any;
+        let valid = false;
+
+        while (!valid) {
+            // Time the agent's response
+            const start = new Date().getTime();
+            const model = taskNumber === 3 || taskNumber === 4 || taskNumber === 6 ? this._model : this._fasterModel;
+
+            const rawResponse = await model.invoke(messages, {
+                response_format: {
+                    type: "json_schema",
+                    json_schema: {
+                        name: `task_${taskNumber}_schema`,
+                        schema: selectedSchema,
+                    },
+                },
+            });
+
+            const end = new Date().getTime();
+            console.log(`Task ${taskNumber} Response Time: ${end - start} ms`);
+
+            const parser = new StringOutputParser();
+            const response = await parser.invoke(rawResponse);
+
+            console.log(`Task ${taskNumber} Response: ${response}`);
+
+            try {
+                result = JSON.parse(response);
+
+                // Validate the result against the schema
+                valid = true;
+            } catch (error) {
+                console.error(`Failed to parse JSON response for Task ${taskNumber}:`, error);
+                valid = false;
             }
-        });
-        const end = new Date().getTime();
-        console.log(`Task ${taskNumber} Response Time: ${end - start} ms`);
 
-        const parser = new StringOutputParser();
-        const response = await parser.invoke(result);
+            // If validation fails, provide feedback to the agent
+            if (!valid) {
+                console.warn(`Re-invoking agent for Task ${taskNumber} due to validation errors.`);
+            }
+        }
 
-        // log the response in json format
-        console.log(`Task ${taskNumber} Response: ${JSON.stringify(JSON.parse(response), null, 2)}`);
-
-        return response;
+        // Log and return the validated result
+        console.log(`Validated Task ${taskNumber} Output:`, result);
+        return JSON.stringify(result);
     }
 
     // Method to update the exploration graph and pass visualization data to SidebarView

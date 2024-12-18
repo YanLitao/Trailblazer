@@ -41,6 +41,12 @@ export async function getSurroundingCode(uri: vscode.Uri, startLine: number, end
     };
 }
 
+export async function getLineTextFromRange(uri: vscode.Uri, startLine: number, endLine: number): Promise<string> {
+    const document = await vscode.workspace.openTextDocument(uri);
+    const range = new vscode.Range(startLine, 0, endLine, document.lineAt(endLine).text.length);
+    return document.getText(range);
+}
+
 export function stripLineIndentation(code: string): string {
     // Split the code into lines
     const lines = code.split('\n');
@@ -376,9 +382,16 @@ function removeComments(text: string): string {
     return text.replace(/\/\/.*|\/\*[\s\S]*?\*\//g, '');
 }
 
-function findFunctionDeclaration(node: ts.Node): boolean {
-    if (ts.isFunctionDeclaration(node)) {
+function findFunctionDeclaration(node: ts.Node, isFunction: number): boolean {
+    if (isFunction == 1 && ts.isFunctionDeclaration(node)) {
         return true;
+    }
+    if (isFunction == 2) {
+        for (const child of node.getChildren()) {
+            if (ts.isArrowFunction(child)) {
+                return true;
+            }
+        }
     }
     return false;
 }
@@ -387,7 +400,7 @@ function findFunctionDeclaration(node: ts.Node): boolean {
 async function findNode(
     fileUri: vscode.Uri,
     lineNumber: number,
-    isFunction: boolean = false
+    isFunction: number = 0
 ): Promise<ts.Node | null> {
     const document = await vscode.workspace.openTextDocument(fileUri);
     const fileContent = document.getText();
@@ -406,9 +419,9 @@ async function findNode(
 
         // Check if the node overlaps with the specified range
         if (start <= rangeEnd && end >= rangeStart) {
-            if (!isFunction && containsSingleCompleteSentence(node, sourceFile)) {
+            if (isFunction == 0 && containsSingleCompleteSentence(node, sourceFile)) {
                 return node;
-            } else if (isFunction && findFunctionDeclaration(node)) {
+            } else if (isFunction > 0 && findFunctionDeclaration(node, isFunction)) {
                 return node;
             }
         }
@@ -452,16 +465,18 @@ async function extractVariables(
     fileUri: vscode.Uri,
     lineNumber: number,
     inputVariable: string,
-    isFunction: boolean = false
+    isFunction: number = 0
 ): Promise<{ fileUri: string; lineNumber: number; variable: string }[]> {
     const extractedNode = await findNode(fileUri, lineNumber, isFunction);
     if (extractedNode) {
         let results;
-        if (isFunction) {
+        if (isFunction == 1) {
             results = extractFunctionAndParameters(extractedNode, inputVariable, fileUri.toString());
-        } else {
+        } else if (isFunction == 0) {
             const { variables, functions } = extractVariablesAndFunctions(extractedNode);
             results = processOtherSide(variables, functions, inputVariable, fileUri.toString());
+        } else {
+            results = extractArrowFunctionAndParameters(extractedNode, inputVariable, fileUri.toString());
         }
         return results;
     }
@@ -548,7 +563,9 @@ function extractFunctionAndParameters(
         if (layer >= 15) return; // Stop for deeply nested nodes
 
         // Skip irrelevant nodes
-        if (ts.SyntaxKind.TypePredicate <= node.kind && node.kind <= ts.SyntaxKind.ImportType || ts.SyntaxKind.Block == node.kind) {
+        if (ts.SyntaxKind.BreakKeyword <= node.kind && node.kind <= ts.SyntaxKind.OfKeyword ||
+            ts.SyntaxKind.TypePredicate <= node.kind && node.kind <= ts.SyntaxKind.ImportType ||
+            ts.SyntaxKind.Block == node.kind) {
             return;
         }
 
@@ -578,6 +595,75 @@ function extractFunctionAndParameters(
     return results;
 }
 
+function extractArrowFunctionAndParameters(node: ts.Node,
+    inputVariable: string,
+    fileUri: string
+): { fileUri: string; lineNumber: number; variable: string }[] {
+    const currentLayer = 0;
+    const functionResult: { fileUri: string; lineNumber: number; variable: string }[] = [];
+    const parameterResult: { fileUri: string; lineNumber: number; variable: string }[] = [];
+
+    for (const child of node.getChildren()) {
+        // the function is on the right side of the equal sign with ts.SyntaxKind.Identifier
+        // the parameters are on the left side of the equal sign with ts.SyntaxKind.Identifier
+        if (ts.isIdentifier(child)) {
+            const start = child.getStart();
+            const lineAndCharacter = ts.getLineAndCharacterOfPosition(child.getSourceFile(), start);
+            const line = lineAndCharacter.line;
+            const extractedText = child.getText();
+
+            functionResult.push({
+                fileUri: fileUri,
+                lineNumber: line,
+                variable: extractedText
+            });
+        } else {
+            visit(child, currentLayer);
+        }
+    }
+
+    // Helper function to traverse nodes
+    function visit(node: ts.Node, layer: number) {
+        if (layer >= 15) return; // Stop for deeply nested nodes
+
+        // Skip irrelevant nodes
+        if (ts.SyntaxKind.BreakKeyword <= node.kind && node.kind <= ts.SyntaxKind.OfKeyword ||
+            ts.SyntaxKind.TypePredicate <= node.kind && node.kind <= ts.SyntaxKind.ImportType ||
+            ts.SyntaxKind.Block == node.kind) {
+            return;
+        }
+
+        // Check for identifiers
+        if (node.kind === ts.SyntaxKind.Identifier) {
+            // get line number of the node
+            const start = node.getStart();
+            const lineAndCharacter = ts.getLineAndCharacterOfPosition(node.getSourceFile(), start);
+            const line = lineAndCharacter.line;
+            const extractedText = node.getText();
+
+            if (extractedText === inputVariable) return;
+
+            parameterResult.push({
+                fileUri: fileUri,
+                lineNumber: line,
+                variable: extractedText
+            });
+        }
+
+        // Traverse child nodes
+        node.getChildren().forEach((child) => visit(child, layer + 1));
+    }
+
+    // check if the inputVariable is in the function
+    for (const variable of functionResult) {
+        if (variable.variable === inputVariable) {
+            return parameterResult;
+        }
+    }
+
+    return functionResult;
+}
+
 
 // Main function to parse the file and extract assignments
 export async function analyze(
@@ -592,9 +678,11 @@ export async function analyze(
         console.error(`Line ${lineNumber} not found in file ${fileUri}`);
         return [];
     }
-    let isFunction = false;
-    if (trimmedLine.includes("function ") && !trimmedLine.includes("=")) {
-        isFunction = true;
+    let isFunction = 0;
+    if (trimmedLine.includes("function ")) {
+        isFunction = 1;
+    } else if (trimmedLine.includes("=>")) {
+        isFunction = 2;
     }
     const results = await extractVariables(fileUri, lineNumber, inputVariable, isFunction);
     return results;
