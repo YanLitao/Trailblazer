@@ -286,8 +286,7 @@ function processOtherSide(
     variables: { name: string; layer: number; side: 'left' | 'right'; line: number }[],
     functions: { name: string; side: 'left' | 'right'; line: number } | null,
     inputVariable: string,
-    fileUri: string,
-    inputLineNumber: number
+    fileUri: string
 ): { fileUri: string; lineNumber: number; variable: string }[] {
     const results: { fileUri: string; lineNumber: number; variable: string }[] = [];
     let side: "left" | "right" | "none" = "none";
@@ -377,10 +376,18 @@ function removeComments(text: string): string {
     return text.replace(/\/\/.*|\/\*[\s\S]*?\*\//g, '');
 }
 
+function findFunctionDeclaration(node: ts.Node): boolean {
+    if (ts.isFunctionDeclaration(node)) {
+        return true;
+    }
+    return false;
+}
+
 // First part: Find assignment node text
-async function findAssignmentNode(
+async function findNode(
     fileUri: vscode.Uri,
-    lineNumber: number
+    lineNumber: number,
+    isFunction: boolean = false
 ): Promise<ts.Node | null> {
     const document = await vscode.workspace.openTextDocument(fileUri);
     const fileContent = document.getText();
@@ -399,8 +406,9 @@ async function findAssignmentNode(
 
         // Check if the node overlaps with the specified range
         if (start <= rangeEnd && end >= rangeStart) {
-            // Ensure the node contains a valid assignment (complete sentence with "=")
-            if (containsSingleCompleteSentence(node, sourceFile)) {
+            if (!isFunction && containsSingleCompleteSentence(node, sourceFile)) {
+                return node;
+            } else if (isFunction && findFunctionDeclaration(node)) {
                 return node;
             }
         }
@@ -423,7 +431,7 @@ export async function findCompleteStatementText(
     fileUri: vscode.Uri,
     lineNumber: number
 ): Promise<{ statementText: string; startLineNum: number; endLineNum: number }> {
-    const completeLineNode = await findAssignmentNode(fileUri, lineNumber);
+    const completeLineNode = await findNode(fileUri, lineNumber);
     if (completeLineNode) {
         const document = await vscode.workspace.openTextDocument(fileUri);
         const statementText = completeLineNode.getText();
@@ -440,15 +448,21 @@ export async function findCompleteStatementText(
 }
 
 // Combined function using both parts
-async function extractAssignments(
+async function extractVariables(
     fileUri: vscode.Uri,
     lineNumber: number,
-    inputVariable: string
+    inputVariable: string,
+    isFunction: boolean = false
 ): Promise<{ fileUri: string; lineNumber: number; variable: string }[]> {
-    const assignmentNode = await findAssignmentNode(fileUri, lineNumber);
-    if (assignmentNode) {
-        const { variables, functions } = extractVariablesAndFunctions(assignmentNode);
-        const results = processOtherSide(variables, functions, inputVariable, fileUri.toString(), lineNumber);
+    const extractedNode = await findNode(fileUri, lineNumber, isFunction);
+    if (extractedNode) {
+        let results;
+        if (isFunction) {
+            results = extractFunctionAndParameters(extractedNode, inputVariable, fileUri.toString());
+        } else {
+            const { variables, functions } = extractVariablesAndFunctions(extractedNode);
+            results = processOtherSide(variables, functions, inputVariable, fileUri.toString());
+        }
         return results;
     }
     return [];
@@ -521,12 +535,67 @@ function extractVariablesAndFunctions(node: ts.Node): {
     return { variables, functions };
 }
 
+function extractFunctionAndParameters(
+    node: ts.Node,
+    inputVariable: string,
+    fileUri: string
+): { fileUri: string; lineNumber: number; variable: string }[] {
+    const currentLayer = 0;
+    const results: { fileUri: string; lineNumber: number; variable: string }[] = [];
+
+    // Helper function to traverse nodes
+    function visit(node: ts.Node, layer: number) {
+        if (layer >= 15) return; // Stop for deeply nested nodes
+
+        // Skip irrelevant nodes
+        if (ts.SyntaxKind.TypePredicate <= node.kind && node.kind <= ts.SyntaxKind.ImportType || ts.SyntaxKind.Block == node.kind) {
+            return;
+        }
+
+        // Check for identifiers
+        if (node.kind === ts.SyntaxKind.Identifier) {
+            // get line number of the node
+            const start = node.getStart();
+            const lineAndCharacter = ts.getLineAndCharacterOfPosition(node.getSourceFile(), start);
+            const line = lineAndCharacter.line;
+            const extractedText = node.getText();
+
+            if (extractedText === inputVariable) return;
+
+            results.push({
+                fileUri: fileUri,
+                lineNumber: line,
+                variable: extractedText
+            });
+        }
+
+        // Traverse child nodes
+        node.getChildren().forEach((child) => visit(child, layer + 1));
+    }
+
+    visit(node, currentLayer);
+
+    return results;
+}
+
+
 // Main function to parse the file and extract assignments
 export async function analyze(
     fileUri: vscode.Uri,
     lineNumber: number,
     inputVariable: string
 ) {
-    const assignments = await extractAssignments(fileUri, lineNumber, inputVariable);
-    return assignments;
+    const lineText = await getLineText(fileUri, lineNumber);
+    const trimmedLine = lineText.trim();
+
+    if (!trimmedLine) {
+        console.error(`Line ${lineNumber} not found in file ${fileUri}`);
+        return [];
+    }
+    let isFunction = false;
+    if (trimmedLine.includes("function ") && !trimmedLine.includes("=")) {
+        isFunction = true;
+    }
+    const results = await extractVariables(fileUri, lineNumber, inputVariable, isFunction);
+    return results;
 }

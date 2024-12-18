@@ -44,6 +44,7 @@ export class ExplorationGraph {
      * If the node already exists, updates its properties. Otherwise, adds a new node.
      */
     upsertNode(node: Node) {
+        console.log(`Upserting node ${node.id}`);
         const existingNode = this.nodes.get(node.id);
         if (!existingNode) {
             // Add the new node
@@ -73,7 +74,12 @@ export class ExplorationGraph {
         // Ensure the source node exists
         const fromNode = this.nodes.get(edge.from);
         if (!fromNode) {
-            console.warn(`Source node ${edge.from} not found in graph.`);
+            console.warn(`Source node ${edge.from} not found in graph. The edge is to ${edge.to} with tool ${edge.tool}`);
+            // log all nodes in the graph
+            console.log("Nodes in the graph:");
+            for (const node of this.nodes.values()) {
+                console.log(`  - ${node.id}`);
+            }
         }
     }
 
@@ -86,9 +92,13 @@ export class ExplorationGraph {
 
     findNodeByLine(fileUri: string, lineNumber: number): string | null {
         for (const node of this.nodes.values()) {
-            if (node.fileUri === fileUri && node.lineNumber === lineNumber) {
+            if (node.fileUri == fileUri && node.lineNumber == lineNumber) {
                 return node.id; // Return the first matching node
             }
+        }
+        console.log(`Node not found at ${fileUri}:${lineNumber}`);
+        for (const node of this.nodes.values()) {
+            console.log(`  - ${node.fileUri} and line number: ${node.lineNumber}`);
         }
         return null;
     }
@@ -144,10 +154,12 @@ export class ExplorationGraph {
 
         // Collect the shortest paths for up to `maxPaths` origins
         const shortestPaths: { node: Node; edge?: Edge }[][] = Array.from(shortestPathsMap.values())
+            .filter(path => path.length >= 1)
             .slice(0, maxPaths)
             .map(path => path.reverse()); // Reverse each path so origin is first and startNode is last
 
         // Log the nodes and edges of each path
+        console.log(`Top ${maxPaths} shortest paths from node ${startNodeId}:`);
         shortestPaths.forEach((path, pathIndex) => {
             console.log(`Path ${pathIndex + 1}:`);
             path.forEach((entry, idx) => {

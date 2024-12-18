@@ -698,6 +698,7 @@ class Agent {
                 tool: subProblem.tool == 0 ? "definition" : "reference",
             }
 
+            console.log(`Adding base result node ${resultNodeId} and edge from ${sourceId} to ${resultNodeId}`);
             this._explorationGraph.upsertNode(resultNode);
             this._explorationGraph.addEdge(resultEdge);
 
@@ -708,6 +709,9 @@ class Agent {
                 const relevantResultNodeId = `${variableInfo.fileUri}:${variableInfo.lineNumber}:${variableInfo.variable}`;
                 if (relevantResultNodeId === resultNodeId) {
                     return;
+                }
+                if (variableInfo.variable === "props") {
+                    console.log("props found: ", relevantResultNodeId);
                 }
                 const lineText = document.lineAt(variableInfo.lineNumber).text.trim();
                 results.push({
@@ -722,7 +726,7 @@ class Agent {
                 const relevantResultNode: Node = {
                     id: relevantResultNodeId,
                     fileUri: variableInfo.fileUri,
-                    lineNumber: variableInfo.line_number,
+                    lineNumber: variableInfo.lineNumber,
                     variable: variableInfo.variable,
                     codeSnippet: lineText,
                     edges: new Set([]),
@@ -734,6 +738,8 @@ class Agent {
                     variable: variableInfo.variable,
                     tool: "assignment",
                 }
+
+                console.log(`Adding relevant result node ${relevantResultNodeId} and edge from ${resultNodeId} to ${relevantResultNodeId}`);
                 this._explorationGraph.upsertNode(relevantResultNode);
                 this._explorationGraph.addEdge(relevantResultEdge);
 
@@ -922,7 +928,6 @@ class Agent {
         const response = await this._callAgentAPI(inputJson, 4, task4JsonSchema);
         const task4Output = JSON.parse(response);
 
-
         task4Output.ranked_results.forEach((result: {
             file_uri: string;
             line_number: number;
@@ -1047,13 +1052,15 @@ class Agent {
     async runTask5(): Promise<string> {
         console.warn("Running Task 5");
 
+        if (this._findingsSummary.length === 0) {
+            return "";
+        }
+
         const inputJson = {
             task: 5,
             refined_question: this._refined_question ?? "",
             findings: this._findingsSummary
         };
-
-        console.log("finding summary", this._findingsSummary);
 
         const response = await this._callAgentAPI(inputJson, 5, task5JsonSchema);
         const task5Output = JSON.parse(response);
