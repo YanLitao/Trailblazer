@@ -105,7 +105,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
             }
         }
 
-        // Wait 30 seconds before allowing the next update
         await new Promise(resolve => setTimeout(resolve, this._stayingTime * 1000));
 
         this._isDisplaying = false;
@@ -182,7 +181,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
     private _getHtmlForWebview(webview: vscode.Webview): string {
         const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', 'sidebar.js'));
         const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', 'sidebar.css'));
-        const prismCSS = webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', 'prism.css'));
+        //const prismCSS = webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', 'prism.css'));
         const prismJS = webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', 'prism.js'));
         const html2pdfJS = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js';
         const d3Uri = 'https://d3js.org/d3.v7.min.js';
@@ -489,12 +488,12 @@ export class SidebarView implements vscode.WebviewViewProvider {
             }
 
             const nextStepSummary = task3Output.final_decision_sufficient
-                ? "Exploration completed."
+                ? "Final Answer: " + task3Output.next_step_summary
                 : (task3Output.next_step_summary || "");
 
             let findingsHtml = "";
             if (importantCodeSnippets && importantCodePaths) {
-                findingsHtml = await this.addTask4Results(importantCodeSnippets, importantCodePaths);
+                findingsHtml = await this.addTask5And6Results(importantCodeSnippets, importantCodePaths);
             }
 
             // Generate HTML for exploration steps
@@ -545,13 +544,15 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 explorationStepsHtml += `<p>No sub-questions proposed.</p></div></div>`;
             }
 
+            let currentTaskHtml = "";
+
             // Post the HTML to the exploration steps
             webview.postMessage({ command: 'appendHtml', html: explorationStepsHtml, id: explorationUniqueId, num: i });
 
             // Generate HTML for current task content (show only the first invocation place)
 
             if (task3Output.sub_problems.length > 0) {
-                let currentTaskHtml = `<div class="task-content">`;
+                currentTaskHtml = `<div class="task-content">`;
                 const firstSubProblem = task3Output.sub_problems[0];
                 const codeContext = firstSubProblem.code_context;
                 const fileName = this.getFileNameFromUri(codeContext.file_uri);
@@ -617,13 +618,18 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     const locations = [{ fileUri: firstSubProblem.code_context.file_uri, lineNumber: firstSubProblem.code_context.line_number }];
                     this.enqueueTaskResultUpdate(answerText || "", nextStepSummary || "", findingsHtml || "", currentTaskHtml || "", locations);
                 }
+            } else {
+                if (answerText || nextStepSummary) {
+                    this.enqueueTaskResultUpdate(answerText || "", nextStepSummary || "", findingsHtml || "", currentTaskHtml || "");
+                }
             }
+
             // Increment the step counter
             this._stepCounter++;
         }
     }
 
-    public async addTask4Results(importantCodeSnippets: Map<string, any>, importantCodePaths: Map<string, Array<{ nodes: Node[], edges: Edge[] }>>) {
+    public async addTask5And6Results(importantCodeSnippets: Map<string, any>, importantCodePaths: Map<string, Array<{ nodes: Node[], edges: Edge[] }>>) {
         const visibleLimit = 15; // Show this many results initially
         const results = [...importantCodeSnippets.entries()].map(([index, result]) => ({ index, ...result }));
         const initialVisibleResults = results.slice(0, visibleLimit);
@@ -646,11 +652,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
 
             // Extract the subset of lines and join them into a truncated statement
             const truncatedStatement = lines.slice(startLine, endLine + 1).join('\n');
-            // Highlight the code_line within the truncated statement
-            /* let highlightedStatement = truncatedStatement.replace(
-                result.code_line,
-                `<span class="highlighted-code-line">${result.code_line}</span>` // need to remove the span tag in the code snippet
-            ); */
 
             // Retrieve paths for the current node and generate HTML for each path
             const pathsHtml = this.constructPathsHtml(importantCodePaths.get(resultNodeId) || []);

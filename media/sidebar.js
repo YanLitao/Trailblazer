@@ -32,7 +32,11 @@ window.addEventListener('message', event => {
             }
             break;
         case 'updateExplorationSummary':
-            document.getElementById('exploration-summary').innerText = message.summary;
+            if (message.summary.includes("Final Answer: ")) {
+                document.getElementById('still-to-be-found').innerHTML = message.summary;
+            } else {
+                document.getElementById('exploration-summary').innerText = message.summary;
+            }
             break;
         case 'appendFindings':
             appendFindingsHtml(message.html);
@@ -236,6 +240,9 @@ function updateStatus(status) {
             statusText.className = 'paused-status';
             break;
         case 'Stopped':
+            statusText.textContent = 'Stopped';
+            statusText.className = 'stopped-status';
+            break;
         case 'Finished': // Treat both as "Finished"
             statusText.textContent = 'Finished';
             statusText.className = 'finished-status';
@@ -243,6 +250,7 @@ function updateStatus(status) {
         default: // Default to "Idle"
             statusText.textContent = 'Idle';
             statusText.className = 'idle-status';
+            break;
     }
 }
 

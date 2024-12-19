@@ -75,9 +75,11 @@ async function askQuestionAboutCode(context: vscode.ExtensionContext, sidebarVie
     const endLine = selection.end.line;
 
     // Prompt user for the question
-    const query = await getQuestion(selectedText);
+    let query = await getQuestion(selectedText);
     if (query === undefined) {
         return; // User canceled the input box
+    } else if (query === "") {
+        query = "What does this code do?";
     }
 
     // Update the sidebar with the user question and selected code
@@ -260,6 +262,7 @@ class Agent {
     private _fileExtensionsToExclude = ['.test.ts', '.spec.ts', '.test.tsx', '.spec.tsx', '.test.js', '.spec.js', '.test.jsx', '.spec.jsx', '.d.ts'];
     private _importantCodePaths: Map<string, Array<{ nodes: Node[]; edges: (Edge | null)[] }>> = new Map();
     private _findingsSummary: { snippetKey: number[], statement: string, outOfDate: boolean }[] = [];
+    private _lastFindingSummary: { snippetKey: number[], statement: string, outOfDate: boolean }[] = [];
     private _updateFindings: boolean = false;
 
     constructor(sidebarViewProvider: SidebarView) {
@@ -348,15 +351,14 @@ class Agent {
             refinedOutput = task3Output;
             refinedOutput.final_decision_sufficient = task3Output.final_decision_sufficient;
             refinedOutput.answer = answerHtml;
-
             this._updateStepResults(refinedOutput);
-
-            const endStep = new Date().getTime();
-            console.log(`Step ${this._stepCounter} took ${endStep - startStep}ms`);
 
             if (task3Output.final_decision_sufficient || refinedOutput.sub_problems.length === 0) {
                 break;
             }
+
+            const endStep = new Date().getTime();
+            console.log(`Step ${this._stepCounter} took ${endStep - startStep}ms`);
         }
 
         this._sidebarViewProvider.agentIsDone();
@@ -380,20 +382,15 @@ class Agent {
             "allowed_tools": allowedTools
         };
 
-        //console.log(`Task 1 Input: ${JSON.stringify(inputJson)}`);
-
         const response = await this._callAgentAPI(inputJson, 1, task1JsonSchema);
         const task1Output = JSON.parse(response);
-
-        //console.log(`Task 1 Output: ${JSON.stringify(task1Output)}`);
-
         this._refined_question = task1Output.refined_question;
 
         for (const subProblem of task1Output.sub_problems) {
             if (subProblem && "code_context" in subProblem && uri && "file_uri" in subProblem.code_context) {
                 subProblem.code_context.file_uri = uri.toString();
             } else {
-                console.log(subProblem);
+                console.warn("Incomplete subProblem: ", subProblem);
                 continue;
             }
 
@@ -450,7 +447,7 @@ class Agent {
     }
 
     async runTask2(subProblems: any[]) {
-        console.warn("Running Task 2");
+        console.warn("Running Task 2, processing ", subProblems.length, " sub-problems.");
 
         /* const task2Input: any = {
             task: 2,
@@ -707,7 +704,6 @@ class Agent {
                 tool: subProblem.tool == 0 ? "definition" : "reference",
             }
 
-            console.log(`Adding base result node ${resultNodeId} and edge from ${sourceId} to ${resultNodeId}`);
             this._explorationGraph.upsertNode(resultNode);
             this._explorationGraph.addEdge(resultEdge);
 
@@ -718,9 +714,6 @@ class Agent {
                 const relevantResultNodeId = `${variableInfo.fileUri}:${variableInfo.lineNumber}:${variableInfo.variable}`;
                 if (relevantResultNodeId === resultNodeId) {
                     return;
-                }
-                if (variableInfo.variable === "props") {
-                    console.log("props found: ", relevantResultNodeId);
                 }
                 const lineText = document.lineAt(variableInfo.lineNumber).text.trim();
                 results.push({
@@ -748,7 +741,6 @@ class Agent {
                     tool: "assignment",
                 }
 
-                console.log(`Adding relevant result node ${relevantResultNodeId} and edge from ${resultNodeId} to ${relevantResultNodeId}`);
                 this._explorationGraph.upsertNode(relevantResultNode);
                 this._explorationGraph.addEdge(relevantResultEdge);
 
@@ -764,21 +756,24 @@ class Agent {
 
     private async processTask3andTask4Output(agentOutput: any) {
 
-        interface SubProblem {
-            sub_question: string;
-            tool: number;
-            code_context: {
-                file_uri: string;
-                invoke_variable: string;
-                code_line: string;
-                line_number: number;
-                full_statement: string;
-            };
-            from_results: boolean;
-            reason: string;
-        }
-
-        const taskOutput: { sub_problems: SubProblem[], final_decision_sufficient: boolean, next_step_summary: string, answer: string } = {
+        const taskOutput: {
+            sub_problems: {
+                sub_question: string;
+                tool: number;
+                code_context: {
+                    file_uri: string;
+                    invoke_variable: string;
+                    code_line: string;
+                    line_number: number;
+                    full_statement: string;
+                };
+                from_results: boolean;
+                reason: string;
+            }[];
+            final_decision_sufficient: boolean;
+            next_step_summary: string;
+            answer: string;
+        } = {
             sub_problems: [],
             final_decision_sufficient: agentOutput.final_decision_sufficient,
             next_step_summary: agentOutput.next_step_summary,
@@ -838,31 +833,117 @@ class Agent {
     }
 
     async runTask3() {
-        console.warn("Running Task 3");
+        console.warn("Running Task 3, processing ", this._newExploredCodeLines.length, " new code lines.");
 
-        const inputJson = {
-            task: 3,
-            refined_question: this._refined_question ?? "",
-            explored_code: this._newExploredCodeLines
+        let task3Output: {
+            sub_problems: {
+                sub_question: string;
+                tool: number;
+                code_context: {
+                    file_uri: string;
+                    invoke_variable: string;
+                    code_line: string;
+                    line_number: number;
+                    full_statement: string;
+                };
+                from_results: boolean;
+                reason: string;
+            }[];
+            final_decision_sufficient: boolean;
+            next_step_summary: string;
+            answer: string;
+        } = {
+            sub_problems: [],
+            final_decision_sufficient: false,
+            next_step_summary: "",
+            answer: ""
         };
 
-        const response = await this._callAgentAPI(inputJson, 3, task3JsonSchema);
-        const agentOutput = JSON.parse(response);
+        // If there are no new code lines to explore, directly run Task 4
+        if (this._newExploredCodeLines.length === 0) {
+            console.warn("No new code lines to explore. Running Task 4.");
+            const task4Output = await this.runTask4() as {
+                sub_problems: {
+                    sub_question: string;
+                    tool: number;
+                    code_context: {
+                        file_uri: string;
+                        invoke_variable: string;
+                        code_line: string;
+                        line_number: number;
+                        full_statement: string;
+                    };
+                    from_results: boolean;
+                    reason: string;
+                }[];
+                final_decision_sufficient: boolean;
+                next_step_summary: string;
+                answer: string;
+            };
+            task3Output = task4Output;
+        } else {
+            const inputJson = {
+                task: 3,
+                refined_question: this._refined_question ?? "",
+                explored_code: this._newExploredCodeLines
+            };
 
-        const task3Output = await this.processTask3andTask4Output(agentOutput);
+            const response = await this._callAgentAPI(inputJson, 3, task3JsonSchema);
+            const agentOutput = JSON.parse(response);
 
-        // check the number of valuable results if it is greater than 0 when the final decision is not sufficient
-        if (task3Output.sub_problems.length == 0 && !task3Output.final_decision_sufficient) {
-            // run task 4
-            const task4Output = await this.runTask4();
-            if ("sub_problems" in task4Output) {
-                task3Output.sub_problems = task4Output.sub_problems;
+            task3Output = await this.processTask3andTask4Output(agentOutput);
+
+            // If Task 3 output is insufficient, run Task 4
+            if (task3Output.sub_problems.length === 0 && !task3Output.final_decision_sufficient) {
+                console.warn("Task 3 output insufficient. Running Task 4.");
+                const task4Output = await this.runTask4() as {
+                    sub_problems: {
+                        sub_question: string;
+                        tool: number;
+                        code_context: {
+                            file_uri: string;
+                            invoke_variable: string;
+                            code_line: string;
+                            line_number: number;
+                            full_statement: string;
+                        };
+                        from_results: boolean;
+                        reason: string;
+                    }[];
+                    final_decision_sufficient: boolean;
+                    next_step_summary: string;
+                    answer: string;
+                };
+                task3Output = task4Output;
             }
         }
-
-        console.log(`Task 3 Output: ${JSON.stringify(task3Output, null, 2)}`);
         this._newExploredCodeLines = []; // Reset the new explored code lines
         return task3Output;
+    }
+
+    async runTask4() {
+        console.warn("Running task 4");
+
+        const inputJson = {
+            task: 4,
+            refined_question: this._refined_question ?? "",
+            explored_code_lines: this._exploredCodeLines,
+        };
+
+        const response = await this._callAgentAPI(inputJson, 4, task4JsonSchema);
+
+        // Validate JSON format
+        let agentOutput;
+        try {
+            agentOutput = JSON.parse(response);
+        } catch (e) {
+            console.error("Failed to parse JSON response for task 4:", e, response);
+            return [];
+        }
+
+        const task4Output = await this.processTask3andTask4Output(agentOutput);
+
+        return task4Output;
     }
 
     private async fuzzyMatchCode(fileUri: string, lineNumber: number, invokeVariable: string): Promise<{ fileUri: string; lineNumber: number; fullStatement: string } | null> {
@@ -909,33 +990,8 @@ class Agent {
         };
     }
 
-    async runTask4() {
-        console.warn("Running task 4");
-
-        const inputJson = {
-            task: 4,
-            refined_question: this._refined_question ?? "",
-            explored_code_lines: this._exploredCodeLines,
-        };
-
-        const response = await this._callAgentAPI(inputJson, 4, task4JsonSchema);
-
-        // Validate JSON format
-        let agentOutput;
-        try {
-            agentOutput = JSON.parse(response);
-        } catch (e) {
-            console.error("Failed to parse JSON response for task 4:", e, response);
-            return [];
-        }
-
-        const task4Output = await this.processTask3andTask4Output(agentOutput);
-
-        return task4Output;
-    }
-
     async runTask5(task2Results: Array<{ file_uri: string; line_number: number; code_line: string; full_statement: string; variables: Set<string> }>) {
-        console.warn("Running task 5");
+        console.warn("Running task 5, processing ", task2Results.length, " results.");
 
         const filteredResults = task2Results.filter(
             result =>
@@ -972,7 +1028,7 @@ class Agent {
             relevance_score: number;
             finding: string;
         }) => {
-            if (result.relevance_score < 0) {
+            if (result.relevance_score <= 0) {
                 return;
             }
             // Define the path key and node ID
@@ -982,6 +1038,11 @@ class Agent {
             const existingEntry = Array.from(this._importantCodeSnippets.entries()).find(
                 ([, value]) => value.file_uri === result.file_uri && value.line_number === result.line_number
             );
+
+            /* // Check if the snippet already in this._exploredCodeLines
+            const matchedCode = this._exploredCodeLines.find(
+                code => code.file_uri === result.file_uri && (code.start_line <= result.line_number && code.end_line >= result.line_number)
+            ); */
 
             let snippetKey: number;
 
@@ -1046,7 +1107,7 @@ class Agent {
 
         // Match and compare existing findings
         newFindings.forEach(newFinding => {
-            const existingFinding = this._findingsSummary.find(existing =>
+            const existingFinding = this._lastFindingSummary.find(existing =>
                 JSON.stringify(existing.snippetKey.sort()) === JSON.stringify(newFinding.snippetKey.sort())
             );
 
@@ -1080,16 +1141,16 @@ class Agent {
         updatedFindings.sort((a, b) => Math.min(...a.snippetKey) - Math.min(...b.snippetKey));
 
         // Update the findings summary without the `isUpdated` key
-        this._findingsSummary = updatedFindings.map(({ isUpdated, ...rest }) => rest);
+        this._lastFindingSummary = updatedFindings;
 
         // Return the updated findings with the `isUpdated` key
         return updatedFindings;
     };
 
     async runTask6(): Promise<string> {
-        console.warn("Running Task 6");
+        console.warn("Running Task 6, processing ", this._findingsSummary.length, " findings.");
 
-        if (this._findingsSummary.length === 0) {
+        if (this._findingsSummary.length === 0 || !this._updateFindings) {
             return "";
         }
 
@@ -1114,7 +1175,6 @@ class Agent {
         let concatenatedHtml = "";
         updatedFindings.forEach(finding => {
             const snippetKeys = `[${finding.snippetKey.map((key: number) => `<span class="citation-ref" data-ref="${key}">${key}</span>`).join(", ")}]`;
-
             const statementHtml = finding.outOfDate
                 ? `<span class="additional-finding">[1 additional finding]</span>
                    <span class="hidden-statement" style="display: none;">${snippetKeys} ${finding.statement}</span>`
@@ -1453,8 +1513,6 @@ class Agent {
 
             const parser = new StringOutputParser();
             const response = await parser.invoke(rawResponse);
-
-            console.log(`Task ${taskNumber} Response: ${response}`);
 
             try {
                 result = JSON.parse(response);
