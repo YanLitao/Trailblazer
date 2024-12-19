@@ -421,7 +421,9 @@ async function findNode(
         if (start <= rangeEnd && end >= rangeStart) {
             if (isFunction == 0 && containsSingleCompleteSentence(node, sourceFile)) {
                 return node;
-            } else if (isFunction > 0 && findFunctionDeclaration(node, isFunction)) {
+            } else if ((isFunction == 1 || isFunction == 2) && findFunctionDeclaration(node, isFunction)) {
+                return node;
+            } else if (isFunction == 3 && ts.isCallExpression(node)) {
                 return node;
             }
         }
@@ -471,12 +473,14 @@ async function extractVariables(
     if (extractedNode) {
         let results;
         if (isFunction == 1) {
-            results = extractFunctionAndParameters(extractedNode, inputVariable, fileUri.toString());
+            results = extractFunctionDefineAndParameters(extractedNode, inputVariable, fileUri.toString());
         } else if (isFunction == 0) {
             const { variables, functions } = extractVariablesAndFunctions(extractedNode);
             results = processOtherSide(variables, functions, inputVariable, fileUri.toString());
-        } else {
+        } else if (isFunction == 2) {
             results = extractArrowFunctionAndParameters(extractedNode, inputVariable, fileUri.toString());
+        } else {
+            results = extractFunctionCallAndParameters(extractedNode, inputVariable, fileUri.toString());
         }
         return results;
     }
@@ -501,6 +505,8 @@ function extractVariablesAndFunctions(node: ts.Node): {
         if (ts.SyntaxKind.TypePredicate <= node.kind && node.kind <= ts.SyntaxKind.ImportType) {
             return;
         }
+
+        console.log(node.kind, node.getText());
 
         if (node.kind === ts.SyntaxKind.EqualsToken) {
             if (layer < minEqualSignLayer) {
@@ -550,7 +556,7 @@ function extractVariablesAndFunctions(node: ts.Node): {
     return { variables, functions };
 }
 
-function extractFunctionAndParameters(
+function extractFunctionDefineAndParameters(
     node: ts.Node,
     inputVariable: string,
     fileUri: string
@@ -664,6 +670,72 @@ function extractArrowFunctionAndParameters(node: ts.Node,
     return functionResult;
 }
 
+function extractFunctionCallAndParameters(
+    node: ts.Node,
+    inputVariable: string,
+    fileUri: string
+): { fileUri: string; lineNumber: number; variable: string }[] {
+    const currentLayer = 0;
+    const results: { fileUri: string; lineNumber: number; variable: string }[] = [];
+    const functions: { fileUri: string; lineNumber: number; variable: string }[] = [];
+
+    let functionSide = true; // we assume the nodes before SyntaxList are all function names
+
+    // Helper function to traverse nodes
+    function visit(node: ts.Node, layer: number, functionSide: boolean) {
+        if (layer >= 15) return; // Stop for deeply nested nodes
+
+        // Skip irrelevant nodes
+        if (ts.SyntaxKind.BreakKeyword <= node.kind && node.kind <= ts.SyntaxKind.OfKeyword ||
+            ts.SyntaxKind.TypePredicate <= node.kind && node.kind <= ts.SyntaxKind.ImportType ||
+            ts.SyntaxKind.Block == node.kind) {
+            return;
+        } else if (ts.SyntaxKind.SyntaxList == node.kind) {
+            functionSide = false;
+        }
+
+        // Check for identifiers
+        if (node.kind === ts.SyntaxKind.Identifier) {
+            // get line number of the node
+            const start = node.getStart();
+            const lineAndCharacter = ts.getLineAndCharacterOfPosition(node.getSourceFile(), start);
+            const line = lineAndCharacter.line;
+            const extractedText = node.getText();
+
+            if (extractedText === inputVariable) return;
+
+            if (functionSide) {
+                functions.push({
+                    fileUri: fileUri,
+                    lineNumber: line,
+                    variable: extractedText
+                });
+            } else {
+                results.push({
+                    fileUri: fileUri,
+                    lineNumber: line,
+                    variable: extractedText
+                });
+            }
+        }
+
+        // Traverse child nodes
+        node.getChildren().forEach((child) => visit(child, layer + 1, functionSide));
+    }
+
+    visit(node, currentLayer, functionSide);
+
+    // check if the inputVariable is in the function or not
+    for (const f of functions) {
+        if (f.variable === inputVariable) {
+            return results;
+        }
+    }
+
+    return functions;
+}
+
+
 
 // Main function to parse the file and extract assignments
 export async function analyze(
@@ -683,6 +755,10 @@ export async function analyze(
         isFunction = 1;
     } else if (trimmedLine.includes("=>")) {
         isFunction = 2;
+    } else if (trimmedLine.includes("=")) {
+        isFunction = 0;
+    } else {
+        isFunction = 3; // function call
     }
     const results = await extractVariables(fileUri, lineNumber, inputVariable, isFunction);
     return results;
