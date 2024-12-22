@@ -48,6 +48,7 @@ export class ExplorationGraph {
         if (!existingNode) {
             // Add the new node
             this.nodes.set(node.id, node);
+            console.log(`Added node ${node.id}`);
         }
     }
 

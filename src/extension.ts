@@ -5,6 +5,7 @@ import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
 import { getFileNameFromUri, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, analyze, findCompleteStatementText } from './codeContextUtils';
 import { ExplorationGraph, Node, Edge } from './explorationGraph';
+import { json } from 'stream/consumers';
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
 
@@ -667,7 +668,6 @@ class Agent {
             // Open document to retrieve code content and statements
             const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(fileUri));
             const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, lineNumber);
-
             if (lineNumber == subProblem.code_context.line_number && fileUri == subProblem.code_context.file_uri) {
                 // we don't want to add the same line and same variable as a result, since using either Go to Definition or Find References on the variable will return the same variable name.
                 continue;
@@ -922,7 +922,7 @@ class Agent {
     }
 
     async runTask4() {
-        console.warn("Running task 4");
+        console.warn("Running task 4, processing ", this._exploredCodeLines.length, " code lines.");
 
         const inputJson = {
             task: 4,

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as ts from "typescript";
 import * as path from 'path';
 import * as url from 'url';
+import exp from 'constants';
 
 // Function to extract the file name from a file URI
 export function getFileNameFromUri(fileUri: string | undefined): string {
@@ -425,6 +426,8 @@ async function findNode(
                 return node;
             } else if (isFunction == 3 && ts.isCallExpression(node)) {
                 return node;
+            } else if (isFunction == 4 && ts.isClassDeclaration(node)) {
+                return node;
             }
         }
 
@@ -458,8 +461,9 @@ export async function findCompleteStatementText(
         return { statementText, startLineNum, endLineNum };
     }
 
-    // Return default empty values if no node is found
-    return { statementText: '', startLineNum: -1, endLineNum: -1 };
+    // No valid node found, return the line of code as the statement text
+    const lineText = await getLineText(fileUri, lineNumber);
+    return { statementText: lineText, startLineNum: lineNumber, endLineNum: lineNumber };
 }
 
 // Combined function using both parts
@@ -479,10 +483,28 @@ async function extractVariables(
             results = processOtherSide(variables, functions, inputVariable, fileUri.toString());
         } else if (isFunction == 2) {
             results = extractArrowFunctionAndParameters(extractedNode, inputVariable, fileUri.toString());
+        } else if (isFunction == 4) {
+            results = extractClass(extractedNode, inputVariable, fileUri.toString());
         } else {
             results = extractFunctionCallAndParameters(extractedNode, inputVariable, fileUri.toString());
         }
-        return results;
+        // traverse the results. if the variable is XX.XX, we need to separate them into two variables
+        const newResults = [];
+        for (const result of results) {
+            if (result.variable.includes('.')) {
+                const variables = result.variable.split('.');
+                for (const variable of variables) {
+                    newResults.push({
+                        fileUri: result.fileUri,
+                        lineNumber: result.lineNumber,
+                        variable: variable
+                    });
+                }
+            } else {
+                newResults.push(result);
+            }
+        }
+        return newResults;
     }
     return [];
 }
@@ -505,8 +527,6 @@ function extractVariablesAndFunctions(node: ts.Node): {
         if (ts.SyntaxKind.TypePredicate <= node.kind && node.kind <= ts.SyntaxKind.ImportType) {
             return;
         }
-
-        console.log(node.kind, node.getText());
 
         if (node.kind === ts.SyntaxKind.EqualsToken) {
             if (layer < minEqualSignLayer) {
@@ -735,6 +755,76 @@ function extractFunctionCallAndParameters(
     return functions;
 }
 
+function extractClass(node: ts.Node,
+    inputVariable: string,
+    fileUri: string
+): { fileUri: string; lineNumber: number; variable: string }[] {
+    const currentLayer = 0;
+    const properties: { fileUri: string; lineNumber: number; variable: string }[] = [];
+    const methods: { fileUri: string; lineNumber: number; variable: string }[] = [];
+    const results: { fileUri: string; lineNumber: number; variable: string }[] = [];
+
+    let propertySide = true;
+    let methodSide = false;
+
+    // Helper function to traverse nodes
+    function visit(node: ts.Node, layer: number) {
+        if (layer >= 15) return; // Stop for deeply nested nodes
+
+        // Skip irrelevant nodes
+        if (ts.SyntaxKind.BreakKeyword <= node.kind && node.kind <= ts.SyntaxKind.OfKeyword ||
+            ts.SyntaxKind.TypePredicate <= node.kind && node.kind <= ts.SyntaxKind.ImportType ||
+            ts.SyntaxKind.Block == node.kind || ts.SyntaxKind.JSDoc == node.kind) {
+            return;
+        }
+
+        if (ts.SyntaxKind.PropertyDeclaration == node.kind) {
+            propertySide = true;
+            methodSide = false;
+        } else if (ts.SyntaxKind.MethodDeclaration == node.kind) {
+            propertySide = false;
+            methodSide = true;
+        }
+
+        // Check for identifiers
+        if (node.kind === ts.SyntaxKind.Identifier) {
+            // get line number of the node
+            const start = node.getStart();
+            const lineAndCharacter = ts.getLineAndCharacterOfPosition(node.getSourceFile(), start);
+            const line = lineAndCharacter.line;
+            const extractedText = node.getText();
+
+            if (extractedText === inputVariable) return;
+
+            if (propertySide) {
+                properties.push({
+                    fileUri: fileUri,
+                    lineNumber: line,
+                    variable: extractedText
+                });
+            } else if (methodSide) {
+                methods.push({
+                    fileUri: fileUri,
+                    lineNumber: line,
+                    variable: extractedText
+                });
+            }
+        }
+
+        console.log(layer, node.kind, node.getText());
+
+        // Traverse child nodes
+        node.getChildren().forEach((child) => visit(child, layer + 1));
+    }
+
+    visit(node, currentLayer);
+
+    // combine properties and methods into results
+    results.push(...properties);
+    results.push(...methods);
+
+    return results;
+}
 
 
 // Main function to parse the file and extract assignments
@@ -751,15 +841,20 @@ export async function analyze(
         return [];
     }
     let isFunction = 0;
-    if (trimmedLine.includes("function ")) {
-        isFunction = 1;
+    if (trimmedLine.includes("=")) {
+        isFunction = 0; // assignment
+    } else if (trimmedLine.endsWith(",")) {
+        isFunction = 0; // destructuring assignment
+    } else if (trimmedLine.includes("function ")) {
+        isFunction = 1; // function definition
     } else if (trimmedLine.includes("=>")) {
-        isFunction = 2;
-    } else if (trimmedLine.includes("=")) {
-        isFunction = 0;
-    } else {
+        isFunction = 2; // arrow function
+    } else if (trimmedLine.includes("class")) {
+        isFunction = 4; // class
+    } else if (trimmedLine.includes("(")) {
         isFunction = 3; // function call
     }
+
     const results = await extractVariables(fileUri, lineNumber, inputVariable, isFunction);
     return results;
 }
