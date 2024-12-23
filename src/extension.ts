@@ -882,16 +882,40 @@ class Agent {
             };
             task3Output = task4Output;
         } else {
-            const inputJson = {
-                task: 3,
-                refined_question: this._refined_question ?? "",
-                explored_code: this._newExploredCodeLines
-            };
+            const totalVariables = this._newExploredCodeLines.reduce(
+                (acc, code) => acc + code.variables.size,
+                0
+            );
 
-            const response = await this._callAgentAPI(inputJson, 3, task3JsonSchema);
-            const agentOutput = JSON.parse(response);
+            if (totalVariables <= 5) {
+                // If the total number of variables is less than or equal to 5, add them all to the output
+                task3Output.sub_problems = this._newExploredCodeLines.flatMap(code =>
+                    Array.from(code.variables).map(variable => ({
+                        sub_question: "",
+                        tool: 1, // Use Find References by default
+                        code_context: {
+                            file_uri: code.file_uri,
+                            invoke_variable: variable,
+                            code_line: code.code_snippet,
+                            line_number: code.start_line,
+                            full_statement: code.code_snippet
+                        },
+                        from_results: false,
+                        reason: "Explore the last reached variables in the code line"
+                    }))
+                );
+            } else {
+                const inputJson = {
+                    task: 3,
+                    refined_question: this._refined_question ?? "",
+                    explored_code: this._newExploredCodeLines
+                };
 
-            task3Output = await this.processTask3andTask4Output(agentOutput);
+                const response = await this._callAgentAPI(inputJson, 3, task3JsonSchema);
+                const agentOutput = JSON.parse(response);
+
+                task3Output = await this.processTask3andTask4Output(agentOutput);
+            }
 
             // If Task 3 output is insufficient, run Task 4
             if (task3Output.sub_problems.length === 0 && !task3Output.final_decision_sufficient) {
