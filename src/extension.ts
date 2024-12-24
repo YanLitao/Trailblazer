@@ -3,9 +3,8 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
-import { getFileNameFromUri, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, analyze, findCompleteStatementText } from './codeContextUtils';
+import { getLineNumber, getFileNameFromUri, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, analyze, findCompleteStatementText } from './codeContextUtils';
 import { ExplorationGraph, Node, Edge } from './explorationGraph';
-import { json } from 'stream/consumers';
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
 
@@ -132,7 +131,6 @@ const task1JsonSchema = {
 const task3JsonSchema = {
     "type": "object",
     "properties": {
-        "final_decision_sufficient": { "type": "boolean" },
         "evaluations": {
             "type": "array",
             "items": {
@@ -156,13 +154,12 @@ const task3JsonSchema = {
         },
         "next_step_summary": { "type": "string" }
     },
-    "required": ["final_decision_sufficient", "evaluations", "next_step_summary"]
+    "required": ["evaluations", "next_step_summary"]
 };
 
 const task4JsonSchema = {
     "type": "object",
     "properties": {
-        "final_decision_sufficient": { "type": "boolean" },
         "evaluations": {
             "type": "array",
             "items": {
@@ -186,7 +183,7 @@ const task4JsonSchema = {
         },
         "next_step_summary": { "type": "string" }
     },
-    "required": ["final_decision_sufficient", "evaluations", "next_step_summary"]
+    "required": ["evaluations", "next_step_summary"]
 };
 
 const task5JsonSchema = {
@@ -239,9 +236,11 @@ const task6JsonSchema = {
                 },
                 "required": ["snippetKey", "statement", "outOfDate"]
             }
-        }
+        },
+        "final_decision_sufficient": { "type": "boolean" },
+        "final_answer": { "type": "string" }
     },
-    "required": ["filtered_findings"]
+    "required": ["filtered_findings", "final_decision_sufficient", "final_answer"]
 };
 
 class Agent {
@@ -265,6 +264,7 @@ class Agent {
     private _findingsSummary: { snippetKey: number[], statement: string, outOfDate: boolean }[] = [];
     private _lastFindingSummary: { snippetKey: number[], statement: string, outOfDate: boolean }[] = [];
     private _updateFindings: boolean = false;
+    private _final_decision_sufficient: boolean = false;
 
     constructor(sidebarViewProvider: SidebarView) {
         this._model = new ChatOpenAI({
@@ -344,17 +344,16 @@ class Agent {
             const task2Results = await this.runTask2(refinedOutput.sub_problems);
 
             // Run task 5 and Task 3 concurrently
-            const [answerHtml, task3Output] = await Promise.all([
-                this.runTask5(task2Results), // task 5: Decide the importance of results
-                this.runTask3()             // Task 3: Propose next steps
+            const [task3Output, answerHtml] = await Promise.all([
+                this.runTask3(),// Task 3: Propose next steps
+                this.runTask5(task2Results)// task 5: Decide the importance of results
             ]);
 
             refinedOutput = task3Output;
-            refinedOutput.final_decision_sufficient = task3Output.final_decision_sufficient;
             refinedOutput.answer = answerHtml;
             this._updateStepResults(refinedOutput);
 
-            if (task3Output.final_decision_sufficient || refinedOutput.sub_problems.length === 0) {
+            if (this._final_decision_sufficient || refinedOutput.sub_problems.length === 0) {
                 break;
             }
 
@@ -399,7 +398,7 @@ class Agent {
             const codeLine = preProcessCodeLine(subProblem, surroundingCode);
 
             if (codeLine) {
-                const accurateLineNumber = getAccurateLineNumber(surroundingCode, codeLine, subProblem.code_context.line_number, startLine);
+                const accurateLineNumber = getLineNumber(surroundingCode, subProblem.code_context.invoke_variable, startLine);
                 if (accurateLineNumber !== null) {
                     subProblem.code_context.line_number = accurateLineNumber;
                     const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, accurateLineNumber);
@@ -474,7 +473,7 @@ class Agent {
             const codeLine = document.lineAt(initialLineNumber).text.trim();
 
             if (!codeLine.includes(variableName)) {
-                const accurateLineNumber = getAccurateLineNumber(document.getText(), variableName, initialLineNumber, 0);
+                const accurateLineNumber = getAccurateLineNumber(document.getText(), subProblem.code_context.full_statement, variableName, initialLineNumber);
                 if (!accurateLineNumber) {
                     continue;
                 } else {
@@ -516,7 +515,6 @@ class Agent {
                 });
                 continue;
             }
-
             // Perform the selected tool action (Go to Definition or Find References)
             const results = await this._runTool(fileUri, line, offset, subProblem);
 
@@ -767,15 +765,12 @@ class Agent {
                     line_number: number;
                     full_statement: string;
                 };
-                from_results: boolean;
                 reason: string;
             }[];
-            final_decision_sufficient: boolean;
             next_step_summary: string;
             answer: string;
         } = {
             sub_problems: [],
-            final_decision_sufficient: agentOutput.final_decision_sufficient,
             next_step_summary: agentOutput.next_step_summary,
             answer: ""
         };
@@ -791,7 +786,7 @@ class Agent {
                     // check if the code line is not empty and variable is in the code line
                     if (!codeLine || !codeLine.includes(item.next_step.variable)) {
                         // find the accurate line number
-                        const accurateLineNumber = getAccurateLineNumber(code_document.getText(), item.next_step.variable, item.line_number, 0);
+                        const accurateLineNumber = getLineNumber(full_statement.statementText, item.next_step.variable, full_statement.startLineNum);
                         if (accurateLineNumber !== null) {
                             item.line_number = accurateLineNumber;
                             full_statement = await findCompleteStatementText(vscode.Uri.parse(item.file_uri), accurateLineNumber);
@@ -806,9 +801,6 @@ class Agent {
                         continue;
                     }
 
-                    // Determine if the result is from explored code or matched using fuzzy matching
-                    const from_results = !!matchedCode || !!(await this.fuzzyMatchCode(item.file_uri, item.line_number, item.next_step.variable));
-
                     let taskItem = {
                         sub_question: "",
                         tool: item.next_step.tool,
@@ -819,7 +811,6 @@ class Agent {
                             line_number: item.line_number,
                             full_statement: full_statement.statementText
                         },
-                        from_results: from_results,
                         reason: item.next_step.reason
                     };
                     taskOutput.sub_problems.push(taskItem);
@@ -846,15 +837,12 @@ class Agent {
                     line_number: number;
                     full_statement: string;
                 };
-                from_results: boolean;
                 reason: string;
             }[];
-            final_decision_sufficient: boolean;
             next_step_summary: string;
             answer: string;
         } = {
             sub_problems: [],
-            final_decision_sufficient: false,
             next_step_summary: "",
             answer: ""
         };
@@ -873,7 +861,6 @@ class Agent {
                         line_number: number;
                         full_statement: string;
                     };
-                    from_results: boolean;
                     reason: string;
                 }[];
                 final_decision_sufficient: boolean;
@@ -888,21 +875,37 @@ class Agent {
             );
 
             if (totalVariables <= 5) {
-                // If the total number of variables is less than or equal to 5, add them all to the output
+                // If the total number of variables is less than or equal to 5, add both tools for each variable to the output
                 task3Output.sub_problems = this._newExploredCodeLines.flatMap(code =>
-                    Array.from(code.variables).map(variable => ({
-                        sub_question: "",
-                        tool: 1, // Use Find References by default
-                        code_context: {
-                            file_uri: code.file_uri,
-                            invoke_variable: variable,
-                            code_line: code.code_snippet,
-                            line_number: code.start_line,
-                            full_statement: code.code_snippet
-                        },
-                        from_results: false,
-                        reason: "Explore the last reached variables in the code line"
-                    }))
+                    Array.from(code.variables).flatMap(variable => {
+                        const accurateLineNumber = getLineNumber(code.code_snippet, variable, code.start_line);
+                        return [
+                            {
+                                sub_question: "",
+                                tool: 1, // Use Find References
+                                code_context: {
+                                    file_uri: code.file_uri,
+                                    invoke_variable: variable,
+                                    code_line: code.code_snippet,
+                                    line_number: accurateLineNumber ?? code.start_line,
+                                    full_statement: code.code_snippet
+                                },
+                                reason: "Explore the last reached variables in the code line using Find References"
+                            },
+                            {
+                                sub_question: "",
+                                tool: 0, // Use Go to Definition
+                                code_context: {
+                                    file_uri: code.file_uri,
+                                    invoke_variable: variable,
+                                    code_line: code.code_snippet,
+                                    line_number: accurateLineNumber ?? code.start_line,
+                                    full_statement: code.code_snippet
+                                },
+                                reason: "Explore the last reached variables in the code line using Go to Definition"
+                            }
+                        ];
+                    })
                 );
             } else {
                 const inputJson = {
@@ -918,7 +921,7 @@ class Agent {
             }
 
             // If Task 3 output is insufficient, run Task 4
-            if (task3Output.sub_problems.length === 0 && !task3Output.final_decision_sufficient) {
+            if (task3Output.sub_problems.length === 0) {
                 console.warn("Task 3 output insufficient. Running Task 4.");
                 const task4Output = await this.runTask4() as {
                     sub_problems: {
@@ -931,7 +934,6 @@ class Agent {
                             line_number: number;
                             full_statement: string;
                         };
-                        from_results: boolean;
                         reason: string;
                     }[];
                     final_decision_sufficient: boolean;
@@ -942,6 +944,7 @@ class Agent {
             }
         }
         this._newExploredCodeLines = []; // Reset the new explored code lines
+        // log the task3Output
         return task3Output;
     }
 
@@ -968,50 +971,6 @@ class Agent {
         const task4Output = await this.processTask3andTask4Output(agentOutput);
 
         return task4Output;
-    }
-
-    private async fuzzyMatchCode(fileUri: string, lineNumber: number, invokeVariable: string): Promise<{ fileUri: string; lineNumber: number; fullStatement: string } | null> {
-        const inputFileName = getFileNameFromUri(fileUri);
-
-        // Step 1: Filter matching files by file name
-        const matchingFiles = this._exploredFiles.filter(file => getFileNameFromUri(file.file_uri) === inputFileName);
-        if (matchingFiles.length === 0) {
-            console.warn(`No matching files found for "${fileUri}".`);
-            return null;
-        }
-
-        // Step 2: Verify the content includes the variable or code line
-        let matchedFile: any = null;
-        for (const file of matchingFiles) {
-            const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(file.file_uri));
-            const fileContent = document.getText();
-            if (fileContent.includes(invokeVariable)) {
-                matchedFile = file;
-                break;
-            }
-        }
-        if (!matchedFile) {
-            console.error(`Variable "${invokeVariable}" not found in any matching files for "${fileUri}".`);
-            return null;
-        }
-
-        // Step 3: Find the accurate line number using `getAccurateLineNumber`
-        const uri = vscode.Uri.parse(matchedFile.file_uri);
-        const document = await vscode.workspace.openTextDocument(uri);
-        const preciseLineNumber = getAccurateLineNumber(document.getText(), invokeVariable, lineNumber, 0);
-        if (preciseLineNumber === null) {
-            console.error(`Accurate line number for "${invokeVariable}" not found in "${matchedFile.file_uri}".`);
-            return null;
-        }
-
-        // Step 4: Retrieve the full code statement at the matched line
-        const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, preciseLineNumber);
-
-        return {
-            fileUri: matchedFile.file_uri,
-            lineNumber: preciseLineNumber,
-            fullStatement: statementText
-        };
     }
 
     async runTask5(task2Results: Array<{ file_uri: string; line_number: number; code_line: string; full_statement: string; variables: Set<string> }>) {
@@ -1192,11 +1151,18 @@ class Agent {
             return "";
         }
 
+        this._final_decision_sufficient = task6Output.final_decision_sufficient;
+
         // Update the findings summary
         const updatedFindings = this.updateFindingsSummary(task6Output.filtered_findings);
 
         // Generate the HTML for the findings
         let concatenatedHtml = "";
+        if (task6Output.final_decision_sufficient) {
+            concatenatedHtml = `
+                <p class="final-answer"><span style="font-weight: bold;">Final Answer:</span> ${task6Output.final_answer}</p>
+            `;
+        }
         updatedFindings.forEach(finding => {
             const snippetKeys = `[${finding.snippetKey.map((key: number) => `<span class="citation-ref" data-ref="${key}">${key}</span>`).join(", ")}]`;
             const statementHtml = finding.outOfDate
@@ -1217,9 +1183,9 @@ class Agent {
     private async _updateStepResults(refinedOutput: any) {
         // Update sidebar and graph visualization with refinedOutput and important code snippets
         if (this._updateFindings) {
-            this._sidebarViewProvider.addTask3Results(refinedOutput, this._importantCodeSnippets, this._importantCodePaths);
+            this._sidebarViewProvider.addTask3Results(this._final_decision_sufficient, refinedOutput, this._importantCodeSnippets, this._importantCodePaths);
         } else {
-            this._sidebarViewProvider.addTask3Results(refinedOutput, null, null);
+            this._sidebarViewProvider.addTask3Results(this._final_decision_sufficient, refinedOutput, null, null);
         }
         this._updateFindings = false;
         //this.updateGraphVisualization();
@@ -1254,21 +1220,16 @@ class Agent {
                 break;
             case 3:
                 taskInstructions = `
-                    Task 3: Evaluate the explored code lines based on the refined question and determine the next steps for further exploration or provide the final answer if exploration is sufficient.
+                    Task 3: Evaluate the explored code lines based on the refined question and determine the next steps for further exploration.
 
                     ### Instructions:
 
                     1. **Input Evaluation**:
                     - You are given a refined question and a list of explored code lines.
-                    - Assess whether the explored lines collectively provide a sufficient answer to the refined question.
+                    - Assess what variables in each explored code lines are worth exploring next.
 
                     2. **Output Requirements**:
-                    - If the explored lines are sufficient:
-                        - Set "final_decision_sufficient" to true.
-                        - Provide the final answer in "next_step_summary" based on the explored lines.
-                    - If the explored lines are insufficient:
-                        - Set "final_decision_sufficient" to false.
-                        - Provide evaluations for each explored line:
+                    - Provide evaluations for each explored line:
                         - For each line, specify if it is valuable for further exploration.
                         - If valuable, specify at least one variables from the variables array in the input explored code lines, the exploration tool, and a reason.
                         - Ensure at least one line is marked as valuable to explore next.
@@ -1287,7 +1248,6 @@ class Agent {
                     4. **Output Format**:
 
                     {
-                        "final_decision_sufficient": true or false, // Whether the explored lines sufficiently answer the question
                         "evaluations": [ // Evaluations of explored code lines
                             {
                                 "file_uri": "string", // File URI of the code line
@@ -1307,21 +1267,16 @@ class Agent {
                 break;
             case 4:
                 taskInstructions = taskInstructions = `
-                    task 4: Evaluate the explored code lines based on the refined question and determine the next steps for further exploration or provide the final answer if exploration is sufficient.
+                    task 4: Evaluate the explored code lines based on the refined question and determine the next steps for further exploration.
     
                     ### Instructions:
     
                     1. **Input Evaluation**:
                     - You are given a refined question and a list of explored code lines.
-                    - Assess whether the explored lines collectively provide a sufficient answer to the refined question.
+                    - Assess what variables are worth exploring next.
     
                     2. **Output Requirements**:
-                    - If the explored lines are sufficient:
-                        - Set "final_decision_sufficient" to true.
-                        - Provide the final answer in "next_step_summary" based on the explored lines.
-                    - If the explored lines are insufficient:
-                        - Set "final_decision_sufficient" to false.
-                        - Provide evaluations for each explored line:
+                    - Provide evaluations for each explored line:
                         - For each line, specify if it is valuable for further exploration.
                         - If valuable, specify at least one variables, the exploration tool, and a reason.
                         - Ensure at least one line is marked as valuable to explore next.
@@ -1340,7 +1295,6 @@ class Agent {
                     4. **Output Format**:
     
                     {
-                        "final_decision_sufficient": true or false, // Whether the explored lines sufficiently answer the question
                         "evaluations": [ // Evaluations of explored code lines
                             {
                                 "file_uri": "string", // File URI of the code line
@@ -1411,71 +1365,59 @@ class Agent {
                 break;
             case 6:
                 taskInstructions = `
-                task 6: Filter, consolidate, and refine findings based on the exploration results.
+                Task 6: Evaluate the refined question and a collection of findings to decide if the question is sufficiently explored. If sufficient, provide a concrete final answer to the refined question. Otherwise, consolidate and refine findings and prepare for further exploration.
 
-                Input:
+                ### Input:
                 - A collection of findings, where each finding is associated with references (snippet keys).
                 - Findings may contain overlapping, outdated, or redundant information.
-                
-                Instructions:
-                1. **Filter Findings:**
-                   - Review all input findings.
-                   - Mark any finding that is outdated or meaningless as outOfDate: true.
-                   - Retain all findings in the output, even those marked as outOfDate.
-                
-                2. **Consolidate Findings:**
-                   - Combine findings that describe similar or related concepts **only if they follow the same structure**.
-                   - A structure is defined as a shared grammatical pattern or template (e.g., "XX sets width to XXpx" in the example below).
-                   - Consolidate findings by combining their snippet keys and creating a concise statement that adheres to the original structure. Do not introduce new grammatical patterns or combine findings with differing structures. Do not include any clauses in the consolidated statement.
-                   - For example:
-                     - Input:
-                       [
-                           {
-                               "snippetKey": [0],
-                               "statement": "'sm' sets width to 24px.",
-                               "outOfDate": false
-                           },
-                           {
-                               "snippetKey": [1],
-                               "statement": "'md' sets width to 48px.",
-                               "outOfDate": false
-                           },
-                           {
-                               "snippetKey": [2],
-                               "statement": "'lg' sets width to 72px.",
-                               "outOfDate": false
-                           }
-                       ]
-                     - Consolidated Output:
-                       {
-                           "snippetKey": [0, 1, 2],
-                           "statement": "'sm', 'md', 'lg' sets width to 24, 48, 72px.",
-                           "outOfDate": false
-                       }
-                
-                3. **Elide Findings:**
-                   - Mark findings as outOfDate: true if they are irrelevant to the refined_question, redundant, or do not contribute meaningful insight.
-                   - For example:
-                     - Input:
-                       {
-                           "snippetKey": [3],
-                           "statement": "size is used to set icon size.",
-                           "outOfDate": false
-                       }
-                     - Output:
-                       {
-                           "snippetKey": [3],
-                           "statement": "size is used to set icon size.",
-                           "outOfDate": true
-                       }
-                
-                4. **Output Requirements:**
-                   - Include all input findings in the output, either consolidated or retained as-is.
-                   - Use a single sentence for each statement, avoiding clauses except for listing.
-                   - Retain meaningful numbers or unique information in statement.
-                   - Ensure consolidated findings follow the shared structure of the input findings.
-                
-                Output Format:
+
+                ### Instructions:
+
+                1. **Evaluate Findings:**
+                - Review all provided findings.
+                - Assess whether the findings collectively answer the refined question thoroughly.
+                - Use all available findings to decide if further exploration is necessary.
+
+                2. **Ensure Comprehensive Exploration:**
+                - Verify if the refined question is sufficiently explored.
+                - If the findings do not adequately address the question, set final_decision_sufficient: false.
+
+                3. **Provide a Final Answer (if applicable):**
+                - If the refined question is sufficiently explored:
+                    - Set final_decision_sufficient: true.
+                    - Provide a concrete and specific final answer in the final_answer field.
+                    - The final answer must be clear, concise, and directly address the refined question.
+
+                4. **Filter Findings:**
+                - Review all input findings.
+                - Mark any finding as outOfDate: true if it is irrelevant to the refined question, redundant, or does not contribute meaningful insight.
+                - Retain all findings in the output, even those marked as outOfDate.
+
+                5. **Consolidate Findings:**
+                - Combine findings that describe similar or related concepts **only if they follow the same structure**.
+                - Consolidate findings by combining their snippet keys and creating a concise statement adhering to the original structure.
+                - Do not introduce new grammatical patterns or combine findings with differing structures.
+                - Example:
+                    - Input:
+                    - 'sm' sets width to 24px.
+                    - 'md' sets width to 48px.
+                    - 'lg' sets width to 72px.
+                    - Consolidated Output:
+                    - 'sm', 'md', 'lg' set width to 24, 48, 72px.
+
+                6. **Prepare for Further Exploration (if necessary):**
+                - If the question is not sufficiently explored:
+                    - Set final_decision_sufficient: false.
+                    - Ensure findings are filtered and consolidated to guide further exploration effectively.
+                    - Provide a summary of missing elements or gaps in the findings.
+
+                7. **Output Requirements:**
+                - Include all input findings in the output, either consolidated or retained as-is.
+                - Use a single sentence for each statement, avoiding clauses except for listing.
+                - Retain meaningful numbers or unique information in statements.
+                - Ensure consolidated findings follow the shared structure of the input findings.
+
+                ### Output Format:
                 {
                     "filtered_findings": [
                         {
@@ -1484,9 +1426,10 @@ class Agent {
                             "outOfDate": true or false
                         },
                         ...
-                    ]
-                }
-                    `;
+                    ],
+                    "final_decision_sufficient": true or false,
+                    "final_answer": "string" // A concrete answer to the refined question if final_decision_sufficient is true.
+                }`;
                 break;
             default:
                 throw new Error("Unknown task number provided.");

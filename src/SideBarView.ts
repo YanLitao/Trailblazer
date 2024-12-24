@@ -398,7 +398,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 for (const result of task2Output.questions_and_results) {
                     i++;
                     task2Html += `<div class="sub-question `;
-                    if (result.code_context && (!('from_results' in result.code_context) || !result.code_context.from_results)) {
+                    if (result.code_context) {
                         task2Html += ` uncertain`;
                     }
                     let variable = "";
@@ -474,7 +474,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
     }
 
     // Function to add Task 3 results (final decision and explanation) with surrounding code
-    public async addTask3Results(task3Output: any, importantCodeSnippets: any, importantCodePaths: any) {
+    public async addTask3Results(final_decision_sufficient: boolean, task3Output: any, importantCodeSnippets: any, importantCodePaths: any) {
         if (this._view) {
             const webview = this._view.webview;
             const explorationUniqueId = `exploration-task3-results-${this._stepCounter}`; // Unique ID for exploration steps
@@ -487,8 +487,8 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 answerText = task3Output.answer;
             }
 
-            const nextStepSummary = task3Output.final_decision_sufficient
-                ? "Final Answer: " + task3Output.next_step_summary
+            const nextStepSummary = final_decision_sufficient
+                ? ""
                 : (task3Output.next_step_summary || "");
 
             let findingsHtml = "";
@@ -501,13 +501,13 @@ export class SidebarView implements vscode.WebviewViewProvider {
             <div class="task">
                 <div class="task-header">
                     <div class="step-circle">${this._stepCounter}</div>
-                    <h3>Explored code is ${task3Output.final_decision_sufficient ? 'sufficient' : 'insufficient'} to answer the question.</h3>
+                    <h3>Explored code is ${final_decision_sufficient ? 'sufficient' : 'insufficient'} to answer the question.</h3>
                 </div>
                 <div class="task-content">
             `;
 
             // If sufficient, display the final answer
-            if (task3Output.final_decision_sufficient) {
+            if (final_decision_sufficient) {
                 explorationStepsHtml += `<p><strong>Answer: </strong>${task3Output.answer}</p>`;
             } else if (task3Output.sub_problems.length > 0) {
                 explorationStepsHtml += `<p>Propose <strong>${task3Output.sub_problems.length}</strong> sub-questions:</p>`;

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as ts from "typescript";
 import * as path from 'path';
 import * as url from 'url';
-import exp from 'constants';
+import { start } from 'repl';
 
 // Function to extract the file name from a file URI
 export function getFileNameFromUri(fileUri: string | undefined): string {
@@ -78,45 +78,37 @@ export function stripLineIndentation(code: string): string {
     return alignedLines.join('\n').trim();
 }
 
-export function getAccurateLineNumber(context: string, selectedCodeLine: string, fuzzyLineNum: number, contextStartLineNum: number): number | null {
-    const contextLines = context.split('\n');
-    let closestMatch = -1;
-    let minDistance = contextLines.length + 1;
+export function getAccurateLineNumber(fullFile: string, fullStatement: string, variable: string, fuzzyLineNum: number): number | null {
+    // we need to find the accurate line number of the variable from the full file based on given fullStatement
+    const lines = fullFile.split('\n');
+    const statementLines = fullStatement.split('\n');
+    const variableLine = statementLines.findIndex((line) => line.includes(variable));
+    if (variableLine === -1) {
+        return fuzzyLineNum;
+    }
 
-    // Normalize the selected code line by removing commas, semicolons, and extra whitespace
-    const selectedComponents = selectedCodeLine.replace(/[,;]/g, '').split(/\s+/).filter(Boolean);
-
-    // Loop through each line in the context and search for closest match
-    for (let i = 0; i < contextLines.length; i++) {
-        const lineText = contextLines[i].trim();
-
-        if (lineText) {
-            // Check if all components of the selected line exist in the current line
-            const isMatch = selectedComponents.every(component => lineText.includes(component));
-
-            if (isMatch) {
-                // Calculate distance from the fuzzyLineNum to current line in context
-                const lineNumInContext = contextStartLineNum + i;
-                const distance = Math.abs(fuzzyLineNum - lineNumInContext);
-
-                // Update closest match if this match is closer than previous matches
-                if (closestMatch === -1 || distance < minDistance) {
-                    closestMatch = lineNumInContext;
-                    minDistance = distance;
-                }
-            }
+    // we need to find the start line number of the fullStatement in the fullFile
+    let startLineNum = 0;
+    for (let i = 0; i < lines.length; i++) {
+        if (lines[i].includes(statementLines[0])) {
+            startLineNum = i;
+            break;
         }
     }
 
-    // Return the closest match if found, else return null
-    if (closestMatch >= 0) {
-        return closestMatch;
-    } else {
-        console.error(`Code line ${fuzzyLineNum}: "${selectedCodeLine}" not found in context.`);
-        return null;
-    }
+    return startLineNum + variableLine;
 }
 
+export function getLineNumber(codeSnippet: string, variableName: string, startLineNum: number): number {
+    const lines = codeSnippet.split('\n');
+    const lineNum = lines.findIndex((line) => line.includes(variableName));
+
+    if (lineNum === -1) {
+        return startLineNum;
+    }
+
+    return startLineNum + lineNum;
+}
 /**
  * Searches for the offset of the variable name in the document around the specified line number.
  * Handles the case where line numbers may be slightly off, or there are indentations.
@@ -457,7 +449,6 @@ export async function findCompleteStatementText(
         const endPosition = completeLineNode.getEnd();
         const startLineNum = document.positionAt(startPosition).line;
         const endLineNum = document.positionAt(endPosition).line;
-
         return { statementText, startLineNum, endLineNum };
     }
 
