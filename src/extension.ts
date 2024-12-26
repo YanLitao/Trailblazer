@@ -258,7 +258,6 @@ class Agent {
     private isPaused: boolean = false;     // Track if the agent is paused
     private isStopped: boolean = false;    // Track if the agent is stopped
     private _importantCodeSnippets = new Map<number, { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }>();
-    private _newImportantCodeSnippets: Map<number, { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }> = new Map();
     private _fileExtensionsToExclude = ['.test.ts', '.spec.ts', '.test.tsx', '.spec.tsx', '.test.js', '.spec.js', '.test.jsx', '.spec.jsx', '.d.ts'];
     private _importantCodePaths: Map<string, Array<{ nodes: Node[]; edges: (Edge | null)[] }>> = new Map();
     private _findingsSummary: { snippetKey: number[], statement: string, outOfDate: boolean }[] = [];
@@ -1040,8 +1039,6 @@ class Agent {
                     relevance_score: result.relevance_score
                 });
 
-                this._newImportantCodeSnippets.set(snippetKey, result);
-
                 this._findingsSummary.push({
                     snippetKey: [snippetKey],
                     statement: result.finding ?? result.explanation,
@@ -1137,10 +1134,24 @@ class Agent {
             return "";
         }
 
+        let findingAndCode: { snippetKey: number[], statement: string, outOfDate: boolean, codeSnippet: { snippetKey: number, codeLine: string }[] }[] = [];
+        this._findingsSummary.forEach(finding => {
+            findingAndCode.push({
+                snippetKey: finding.snippetKey,
+                statement: finding.statement,
+                outOfDate: finding.outOfDate,
+                codeSnippet: finding.snippetKey.map(key => {
+                    const entry = this._importantCodeSnippets.get(key);
+                    return { snippetKey: key, codeLine: entry?.code_line ?? "" };
+                })
+            });
+        });
+
+
         const inputJson = {
             task: 6,
             refined_question: this._refined_question ?? "",
-            findings: this._findingsSummary
+            findings: findingAndCode
         };
 
         const response = await this._callAgentAPI(inputJson, 6, task6JsonSchema);
@@ -1364,72 +1375,100 @@ class Agent {
                 `;
                 break;
             case 6:
-                taskInstructions = `
-                Task 6: Evaluate the refined question and a collection of findings to decide if the question is sufficiently explored. If sufficient, provide a concrete final answer to the refined question. Otherwise, consolidate and refine findings and prepare for further exploration.
-
+                taskInstructions = taskInstructions = `
+                Task 6: Evaluate findings and their associated code snippets to provide a comprehensive, implementation-focused answer to the refined question.
+                
                 ### Input:
-                - A collection of findings, where each finding is associated with references (snippet keys).
-                - Findings may contain overlapping, outdated, or redundant information.
-
+                - A collection of findings where each finding contains:
+                    - snippetKey: Array of reference keys
+                    - statement: The finding statement
+                    - outOfDate: Boolean flag for relevance
+                    - codeSnippet: Array of corresponding code lines with their keys
+                - The refined question to be answered
+                
                 ### Instructions:
-
-                1. **Evaluate Findings:**
-                - Review all provided findings.
-                - Assess whether the findings collectively answer the refined question thoroughly.
-                - Use all available findings to decide if further exploration is necessary.
-
-                2. **Ensure Comprehensive Exploration:**
-                - Verify if the refined question is sufficiently explored.
-                - If the findings do not adequately address the question, set final_decision_sufficient: false.
-
-                3. **Provide a Final Answer (if applicable):**
-                - If the refined question is sufficiently explored:
-                    - Set final_decision_sufficient: true.
-                    - Provide a concrete and specific final answer in the final_answer field.
-                    - The final answer must be clear, concise, and directly address the refined question.
-
-                4. **Filter Findings:**
-                - Review all input findings.
-                - Mark any finding as outOfDate: true if it is irrelevant to the refined question, redundant, or does not contribute meaningful insight.
-                - Retain all findings in the output, even those marked as outOfDate.
-
-                5. **Consolidate Findings:**
-                - Combine findings that describe similar or related concepts **only if they follow the same structure**.
-                - Consolidate findings by combining their snippet keys and creating a concise statement adhering to the original structure.
-                - Do not introduce new grammatical patterns or combine findings with differing structures.
-                - Example:
-                    - Input:
-                    - 'sm' sets width to 24px.
-                    - 'md' sets width to 48px.
-                    - 'lg' sets width to 72px.
-                    - Consolidated Output:
-                    - 'sm', 'md', 'lg' set width to 24, 48, 72px.
-
-                6. **Prepare for Further Exploration (if necessary):**
-                - If the question is not sufficiently explored:
-                    - Set final_decision_sufficient: false.
-                    - Ensure findings are filtered and consolidated to guide further exploration effectively.
-                    - Provide a summary of missing elements or gaps in the findings.
-
-                7. **Output Requirements:**
-                - Include all input findings in the output, either consolidated or retained as-is.
-                - Use a single sentence for each statement, avoiding clauses except for listing.
-                - Retain meaningful numbers or unique information in statements.
-                - Ensure consolidated findings follow the shared structure of the input findings.
-
+                
+                1. **Code-Implementation Analysis:**
+                - For each finding, analyze its associated code snippets to verify:
+                    - The finding accurately reflects the actual implementation
+                    - The code demonstrates concrete behavior
+                    - The implementation details support the finding's statement
+                - Distinguish between documentation-level findings and implementation-proven findings
+                
+                2. **Depth Verification:**
+                - For each code-backed finding, assess:
+                    - Does the code show the complete implementation?
+                    - Are there important related code sections missing?
+                    - Do the code snippets reveal internal mechanics?
+                    - Is the implementation context clear?
+                - Consider exploration insufficient if code snippets don't demonstrate the full picture
+                
+                3. **Implementation Coverage Assessment:**
+                - Evaluate if the collected code snippets show:
+                    - Primary implementation logic
+                    - Supporting utility functions
+                    - Usage patterns
+                    - Error handling
+                    - Integration points
+                - Set final_decision_sufficient: false if key implementation aspects are missing
+                
+                4. **Evidence-Based Answer Formation:**
+                When final_decision_sufficient is true, structure the final_answer to include:
+                    a. High-level implementation overview
+                    b. Specific code patterns found
+                    c. Technical constraints revealed by the code
+                    d. Real usage examples from the codebase
+                    e. Internal implementation details
+                
+                5. **Finding Consolidation Rules:**
+                - When consolidating findings:
+                    - Only combine findings if their code snippets demonstrate the same pattern
+                    - Preserve specific implementation details
+                    - Maintain all snippet references
+                    - Example:
+                        Original findings with code:
+                        - Finding 1: "Method accepts options parameter" [code: function test(options: Config)]
+                        - Finding 2: "Method validates options object" [code: validateConfig(options)]
+                        Consolidated:
+                        - "Method accepts and validates options parameter of type Config"
+                
+                6. **Insufficient Exploration Guidance:**
+                If setting final_decision_sufficient: false, specify:
+                    - Which implementation aspects need further investigation
+                    - What specific code patterns to look for
+                    - Areas where implementation details are unclear
+                    - Required technical context missing from current findings
+                
+                7. **Output Processing:**
+                - Remove duplicate code references while preserving unique implementation details
+                - Prioritize findings with concrete code evidence
+                - Mark findings as outOfDate: true if:
+                    - Code snippets contradict the finding
+                    - Implementation details are missing
+                    - Finding is too generic without code support
+                
                 ### Output Format:
                 {
                     "filtered_findings": [
                         {
-                            "snippetKey": ["array of snippet keys referencing the finding"],
-                            "statement": "Consolidated or original finding statement",
-                            "outOfDate": true or false
-                        },
-                        ...
+                            "snippetKey": ["array of snippet keys"],
+                            "statement": "Implementation-specific finding",
+                            "outOfDate": boolean
+                        }
                     ],
-                    "final_decision_sufficient": true or false,
-                    "final_answer": "string" // A concrete answer to the refined question if final_decision_sufficient is true.
-                }`;
+                    "final_decision_sufficient": boolean,
+                    "final_answer": "Comprehensive answer based on code implementation evidence"
+                }
+                
+                ### Sufficiency Criteria:
+                1. Do code snippets prove each major claim?
+                2. Is the implementation flow clear from the collected code?
+                3. Are concrete usage patterns demonstrated?
+                4. Are technical limitations visible in the code?
+                5. Does the code reveal internal behavior?
+                
+                Remember: The final answer must be grounded in the actual code implementation, not general knowledge or documentation. Every significant claim should be supported by observed code patterns.
+                `;
                 break;
             default:
                 throw new Error("Unknown task number provided.");

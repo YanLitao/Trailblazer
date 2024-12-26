@@ -46,7 +46,6 @@ export class ExplorationGraph {
     upsertNode(node: Node) {
         const existingNode = this.nodes.get(node.id);
         if (!existingNode) {
-            // Add the new node
             this.nodes.set(node.id, node);
         }
     }

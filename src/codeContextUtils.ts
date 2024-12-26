@@ -515,7 +515,7 @@ function extractVariablesAndFunctions(node: ts.Node): {
         if (layer >= 15) return; // Stop for deeply nested nodes
 
         // Skip irrelevant nodes
-        if (ts.SyntaxKind.TypePredicate <= node.kind && node.kind <= ts.SyntaxKind.ImportType) {
+        if (ts.SyntaxKind.TypePredicate <= node.kind && node.kind <= ts.SyntaxKind.ImportType || ts.SyntaxKind.JSDoc == node.kind) {
             return;
         }
 
@@ -582,7 +582,7 @@ function extractFunctionDefineAndParameters(
         // Skip irrelevant nodes
         if (ts.SyntaxKind.BreakKeyword <= node.kind && node.kind <= ts.SyntaxKind.OfKeyword ||
             ts.SyntaxKind.TypePredicate <= node.kind && node.kind <= ts.SyntaxKind.ImportType ||
-            ts.SyntaxKind.Block == node.kind) {
+            ts.SyntaxKind.Block == node.kind || ts.SyntaxKind.JSDoc == node.kind) {
             return;
         }
 
@@ -646,7 +646,7 @@ function extractArrowFunctionAndParameters(node: ts.Node,
         // Skip irrelevant nodes
         if (ts.SyntaxKind.BreakKeyword <= node.kind && node.kind <= ts.SyntaxKind.OfKeyword ||
             ts.SyntaxKind.TypePredicate <= node.kind && node.kind <= ts.SyntaxKind.ImportType ||
-            ts.SyntaxKind.Block == node.kind) {
+            ts.SyntaxKind.Block == node.kind || ts.SyntaxKind.JSDoc == node.kind) {
             return;
         }
 
@@ -699,7 +699,7 @@ function extractFunctionCallAndParameters(
         // Skip irrelevant nodes
         if (ts.SyntaxKind.BreakKeyword <= node.kind && node.kind <= ts.SyntaxKind.OfKeyword ||
             ts.SyntaxKind.TypePredicate <= node.kind && node.kind <= ts.SyntaxKind.ImportType ||
-            ts.SyntaxKind.Block == node.kind) {
+            ts.SyntaxKind.Block == node.kind || ts.SyntaxKind.JSDoc == node.kind) {
             return;
         } else if (ts.SyntaxKind.SyntaxList == node.kind) {
             functionSide = false;
@@ -847,5 +847,7 @@ export async function analyze(
     }
 
     const results = await extractVariables(fileUri, lineNumber, inputVariable, isFunction);
+    console.log("Running analyzer on ", inputVariable, ", and gained: ", isFunction, " this is the array of varialbes: ");
+    results.forEach((result) => console.log(result.variable));
     return results;
 }
