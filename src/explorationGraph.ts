@@ -1,3 +1,4 @@
+import * as vscode from 'vscode';
 // Node interface representing both invoking and result nodes
 export interface Node {
     id: string; // Unique ID: `${fileUri}:${lineNumber}:${variable}`
@@ -34,7 +35,7 @@ export class ExplorationGraph {
      */
     addOrigin(originNode: Node) {
         if (!this.nodes.has(originNode.id)) {
-            this.upsertNode(originNode);
+            this.upsertNode("", originNode.fileUri, originNode.lineNumber, originNode.variable, "origin");
         }
         this.origins.add(originNode.id);
     }
@@ -43,11 +44,45 @@ export class ExplorationGraph {
      * Upserts a node into the graph.
      * If the node already exists, updates its properties. Otherwise, adds a new node.
      */
-    upsertNode(node: Node) {
-        const existingNode = this.nodes.get(node.id);
-        if (!existingNode) {
-            this.nodes.set(node.id, node);
+    async upsertNode(fromId: string, toUri: string, toLineNumber: number, toVariable: string, tool: string) {
+        const variables = toVariable.split(".");
+        for (let i = 0; i < variables.length; i++) {
+            const newNodeId = `${toUri}:${toLineNumber}:${toVariable}`;
+            const existingNode = this.nodes.get(newNodeId);
+            if (existingNode) {
+                return;
+            }
+
+            const fileUri = vscode.Uri.parse(toUri);
+            const document = await vscode.workspace.openTextDocument(fileUri);
+            const lineText = document.lineAt(toLineNumber).text.trim();
+
+            // Create the new node
+            const newNode: Node = {
+                id: newNodeId,
+                fileUri: toUri,
+                lineNumber: toLineNumber,
+                variable: toVariable,
+                codeSnippet: lineText,
+                edges: new Set(),
+            };
+
+            this.nodes.set(newNode.id, newNode);
+
+            // Create the edge
+            if (tool !== "origin") {
+                const newEdge: Edge = {
+                    from: fromId,
+                    to: newNode.id,
+                    tool: tool as "definition" | "reference" | "assignment",
+                    variable: variables[i],
+                };
+
+                this.addEdge(newEdge);
+            }
         }
+        return;
+
     }
 
     /**

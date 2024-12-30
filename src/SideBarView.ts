@@ -17,7 +17,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
     private _initialLineNumber: number = 0;
     private _displayQueue: Array<{ answer: string, nextStepSummary: string, findingsHtml: string, taskContentHtml: string, locations: Array<{ fileUri?: string, lineNumber?: number }> }> = [];
     private _isDisplaying: boolean = false;
-    private _stayingTime: number = 10; // seconds
+    private _stayingTime: number = 5; // seconds
     private _watchMode: boolean = false;
 
     constructor(

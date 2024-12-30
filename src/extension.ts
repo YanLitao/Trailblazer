@@ -3,7 +3,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
-import { getLineNumber, getFileNameFromUri, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, analyze, findCompleteStatementText } from './codeContextUtils';
+import { getLineText, getLineNumber, getFileNameFromUri, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, analyze, findCompleteStatementText } from './codeContextUtils';
 import { ExplorationGraph, Node, Edge } from './explorationGraph';
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
@@ -417,18 +417,7 @@ class Agent {
 
                     const relevantVariables = await analyze(uri, accurateLineNumber, subProblem.code_context.invoke_variable);
                     relevantVariables.forEach((variableInfo: any) => {
-                        const relevantNodeId = `${variableInfo.fileUri}:${variableInfo.lineNumber}:${variableInfo.variable}`;
-                        const lineText = document.lineAt(variableInfo.lineNumber).text.trim();
-                        const relevantNode: Node = {
-                            id: relevantNodeId,
-                            fileUri: variableInfo.fileUri,
-                            lineNumber: variableInfo.lineNumber,
-                            variable: variableInfo.variable,
-                            codeSnippet: lineText,
-                            edges: new Set(),
-                        };
-                        this._explorationGraph.upsertNode(relevantNode);
-                        this._explorationGraph.addEdge({ from: nodeId, to: relevantNodeId, variable: variableInfo.variable, tool: "assignment" });
+                        this._explorationGraph.upsertNode(nodeId, variableInfo.fileUri, variableInfo.lineNumber, variableInfo.variable, "assignment");
                     });
 
                     const variables = [subProblem.code_context.invoke_variable, ...relevantVariables.map((variableInfo: any) => variableInfo.variable)];
@@ -684,25 +673,8 @@ class Agent {
 
             const sourceId = `${subProblem.code_context.file_uri}:${subProblem.code_context.line_number}:${variable}`;
             const resultNodeId = `${fileUri}:${lineNumber}:${variable}`;
-            // Create result node if it doesn't already exist in the graph
-            const resultNode: Node = {
-                id: resultNodeId,
-                fileUri: fileUri,
-                lineNumber: lineNumber,
-                variable: variable,
-                codeSnippet: baseResult.full_statement,
-                edges: new Set([])
-            };
 
-            const resultEdge: Edge = {
-                from: sourceId,
-                to: resultNodeId,
-                variable: variable,
-                tool: subProblem.tool == 0 ? "definition" : "reference",
-            }
-
-            this._explorationGraph.upsertNode(resultNode);
-            this._explorationGraph.addEdge(resultEdge);
+            this._explorationGraph.upsertNode(sourceId, fileUri, lineNumber, variable, subProblem.tool == 0 ? "definition" : "reference");
 
             // Analyze the code context for relevant variables
             const relevantVariables = await analyze(uri, lineNumber, variable);
@@ -721,25 +693,7 @@ class Agent {
                     variable: variableInfo.variable // Include the relevant variable
                 });
                 // Create result node if it doesn't already exist in the graph
-
-                const relevantResultNode: Node = {
-                    id: relevantResultNodeId,
-                    fileUri: variableInfo.fileUri,
-                    lineNumber: variableInfo.lineNumber,
-                    variable: variableInfo.variable,
-                    codeSnippet: lineText,
-                    edges: new Set([]),
-                };
-
-                const relevantResultEdge: Edge = {
-                    from: resultNodeId,
-                    to: relevantResultNodeId,
-                    variable: variableInfo.variable,
-                    tool: "assignment",
-                }
-
-                this._explorationGraph.upsertNode(relevantResultNode);
-                this._explorationGraph.addEdge(relevantResultEdge);
+                this._explorationGraph.upsertNode(resultNodeId, variableInfo.fileUri, variableInfo.lineNumber, variableInfo.variable, "assignment");
 
             });
             // Add both the base result variable and the relevant variables to the variable name list
@@ -776,45 +730,45 @@ class Agent {
 
         for (const item of agentOutput.evaluations) {
             if (item.valuable && item.next_step) {
+                const variables = item.next_step.variable.split(".");
+                for (const variable of variables) {
+                    try {
+                        let full_statement = await findCompleteStatementText(vscode.Uri.parse(item.file_uri), item.line_number);
+                        let codeLine = await getLineText(vscode.Uri.parse(item.file_uri), item.line_number);
 
-                try {
-                    let full_statement = await findCompleteStatementText(vscode.Uri.parse(item.file_uri), item.line_number);
-                    // get the line of code with the line_number and the file_uri
-                    const code_document = await vscode.workspace.openTextDocument(vscode.Uri.parse(item.file_uri));
-                    let codeLine = code_document.lineAt(item.line_number).text.trim();
-                    // check if the code line is not empty and variable is in the code line
-                    if (!codeLine || !codeLine.includes(item.next_step.variable)) {
-                        // find the accurate line number
-                        const accurateLineNumber = getLineNumber(full_statement.statementText, item.next_step.variable, full_statement.startLineNum);
-                        if (accurateLineNumber !== null) {
-                            item.line_number = accurateLineNumber;
-                            full_statement = await findCompleteStatementText(vscode.Uri.parse(item.file_uri), accurateLineNumber);
-                            codeLine = code_document.lineAt(accurateLineNumber).text.trim();
+                        if (!codeLine || !codeLine.includes(variable)) {
+                            // find the accurate line number
+                            const accurateLineNumber = getLineNumber(full_statement.statementText, variable, full_statement.startLineNum);
+                            if (accurateLineNumber !== null) {
+                                item.line_number = accurateLineNumber;
+                                full_statement = await findCompleteStatementText(vscode.Uri.parse(item.file_uri), accurateLineNumber);
+                                codeLine = await getLineText(vscode.Uri.parse(item.file_uri), accurateLineNumber);
+                            }
                         }
-                    }
-                    const matchedCode = this._exploredCodeLines.find(
-                        code => code.file_uri === item.file_uri && (code.start_line <= item.line_number && code.end_line >= item.line_number)
-                    );
+                        const matchedCode = this._exploredCodeLines.find(
+                            code => code.file_uri === item.file_uri && (code.start_line <= item.line_number && code.end_line >= item.line_number)
+                        );
 
-                    if (!matchedCode) {
-                        continue;
-                    }
+                        if (!matchedCode) {
+                            continue;
+                        }
 
-                    let taskItem = {
-                        sub_question: "",
-                        tool: item.next_step.tool,
-                        code_context: {
-                            file_uri: item.file_uri,
-                            invoke_variable: item.next_step.variable,
-                            code_line: codeLine, // get the code line from the file
-                            line_number: item.line_number,
-                            full_statement: full_statement.statementText
-                        },
-                        reason: item.next_step.reason
-                    };
-                    taskOutput.sub_problems.push(taskItem);
-                } catch (error) {
-                    console.error(`Error finding complete line text for ${item.file_uri}:${item.line_number}`);
+                        let taskItem = {
+                            sub_question: "",
+                            tool: item.next_step.tool,
+                            code_context: {
+                                file_uri: item.file_uri,
+                                invoke_variable: variable,
+                                code_line: codeLine, // get the code line from the file
+                                line_number: item.line_number,
+                                full_statement: full_statement.statementText
+                            },
+                            reason: item.next_step.reason
+                        };
+                        taskOutput.sub_problems.push(taskItem);
+                    } catch (error) {
+                        console.error(`Error finding complete line text for ${item.file_uri}:${item.line_number}`);
+                    }
                 }
             }
         }
@@ -873,7 +827,7 @@ class Agent {
                 0
             );
 
-            if (totalVariables <= 5) {
+            if (totalVariables <= 10) {
                 // If the total number of variables is less than or equal to 5, add both tools for each variable to the output
                 task3Output.sub_problems = this._newExploredCodeLines.flatMap(code =>
                     Array.from(code.variables).flatMap(variable => {

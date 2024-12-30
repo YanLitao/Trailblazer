@@ -847,7 +847,5 @@ export async function analyze(
     }
 
     const results = await extractVariables(fileUri, lineNumber, inputVariable, isFunction);
-    console.log("Running analyzer on ", inputVariable, ", and gained: ", isFunction, " this is the array of varialbes: ");
-    results.forEach((result) => console.log(result.variable));
     return results;
 }
