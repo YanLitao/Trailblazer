@@ -487,14 +487,31 @@ async function extractVariables(
     isFunction: number = 0
 ): Promise<{ fileUri: string; lineNumber: number; variable: string }[]> {
     const extractedNode = await findNode(fileUri, lineNumber, isFunction);
-    const extractedText = extractedNode?.getText();
     if (extractedNode) {
         let results;
         if (isFunction == 1) {
             results = extractFunctionDefineAndParameters(extractedNode, inputVariable, fileUri.toString());
         } else if (isFunction == 0) {
             const { variables, functions } = extractVariablesAndFunctions(extractedNode);
-            results = processOtherSide(variables, functions, inputVariable, fileUri.toString());
+            if (inputVariable === "") {
+                // combine variables and functions into results
+                results = variables.map((variable) => {
+                    return {
+                        fileUri: fileUri.toString(),
+                        lineNumber: variable.line,
+                        variable: variable.name
+                    };
+                });
+                if (functions) {
+                    results.push({
+                        fileUri: fileUri.toString(),
+                        lineNumber: functions.line,
+                        variable: functions.name
+                    });
+                }
+            } else {
+                results = processOtherSide(variables, functions, inputVariable, fileUri.toString());
+            }
         } else if (isFunction == 2) {
             results = extractArrowFunctionAndParameters(extractedNode, inputVariable, fileUri.toString());
         } else if (isFunction == 4) {
@@ -517,10 +534,6 @@ async function extractVariables(
             } else {
                 newResults.push(result);
             }
-        }
-        const resultsAndText = {
-            results: newResults,
-            extractedText: extractedText
         }
         return newResults;
     }
@@ -705,6 +718,12 @@ function extractArrowFunctionAndParameters(node: ts.Node,
         }
     }
 
+    if (inputVariable === "") {
+        // combine functionResult and parameterResult into results
+        functionResult.push(...parameterResult);
+        return functionResult;
+    }
+
     return functionResult;
 }
 
@@ -768,6 +787,12 @@ function extractFunctionCallAndParameters(
         if (f.variable === inputVariable) {
             return results;
         }
+    }
+
+    if (inputVariable === "") {
+        // combine functions and results into results
+        results.push(...functions);
+        return results;
     }
 
     return functions;
@@ -847,7 +872,7 @@ function extractClass(node: ts.Node,
 export async function analyze(
     fileUri: vscode.Uri,
     lineNumber: number,
-    inputVariable: string
+    inputVariable: string = ""
 ) {
     const lineText = await getLineText(fileUri, lineNumber);
     const trimmedLine = lineText.trim();

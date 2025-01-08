@@ -248,6 +248,7 @@ class Agent {
     private _fasterModel: ChatOpenAI
     private _stepCounter: number = 0;
     private _refined_question: string | null = null;
+    private _numberOfVariablesThreshold: number = 15; // If the collection of variables is less than this threshold, explore them directly without using LLMs to choose the next steps
     private _sidebarViewProvider: SidebarView;
     private _exploredVariables: any[] = [];
     private _exploredFiles: { file_uri: string, file_content: string }[] = []; // Simplified _exploredFiles
@@ -368,22 +369,88 @@ class Agent {
     }
 
     async runTask1(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
-        const document = await vscode.workspace.openTextDocument(uri);
         console.warn("Running Task 1");
         const surroundingCode = await getLineTextFromRange(uri, startLine, endLine);
 
+        // Split the surrounding code into lines
+        const codeLines = surroundingCode.split("\n");
+        const codeContext = [];
+        let totalVariables = 0;
+
+        for (let i = 0; i < codeLines.length; i++) {
+            const line = codeLines[i].trim();
+
+            const extractedVariables = await analyze(uri, startLine + i);
+            const variables = new Set(extractedVariables.map((variableInfo: any) => variableInfo.variable));
+
+            codeContext.push({
+                file_uri: uri.toString(),
+                line_number: startLine + i,
+                code_line: line,
+                variables, // Set of unique variables
+            });
+
+            totalVariables += variables.size;
+        }
+
+        let task1Output: any = {
+            refined_question: "",
+            sub_problems: []
+        };
+
         const inputJson = {
-            "task": 1,
-            "question": question,
-            "surrounding_code": surroundingCode,
-            "file_uri": uri.toString(),
-            "line_number": startLine,
-            "allowed_tools": allowedTools
+            task: 1,
+            question: question,
+            surrounding_code: surroundingCode,
+            allowed_tools: allowedTools,
+            code_context: codeContext,
         };
 
         const response = await this._callAgentAPI(inputJson, 1, task1JsonSchema);
-        const task1Output = JSON.parse(response);
+        task1Output = JSON.parse(response);
         this._refined_question = task1Output.refined_question;
+
+        if (totalVariables <= this._numberOfVariablesThreshold) {
+            task1Output.sub_problems = Array.from(codeContext).flatMap((eachCode) => {
+                const fileUri = eachCode.file_uri;
+                const lineNumber = eachCode.line_number;
+                const codeLine = eachCode.code_line;
+                const fullStatement = codeLine; // Assuming single-line statements
+
+                // Iterate over variables in eachCode
+                return Array.from(eachCode.variables).flatMap((variable) => {
+                    const accurateLineNumber = getLineNumber(surroundingCode, variable, startLine);
+
+                    // Create sub-questions for Find References and Go to Definition
+                    return [
+                        {
+                            sub_question: `Find references to "${variable}"`,
+                            tool: 1, // Find References
+                            code_context: {
+                                file_uri: fileUri,
+                                invoke_variable: variable,
+                                code_line: codeLine,
+                                line_number: accurateLineNumber ?? lineNumber,
+                                full_statement: fullStatement,
+                            },
+                            reason: `Determine where the variable "${variable}" is being used in the codebase.`,
+                        },
+                        {
+                            sub_question: `Go to the definition of "${variable}"`,
+                            tool: 0, // Go to Definition
+                            code_context: {
+                                file_uri: fileUri,
+                                invoke_variable: variable,
+                                code_line: codeLine,
+                                line_number: accurateLineNumber ?? lineNumber,
+                                full_statement: fullStatement,
+                            },
+                            reason: `Locate the definition of the variable "${variable}" to understand its origin.`,
+                        },
+                    ];
+                });
+            });
+        }
 
         for (const subProblem of task1Output.sub_problems) {
             if (subProblem && "code_context" in subProblem && uri && "file_uri" in subProblem.code_context) {
@@ -830,7 +897,7 @@ class Agent {
                 0
             );
 
-            if (totalVariables <= 10) {
+            if (totalVariables <= this._numberOfVariablesThreshold) {
                 // If the total number of variables is less than or equal to 5, add both tools for each variable to the output
                 task3Output.sub_problems = this._newExploredCodeLines.flatMap(code =>
                     Array.from(code.variables).flatMap(variable => {
@@ -1171,12 +1238,24 @@ class Agent {
                     - 0: Go to Definition
                     - 1: Find References
                     
-                    When specifying the 'code_line', only include the specific line of code that contains the 'invoke_variable'. 
-                    The 'code_line' should not span multiple lines, and must include the exact line that contains the 'invoke_variable' being explored.
-    
+                    From the code_context, evaluate each variable in the variables array to determine whether it is valuable to explore to answer the question.
                     The output format should strictly follow the JSON schema provided, where the tool should be represented as an integer.
-
-                    For each sub-question, provide a clear and specific “reason” explaining the goal of exploring this sub-question. Describe exactly what we aim to uncover, such as particular methods, patterns, or code structures relevant to the exploration. Be as precise as possible in defining what we are looking for and why it is essential to the investigation.
+                    If any variable is valuable to explore, provide a reason for choosing the variable and tool. Do not change the code_line.
+                    
+                    ** Output format for each variable if valuable **
+                    sub_problems: [{
+                        sub_question: "string" ,
+                        tool: "integer",
+                        code_context: {
+                            file_uri: "string",
+                            invoke_variable: "string" , // must be one of the variables in the variables array
+                            code_line: "string",
+                            line_number: "integer",
+                            full_statement: "string"
+                        },
+                        reason: "string" // For each sub-question, provide a clear and specific “reason” explaining the goal of exploring this sub-question. Describe exactly what we aim to uncover, such as particular methods, patterns, or code structures relevant to the exploration. Be as precise as possible in defining what we are looking for and why it is essential to the investigation.
+                    }, ...]
+                    
                 `;
                 break;
             case 2:
@@ -1198,7 +1277,8 @@ class Agent {
 
                     2. **Output Requirements**:
                     - Provide evaluations for each explored line:
-                        - For each line, specify if it is valuable for further exploration.
+                        - For each line, specify if it is valuable for further exploration. 
+                        - Some lines may not be valuable for further exploration immediately but could be valuable later. So, try to mark all potentially valuable lines.
                         - If valuable, specify at least one variables from the variables array in the input explored code lines, the exploration tool, and a reason.
                         - Ensure at least one line is marked as valuable to explore next.
                         - Summarize the proposed next steps in "next_step_summary".
