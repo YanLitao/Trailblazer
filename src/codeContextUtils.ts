@@ -3,6 +3,7 @@ import * as ts from "typescript";
 import * as path from 'path';
 import * as url from 'url';
 import { start } from 'repl';
+import { get } from 'http';
 
 // Function to extract the file name from a file URI
 export function getFileNameFromUri(fileUri: string | undefined): string {
@@ -441,7 +442,30 @@ export async function findCompleteStatementText(
     fileUri: vscode.Uri,
     lineNumber: number
 ): Promise<{ statementText: string; startLineNum: number; endLineNum: number }> {
-    const completeLineNode = await findNode(fileUri, lineNumber);
+    const lineText = await getLineText(fileUri, lineNumber);
+    const trimmedLine = lineText.trim();
+
+    if (!trimmedLine) {
+        console.error(`Line ${lineNumber} not found in file ${fileUri}`);
+        return { statementText: lineText, startLineNum: lineNumber, endLineNum: lineNumber };
+    }
+
+    let isFunction = 0;
+    if (trimmedLine.includes("=")) {
+        isFunction = 0; // assignment
+    } else if (trimmedLine.endsWith(",")) {
+        isFunction = 0; // destructuring assignment
+    } else if (trimmedLine.includes("function ")) {
+        isFunction = 1; // function definition
+    } else if (trimmedLine.includes("=>")) {
+        isFunction = 2; // arrow function
+    } else if (trimmedLine.includes("class")) {
+        isFunction = 4; // class
+    } else if (trimmedLine.includes("(")) {
+        isFunction = 3; // function call
+    }
+
+    const completeLineNode = await findNode(fileUri, lineNumber, isFunction);
     if (completeLineNode) {
         const document = await vscode.workspace.openTextDocument(fileUri);
         const statementText = completeLineNode.getText();
@@ -452,8 +476,6 @@ export async function findCompleteStatementText(
         return { statementText, startLineNum, endLineNum };
     }
 
-    // No valid node found, return the line of code as the statement text
-    const lineText = await getLineText(fileUri, lineNumber);
     return { statementText: lineText, startLineNum: lineNumber, endLineNum: lineNumber };
 }
 
@@ -465,6 +487,7 @@ async function extractVariables(
     isFunction: number = 0
 ): Promise<{ fileUri: string; lineNumber: number; variable: string }[]> {
     const extractedNode = await findNode(fileUri, lineNumber, isFunction);
+    const extractedText = extractedNode?.getText();
     if (extractedNode) {
         let results;
         if (isFunction == 1) {
@@ -494,6 +517,10 @@ async function extractVariables(
             } else {
                 newResults.push(result);
             }
+        }
+        const resultsAndText = {
+            results: newResults,
+            extractedText: extractedText
         }
         return newResults;
     }
@@ -801,8 +828,6 @@ function extractClass(node: ts.Node,
                 });
             }
         }
-
-        console.log(layer, node.kind, node.getText());
 
         // Traverse child nodes
         node.getChildren().forEach((child) => visit(child, layer + 1));

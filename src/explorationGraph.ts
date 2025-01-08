@@ -52,7 +52,7 @@ export class ExplorationGraph {
             if (existingNode) {
                 return;
             }
-
+            console.log(`Adding node from ${toUri.split('/').pop()}:${toLineNumber}:${toVariable}`);
             const fileUri = vscode.Uri.parse(toUri);
             const document = await vscode.workspace.openTextDocument(fileUri);
             const lineText = document.lineAt(toLineNumber).text.trim();

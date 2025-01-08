@@ -422,6 +422,7 @@ class Agent {
 
                     const variables = [subProblem.code_context.invoke_variable, ...relevantVariables.map((variableInfo: any) => variableInfo.variable)];
                     this._addOrUpdateExploredCodeLines(uri.toString(), startLineNum, endLineNum, statementText, variables);
+                    console.log(`Adding ${variables} from ${startLineNum} to ${endLineNum} to explored code lines`);
                 }
             }
         }
@@ -654,6 +655,7 @@ class Agent {
             // Open document to retrieve code content and statements
             const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(fileUri));
             const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, lineNumber);
+
             if (lineNumber == subProblem.code_context.line_number && fileUri == subProblem.code_context.file_uri) {
                 // we don't want to add the same line and same variable as a result, since using either Go to Definition or Find References on the variable will return the same variable name.
                 continue;
@@ -666,7 +668,7 @@ class Agent {
                 file_uri: fileUri,
                 line_number: lineNumber,
                 code_line: codeLine,
-                full_statement: statementText,
+                full_statement: (codeLine.includes(variable) && codeLine.includes(";")) ? codeLine : statementText,
                 variable: variable
             };
             results.push(baseResult);
@@ -677,7 +679,7 @@ class Agent {
             this._explorationGraph.upsertNode(sourceId, fileUri, lineNumber, variable, subProblem.tool == 0 ? "definition" : "reference");
 
             // Analyze the code context for relevant variables
-            const relevantVariables = await analyze(uri, lineNumber, variable);
+            const relevantVariables = await analyze(uri, lineNumber, variable); // after supporting class/function definitions, the full statement text could be different here.
             // Add each relevant variable as a separate result
             relevantVariables.forEach((variableInfo: any) => {
                 const relevantResultNodeId = `${variableInfo.fileUri}:${variableInfo.lineNumber}:${variableInfo.variable}`;
@@ -685,11 +687,12 @@ class Agent {
                     return;
                 }
                 const lineText = document.lineAt(variableInfo.lineNumber).text.trim();
+
                 results.push({
                     file_uri: variableInfo.fileUri,
                     line_number: variableInfo.lineNumber,
                     code_line: lineText,
-                    full_statement: statementText,
+                    full_statement: (lineText.includes(variableInfo.variable) && lineText.includes(";")) ? lineText : statementText,
                     variable: variableInfo.variable // Include the relevant variable
                 });
                 // Create result node if it doesn't already exist in the graph
