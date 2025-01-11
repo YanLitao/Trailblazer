@@ -4,6 +4,8 @@ import * as path from 'path';
 import * as url from 'url';
 import { start } from 'repl';
 import { get } from 'http';
+import exp from 'constants';
+import { sleep } from 'langchain/util/time';
 
 // Function to extract the file name from a file URI
 export function getFileNameFromUri(fileUri: string | undefined): string {
@@ -103,7 +105,6 @@ export function getAccurateLineNumber(fullFile: string, fullStatement: string, v
 export function getLineNumber(codeSnippet: string, variableName: string, startLineNum: number): number {
     const lines = codeSnippet.split('\n');
     const lineNum = lines.findIndex((line) => line.includes(variableName));
-
     if (lineNum === -1) {
         return startLineNum;
     }
@@ -119,36 +120,23 @@ export function getLineNumber(codeSnippet: string, variableName: string, startLi
  * @param range - How many lines before and after the start line to search.
  * @returns An object containing the line number and offset of the variable, or null if not found.
  */
-export async function searchVariableOffset(
+export function searchVariableOffset(
     document: vscode.TextDocument,
     variableName: string,
-    startLine: number,
-    range: number = 10
-): Promise<{ line: number, offset: number } | null> {
-    const totalLines = document.lineCount;
-    const start = Math.max(0, startLine - range);
-    const end = Math.min(totalLines - 1, startLine + range);
+    lineNumber: number,
+): number {
+    const lineText = document.lineAt(lineNumber).text;
 
-    // Search around the startLine (above and below within the given range)
-    for (let i = 0; i < end - start + 1; i++) {
-        const currentLine = start + i;
-
-        // Ensure the line is within the document bounds
-        if (currentLine >= 0 && currentLine < totalLines) {
-            const lineText = document.lineAt(currentLine).text;
-
-            // Search for the variable name in the current line
-            const offset = lineText.indexOf(variableName);
-            if (offset !== -1) {
-                //console.log(`Found variable "${variableName}" at line ${currentLine}, offset ${offset}`);
-                return { line: currentLine, offset: offset };
-            }
-        }
+    // Search for the variable name in the current line
+    const offset = lineText.indexOf(variableName);
+    if (offset !== -1) {
+        //console.log(`Found variable "${variableName}" at line ${currentLine}, offset ${offset}`);
+        return offset;
     }
 
     // If the variable wasn't found, return null
-    console.error(`Variable "${variableName}" not found in around the line ${startLine} in the document between line ${start} and ${end}.`);
-    return null;
+    console.error(`Variable "${variableName}" not found in around the line ${lineNumber}.`);
+    return -1;
 }
 
 export function preProcessCodeLine(subProblem: any, surroundingCode: string): string | null {
@@ -898,4 +886,8 @@ export async function analyze(
 
     const results = await extractVariables(fileUri, lineNumber, inputVariable, isFunction);
     return results;
+}
+
+export async function test() {
+
 }

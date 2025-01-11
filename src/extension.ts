@@ -3,8 +3,9 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
-import { getLineText, getLineNumber, getFileNameFromUri, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, analyze, findCompleteStatementText } from './codeContextUtils';
+import { test, getLineText, getLineNumber, getFileNameFromUri, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, analyze, findCompleteStatementText } from './codeContextUtils';
 import { ExplorationGraph, Node, Edge } from './explorationGraph';
+import { get } from 'http';
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
 
@@ -13,6 +14,7 @@ if (!API_KEY) {
 }
 
 export function activate(context: vscode.ExtensionContext) {
+    test();
     // Initialize the SidebarView and Agent
     const sidebarViewProvider = new SidebarView(context);
     const agent = new Agent(sidebarViewProvider);
@@ -370,32 +372,97 @@ class Agent {
 
     async runTask1(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
         console.warn("Running Task 1");
+        const fileUriString = uri.toString();
         const surroundingCode = await getLineTextFromRange(uri, startLine, endLine);
-
-        // Split the surrounding code into lines
-        const codeLines = surroundingCode.split("\n");
-        const codeContext = [];
+        const codeContext: { file_uri: string, line_number: number, code_line: string, variables: Set<string> }[] = [];
         let totalVariables = 0;
+        let sub_problems: {
+            sub_question: string;
+            tool: number;
+            code_context: {
+                file_uri: string;
+                invoke_variable: string;
+                code_line: string;
+                line_number: number;
+                full_statement: string;
+            };
+            reason: string;
+        }[] = [];
+        let fromID = "";
 
-        for (let i = 0; i < codeLines.length; i++) {
-            const line = codeLines[i].trim();
+        let sentenceStartLineNum = startLine;
+        // Split the surrounding code into lines
+        const codeSentences = surroundingCode.split(";");
+        codeSentences.forEach(async (sentence, index) => {
+            const extractedVariables = await analyze(uri, sentenceStartLineNum);
+            const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, sentenceStartLineNum);
+            const codeLines = sentence.split("\n");
+            const variables = extractedVariables.map((variableInfo: any) => variableInfo.variable);
 
-            const extractedVariables = await analyze(uri, startLine + i);
-            const variables = new Set(extractedVariables.map((variableInfo: any) => variableInfo.variable));
+            extractedVariables.forEach(async (variableInfo: any) => {
+                const codeLine = await getLineText(uri, variableInfo.lineNumber);
 
-            codeContext.push({
-                file_uri: uri.toString(),
-                line_number: startLine + i,
-                code_line: line,
-                variables, // Set of unique variables
+                sub_problems.push(
+                    {
+                        sub_question: `Find references to "${variableInfo.variable}"`,
+                        tool: 1, // Find References
+                        code_context: {
+                            file_uri: fileUriString,
+                            invoke_variable: variableInfo.variable,
+                            code_line: codeLine,
+                            line_number: variableInfo.lineNumber,
+                            full_statement: statementText,
+                        },
+                        reason: `Determine where the variable "${variableInfo.variable}" is being used in the codebase.`,
+                    },
+                    {
+                        sub_question: `Go to the definition of "${variableInfo.variable}"`,
+                        tool: 0, // Go to Definition
+                        code_context: {
+                            file_uri: fileUriString,
+                            invoke_variable: variableInfo.variable,
+                            code_line: codeLine,
+                            line_number: variableInfo.lineNumber,
+                            full_statement: statementText,
+                        },
+                        reason: `Locate the definition of the variable "${variableInfo.variable}" to understand its origin.`,
+                    },
+                );
+
+                if (startLine <= variableInfo.lineNumber && variableInfo.lineNumber <= endLine) {
+                    this._explorationGraph.addOrigin({
+                        id: `${fileUriString}:${variableInfo.lineNumber}:${variableInfo.variable}`,
+                        fileUri: fileUriString,
+                        lineNumber: variableInfo.lineNumber,
+                        variable: variableInfo.variable,
+                        codeSnippet: statementText,
+                        edges: new Set(),
+                    });
+
+                    if (!fromID) fromID = `${fileUriString}:${variableInfo.lineNumber}:${variableInfo.variable}`;
+                }
             });
 
-            totalVariables += variables.size;
-        }
+            codeLines.forEach(async (codeLine, index) => {
+                const lineNum = sentenceStartLineNum + index;
+                // get the variables with the same line number
+                const variables = extractedVariables.filter((variableInfo: any) => variableInfo.lineNumber === lineNum).map((variableInfo: any) => variableInfo.variable);
+                codeContext.push({
+                    file_uri: fileUriString,
+                    line_number: lineNum,
+                    code_line: codeLine,
+                    variables: new Set(variables)
+                });
+            });
+
+            this._addOrUpdateExploredCodeLines(fileUriString, sentenceStartLineNum, sentenceStartLineNum + codeLines.length, statementText, variables);
+            sentenceStartLineNum += codeLines.length;
+            totalVariables += extractedVariables.length;
+        });
 
         let task1Output: any = {
-            refined_question: "",
-            sub_problems: []
+            refined_question: question,
+            sub_problems: sub_problems
         };
 
         const inputJson = {
@@ -411,86 +478,26 @@ class Agent {
         this._refined_question = task1Output.refined_question;
 
         if (totalVariables <= this._numberOfVariablesThreshold) {
-            task1Output.sub_problems = Array.from(codeContext).flatMap((eachCode) => {
-                const fileUri = eachCode.file_uri;
-                const lineNumber = eachCode.line_number;
-                const codeLine = eachCode.code_line;
-                const fullStatement = codeLine; // Assuming single-line statements
-
-                // Iterate over variables in eachCode
-                return Array.from(eachCode.variables).flatMap((variable) => {
-                    const accurateLineNumber = getLineNumber(surroundingCode, variable, startLine);
-
-                    // Create sub-questions for Find References and Go to Definition
-                    return [
-                        {
-                            sub_question: `Find references to "${variable}"`,
-                            tool: 1, // Find References
-                            code_context: {
-                                file_uri: fileUri,
-                                invoke_variable: variable,
-                                code_line: codeLine,
-                                line_number: accurateLineNumber ?? lineNumber,
-                                full_statement: fullStatement,
-                            },
-                            reason: `Determine where the variable "${variable}" is being used in the codebase.`,
-                        },
-                        {
-                            sub_question: `Go to the definition of "${variable}"`,
-                            tool: 0, // Go to Definition
-                            code_context: {
-                                file_uri: fileUri,
-                                invoke_variable: variable,
-                                code_line: codeLine,
-                                line_number: accurateLineNumber ?? lineNumber,
-                                full_statement: fullStatement,
-                            },
-                            reason: `Locate the definition of the variable "${variable}" to understand its origin.`,
-                        },
-                    ];
-                });
-            });
+            task1Output.sub_problems = sub_problems;
         }
 
         for (const subProblem of task1Output.sub_problems) {
-            if (subProblem && "code_context" in subProblem && uri && "file_uri" in subProblem.code_context) {
-                subProblem.code_context.file_uri = uri.toString();
+            const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, subProblem.code_context.line_number);
+            // Create a node for each sub-problem and mark it as an invoking place
+            const nodeId = `${fileUriString}:${subProblem.code_context.line_number}:${subProblem.code_context.invoke_variable}`;
+            const newNode: Node = {
+                id: nodeId,
+                fileUri: fileUriString,
+                lineNumber: subProblem.code_context.line_number,
+                variable: subProblem.code_context.invoke_variable,
+                codeSnippet: statementText,
+                edges: new Set(),
+            };
+            if (!fromID || startLine <= subProblem.code_context.line_number && subProblem.code_context.line_number <= endLine) {
+                this._explorationGraph.addOrigin(newNode);
+                if (!fromID) fromID = nodeId;
             } else {
-                console.warn("Incomplete subProblem: ", subProblem);
-                continue;
-            }
-
-            //const invokeVariable = subProblem.code_context.invoke_variable;
-            const codeLine = preProcessCodeLine(subProblem, surroundingCode);
-
-            if (codeLine) {
-                const accurateLineNumber = getLineNumber(surroundingCode, subProblem.code_context.invoke_variable, startLine);
-                if (accurateLineNumber !== null) {
-                    subProblem.code_context.line_number = accurateLineNumber;
-                    const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, accurateLineNumber);
-                    subProblem.code_context.full_statement = statementText;
-
-                    // Create a node for each sub-problem and mark it as an invoking place
-                    const nodeId = `${uri.toString()}:${accurateLineNumber}:${subProblem.code_context.invoke_variable}`;
-                    const newNode: Node = {
-                        id: nodeId,
-                        fileUri: uri.toString(),
-                        lineNumber: accurateLineNumber,
-                        variable: subProblem.code_context.invoke_variable,
-                        codeSnippet: statementText,
-                        edges: new Set(),
-                    };
-                    this._explorationGraph.addOrigin(newNode);
-
-                    const relevantVariables = await analyze(uri, accurateLineNumber, subProblem.code_context.invoke_variable);
-                    relevantVariables.forEach((variableInfo: any) => {
-                        this._explorationGraph.upsertNode(nodeId, variableInfo.fileUri, variableInfo.lineNumber, variableInfo.variable, "assignment");
-                    });
-
-                    const variables = [subProblem.code_context.invoke_variable, ...relevantVariables.map((variableInfo: any) => variableInfo.variable)];
-                    this._addOrUpdateExploredCodeLines(uri.toString(), startLineNum, endLineNum, statementText, variables);
-                    console.log(`Adding ${variables} from ${startLineNum} to ${endLineNum} to explored code lines`);
-                }
+                this._explorationGraph.upsertNode(fromID, fileUriString, subProblem.code_context.line_number, subProblem.code_context.invoke_variable, "assignment");
             }
         }
 
@@ -516,7 +523,7 @@ class Agent {
 
         for (const subProblem of subProblems) {
             const variableName = subProblem.code_context.invoke_variable;
-            let initialLineNumber = subProblem.code_context.line_number;
+            let lineNumber = subProblem.code_context.line_number;
             const fileUri = vscode.Uri.parse(subProblem.code_context.file_uri);
 
             // Open the document at the specified fileUri
@@ -526,22 +533,22 @@ class Agent {
             this._addToExploredFiles(fileUri, document);
 
             // Get code of the line
-            const codeLine = document.lineAt(initialLineNumber).text.trim();
+            const codeLine = document.lineAt(lineNumber).text.trim();
 
             if (!codeLine.includes(variableName)) {
-                const accurateLineNumber = getAccurateLineNumber(document.getText(), subProblem.code_context.full_statement, variableName, initialLineNumber);
+                const accurateLineNumber = getAccurateLineNumber(document.getText(), subProblem.code_context.full_statement, variableName, lineNumber);
                 if (!accurateLineNumber) {
                     continue;
                 } else {
                     subProblem.code_context.line_number = accurateLineNumber;
-                    initialLineNumber = accurateLineNumber;
+                    lineNumber = accurateLineNumber;
                 }
             }
             // Find the variable's offset in the document
-            const offsetResult = await searchVariableOffset(document, variableName, initialLineNumber);
+            const offsetResult = searchVariableOffset(document, variableName, lineNumber);
 
-            if (!offsetResult) {
-                console.error(`Variable "${variableName}" not found near line ${initialLineNumber}.`);
+            if (offsetResult == -1) {
+                console.error(`Variable "${variableName}" not found near line ${lineNumber}.`);
                 task2Results.push({
                     sub_question: subProblem.sub_question,
                     tool: subProblem.tool,
@@ -552,14 +559,14 @@ class Agent {
                 continue;
             }
 
-            const { line, offset } = offsetResult;
+            const offset = offsetResult;
 
             // Track explored sub-questions
             this._exploredSubQuestions.push(subProblem.sub_question);
 
             // Check if the variable has already been explored
             const existingVariable = this._exploredVariables.find(
-                v => v.invoke_variable === variableName && v.line_number === line && v.file_uri === fileUri.toString() && v.tool === subProblem.tool
+                v => v.invoke_variable === variableName && v.line_number === lineNumber && v.file_uri === fileUri.toString() && v.tool === subProblem.tool
             );
 
             if (existingVariable && existingVariable.results.length > 0) {
@@ -572,7 +579,7 @@ class Agent {
                 continue;
             }
             // Perform the selected tool action (Go to Definition or Find References)
-            const results = await this._runTool(fileUri, line, offset, subProblem);
+            const results = await this._runTool(fileUri, lineNumber, offset, subProblem);
 
             if (results.length === 0) {
                 console.warn(`No results were found for sub-problem "${subProblem.sub_question}".`);
@@ -589,7 +596,7 @@ class Agent {
             // Add the variable and results to _exploredVariables
             this._exploredVariables.push({
                 invoke_variable: variableName,
-                line_number: line,
+                line_number: lineNumber,
                 file_uri: fileUri.toString(),
                 results: results,
                 tool: subProblem.tool
@@ -640,6 +647,7 @@ class Agent {
     private async _runTool(fileUri: vscode.Uri, line: number, offset: number, subProblem: any): Promise<any[]> {
         const pos = new vscode.Position(line, offset);
         const loc = new vscode.Location(fileUri, pos);
+
         let results: Array<{ file_uri: string, line_number: number, code_line: string, full_statement: string, variable: string }> = [];
 
         if (subProblem.tool === 0) { // Go to Definition
@@ -708,20 +716,26 @@ class Agent {
             return results;
         }
 
-        // Filter locations to exclude unwanted file extensions
-        const filteredLocations = locations.filter(location => {
-            const fileUri = location instanceof vscode.Location ? location.uri.toString() : (location as vscode.LocationLink).targetUri.toString();
-            return !this._fileExtensionsToExclude.some(ext => fileUri.includes(ext));
-        });
+        for (const location of locations) {
+            const lineNumber = location instanceof vscode.Location
+                ? location.range.start.line
+                : (location as vscode.LocationLink).targetSelectionRange?.start.line ?? 0;
 
-        for (const location of filteredLocations) {
-            const lineNumber = location instanceof vscode.Location ? location.range.start.line : (location as vscode.LocationLink).targetRange.start.line;
             const uri = location instanceof vscode.Location ? location.uri : location.targetUri;
             const fileUri = uri.toString();
+            if (this._fileExtensionsToExclude.some(ext => fileUri.includes(ext))) {
+                continue;
+            }
 
             // Open document to retrieve code content and statements
             const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(fileUri));
-            const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, lineNumber);
+            let { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, lineNumber);
+
+            if ('targetSelectionRange' in location) {
+                const targetSelectionRange = location.targetSelectionRange;
+                startLineNum = targetSelectionRange?.start.line ?? 0;
+                endLineNum = targetSelectionRange?.end.line ?? 0;
+            }
 
             if (lineNumber == subProblem.code_context.line_number && fileUri == subProblem.code_context.file_uri) {
                 // we don't want to add the same line and same variable as a result, since using either Go to Definition or Find References on the variable will return the same variable name.
@@ -742,7 +756,6 @@ class Agent {
 
             const sourceId = `${subProblem.code_context.file_uri}:${subProblem.code_context.line_number}:${variable}`;
             const resultNodeId = `${fileUri}:${lineNumber}:${variable}`;
-
             this._explorationGraph.upsertNode(sourceId, fileUri, lineNumber, variable, subProblem.tool == 0 ? "definition" : "reference");
 
             // Analyze the code context for relevant variables
@@ -846,6 +859,72 @@ class Agent {
         return taskOutput;
     }
 
+    async filterInput(exploredCode: any[]) {
+        let newVariables = [];
+        let variableCount = 0;
+        let nextExploreVariables = [];
+        for (const code of exploredCode) {
+            for (const variable of code.variables) {
+                const accurateLineNumber = getLineNumber(code.code_snippet, variable, code.start_line);
+                const existingVariables = this._exploredVariables.filter(
+                    v => v.invoke_variable === variable && v.line_number === accurateLineNumber && v.file_uri === code.file_uri
+                );
+                const lineText = await getLineText(vscode.Uri.parse(code.file_uri), accurateLineNumber ?? code.start_line);
+                let toolsUsed: number[] = [];
+                if (existingVariables) {
+                    // Determine which tools have been used
+                    const toolsUsed = new Set(existingVariables.map(v => v.tool));
+
+                    // If both tools have been used, skip this variable
+                    if (toolsUsed.has(0) && toolsUsed.has(1)) {
+                        continue;
+                    }
+                }
+
+                // If only one tool has been used, return the other tool
+                if (!toolsUsed.includes(1)) {
+                    nextExploreVariables.push({
+                        sub_question: "",
+                        tool: 1, // Use Find References
+                        code_context: {
+                            file_uri: code.file_uri,
+                            invoke_variable: variable,
+                            code_line: code.code_snippet,
+                            line_number: accurateLineNumber ?? code.start_line,
+                            full_statement: code.code_snippet
+                        },
+                        reason: "Explore the last reached variables in the code line using Find References"
+                    });
+                }
+                if (!toolsUsed.includes(0)) {
+                    nextExploreVariables.push({
+                        sub_question: "",
+                        tool: 0, // Use Go to Definition
+                        code_context: {
+                            file_uri: code.file_uri,
+                            invoke_variable: variable,
+                            code_line: code.code_snippet,
+                            line_number: accurateLineNumber ?? code.start_line,
+                            full_statement: code.code_snippet
+                        },
+                        reason: "Explore the last reached variables in the code line using Go to Definition"
+                    });
+                }
+
+                variableCount++;
+
+                newVariables.push({
+                    file_uri: code.file_uri,
+                    line_number: accurateLineNumber ?? code.start_line,
+                    code_line: lineText,
+                    variable: variable
+                });
+            }
+        }
+
+        return { newVariables, variableCount, nextExploreVariables };
+    }
+
     async runTask3() {
         console.warn("Running Task 3, processing ", this._newExploredCodeLines.length, " new code lines.");
 
@@ -870,8 +949,11 @@ class Agent {
             answer: ""
         };
 
+        const filterResult = await this.filterInput(this._newExploredCodeLines);
+        const { newVariables, variableCount, nextExploreVariables } = filterResult;
+
         // If there are no new code lines to explore, directly run Task 4
-        if (this._newExploredCodeLines.length === 0) {
+        if (variableCount === 0) {
             console.warn("No new code lines to explore. Running Task 4.");
             const task4Output = await this.runTask4() as {
                 sub_problems: {
@@ -892,49 +974,14 @@ class Agent {
             };
             task3Output = task4Output;
         } else {
-            const totalVariables = this._newExploredCodeLines.reduce(
-                (acc, code) => acc + code.variables.size,
-                0
-            );
+            if (variableCount <= this._numberOfVariablesThreshold) {
+                task3Output.sub_problems = nextExploreVariables;
 
-            if (totalVariables <= this._numberOfVariablesThreshold) {
-                // If the total number of variables is less than or equal to 5, add both tools for each variable to the output
-                task3Output.sub_problems = this._newExploredCodeLines.flatMap(code =>
-                    Array.from(code.variables).flatMap(variable => {
-                        const accurateLineNumber = getLineNumber(code.code_snippet, variable, code.start_line);
-                        return [
-                            {
-                                sub_question: "",
-                                tool: 1, // Use Find References
-                                code_context: {
-                                    file_uri: code.file_uri,
-                                    invoke_variable: variable,
-                                    code_line: code.code_snippet,
-                                    line_number: accurateLineNumber ?? code.start_line,
-                                    full_statement: code.code_snippet
-                                },
-                                reason: "Explore the last reached variables in the code line using Find References"
-                            },
-                            {
-                                sub_question: "",
-                                tool: 0, // Use Go to Definition
-                                code_context: {
-                                    file_uri: code.file_uri,
-                                    invoke_variable: variable,
-                                    code_line: code.code_snippet,
-                                    line_number: accurateLineNumber ?? code.start_line,
-                                    full_statement: code.code_snippet
-                                },
-                                reason: "Explore the last reached variables in the code line using Go to Definition"
-                            }
-                        ];
-                    })
-                );
             } else {
                 const inputJson = {
                     task: 3,
                     refined_question: this._refined_question ?? "",
-                    explored_code: this._newExploredCodeLines
+                    variables_wait_for_exploring: newVariables
                 };
 
                 const response = await this._callAgentAPI(inputJson, 3, task3JsonSchema);
@@ -972,27 +1019,55 @@ class Agent {
     }
 
     async runTask4() {
-        console.warn("Running task 4, processing ", this._exploredCodeLines.length, " code lines.");
-
-        const inputJson = {
-            task: 4,
-            refined_question: this._refined_question ?? "",
-            explored_code_lines: this._exploredCodeLines,
+        // check each variable in this._exploredCodeLines whether it has been explored in this._exploredVariables
+        let task4Output: {
+            sub_problems: {
+                sub_question: string;
+                tool: number;
+                code_context: {
+                    file_uri: string;
+                    invoke_variable: string;
+                    code_line: string;
+                    line_number: number;
+                    full_statement: string;
+                };
+                reason: string;
+            }[];
+            next_step_summary: string;
+            answer: string;
+        } = {
+            sub_problems: [],
+            next_step_summary: "",
+            answer: ""
         };
+        const filterResult = await this.filterInput(this._exploredCodeLines);
+        let { newVariables, variableCount, nextExploreVariables } = filterResult;
 
-        const response = await this._callAgentAPI(inputJson, 4, task4JsonSchema);
 
-        // Validate JSON format
-        let agentOutput;
-        try {
-            agentOutput = JSON.parse(response);
-        } catch (e) {
-            console.error("Failed to parse JSON response for task 4:", e, response);
-            return [];
+        if (variableCount > 0 && variableCount <= this._numberOfVariablesThreshold) {
+            task4Output.sub_problems = nextExploreVariables;
+        } else {
+            console.warn("Running task 4, evaluating ", variableCount, " variables.");
+
+            const inputJson = {
+                task: 4,
+                refined_question: this._refined_question ?? "",
+                variables_wait_for_exploring: newVariables,
+            };
+
+            const response = await this._callAgentAPI(inputJson, 4, task4JsonSchema);
+
+            // Validate JSON format
+            let agentOutput;
+            try {
+                agentOutput = JSON.parse(response);
+            } catch (e) {
+                console.error("Failed to parse JSON response for task 4:", e, response);
+                return [];
+            }
+
+            task4Output = await this.processTask3andTask4Output(agentOutput);
         }
-
-        const task4Output = await this.processTask3andTask4Output(agentOutput);
-
         return task4Output;
     }
 
@@ -1232,19 +1307,19 @@ class Agent {
         switch (taskNumber) {
             case 1:
                 taskInstructions = `
-                    Task 1: Refine the user's question and break it into actionable sub-questions using VSCode tools.
-                    Ensure that each sub-question can be answered using a single VSCode tool on the invoke_variable. 
+                    Task 1: Refine the user's question and select valuable variables to explore to answer the question using VSCode tools.
                     And you can choose the tool from the following list by providing the corresponding integer value:
                     - 0: Go to Definition
                     - 1: Find References
                     
-                    From the code_context, evaluate each variable in the variables array to determine whether it is valuable to explore to answer the question.
+                    From the code_context, each item in the sub_problems array contains a code line with an array of variables in this line to explore.
+                    Evaluate each variable in the variables array to determine whether it is valuable to explore to answer the question, and provide a reason for choosing the variable and tool.
                     The output format should strictly follow the JSON schema provided, where the tool should be represented as an integer.
-                    If any variable is valuable to explore, provide a reason for choosing the variable and tool. Do not change the code_line.
+                    Do not change the code_line.
                     
                     ** Output format for each variable if valuable **
                     sub_problems: [{
-                        sub_question: "string" ,
+                        sub_question: "string" , // what is the sub-question can be answered by exploring the invoke_variable in the code line to answer the refined question
                         tool: "integer",
                         code_context: {
                             file_uri: "string",
@@ -1267,24 +1342,24 @@ class Agent {
                 break;
             case 3:
                 taskInstructions = `
-                    Task 3: Evaluate the explored code lines based on the refined question and determine the next steps for further exploration.
+                    Task 3: Evaluate the variables_wait_for_exploring based on the refined question and determine the next steps for further exploration.
 
                     ### Instructions:
 
                     1. **Input Evaluation**:
-                    - You are given a refined question and a list of explored code lines.
-                    - Assess what variables in each explored code lines are worth exploring next.
+                    - You are given a refined question and a list of variables_wait_for_exploring.
+                    - Assess what variables in variables_wait_for_exploring are worth exploring next.
 
                     2. **Output Requirements**:
                     - Provide evaluations for each explored line:
                         - For each line, specify if it is valuable for further exploration. 
                         - Some lines may not be valuable for further exploration immediately but could be valuable later. So, try to mark all potentially valuable lines.
-                        - If valuable, specify at least one variables from the variables array in the input explored code lines, the exploration tool, and a reason.
+                        - If valuable, specify at least one variables from the variables array in the input variables_wait_for_exploring, the exploration tool, and a reason.
                         - Ensure at least one line is marked as valuable to explore next.
                         - Summarize the proposed next steps in "next_step_summary".
 
                     3. **Line-by-Line Evaluation**:
-                    - For each explored code line:
+                    - For each variable in variables_wait_for_exploring:
                         - Specify whether the line is valuable for further exploration.
                         - If valuable:
                         - Identify the variable to explore next.
@@ -1315,12 +1390,12 @@ class Agent {
                 break;
             case 4:
                 taskInstructions = taskInstructions = `
-                    task 4: Evaluate the explored code lines based on the refined question and determine the next steps for further exploration.
+                    task 4: Evaluate the variables_wait_for_exploring based on the refined question and determine the next steps for further exploration.
     
                     ### Instructions:
     
                     1. **Input Evaluation**:
-                    - You are given a refined question and a list of explored code lines.
+                    - You are given a refined question and a list of variables wait for exploring.
                     - Assess what variables are worth exploring next.
     
                     2. **Output Requirements**:
@@ -1331,7 +1406,7 @@ class Agent {
                         - Summarize the proposed next steps in "next_step_summary".
     
                     3. **Line-by-Line Evaluation**:
-                    - For each explored code line:
+                    - For each variable in variables_wait_for_exploring:
                         - Specify whether the line is valuable for further exploration.
                         - If valuable:
                         - Identify the variable to explore next.
@@ -1343,7 +1418,7 @@ class Agent {
                     4. **Output Format**:
     
                     {
-                        "evaluations": [ // Evaluations of explored code lines
+                        "evaluations": [ // Evaluations of variables wait for exploring
                             {
                                 "file_uri": "string", // File URI of the code line
                                 "line_number": number, // Line number of the code line

@@ -52,7 +52,7 @@ export class ExplorationGraph {
             if (existingNode) {
                 return;
             }
-            console.log(`Adding node from ${toUri.split('/').pop()}:${toLineNumber}:${toVariable}`);
+
             const fileUri = vscode.Uri.parse(toUri);
             const document = await vscode.workspace.openTextDocument(fileUri);
             const lineText = document.lineAt(toLineNumber).text.trim();
@@ -70,7 +70,7 @@ export class ExplorationGraph {
             this.nodes.set(newNode.id, newNode);
 
             // Create the edge
-            if (tool !== "origin") {
+            if (tool !== "origin" && fromId !== newNode.id) {
                 const newEdge: Edge = {
                     from: fromId,
                     to: newNode.id,
