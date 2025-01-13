@@ -1,10 +1,12 @@
 import * as vscode from 'vscode';
+import { getSurroundingCode } from './codeContextUtils';
 // Node interface representing both invoking and result nodes
 export interface Node {
     id: string; // Unique ID: `${fileUri}:${lineNumber}:${variable}`
     fileUri: string; // File where the node exists
     lineNumber: number; // Line number of the code
     variable: string; // The specific variable or symbol at this node
+    codeLine: string; // Full line of code
     codeSnippet: string; // Relevant snippet from the line of code
     edges: Set<string>; // Connected node IDs from source to this node only
 }
@@ -23,8 +25,10 @@ export type TreeNode = {
     fileUri: string;
     lineNumber: number;
     variable: string;
+    codeLine: string;
     codeSnippet: string;
     isIntermediate: boolean;
+    statement: string;
     children: TreeNode[]; // Recursive definition
 };
 
@@ -47,6 +51,7 @@ export class ExplorationGraph {
             fileUri: "",
             lineNumber: -1,
             variable: "fakeOrigin",
+            codeLine: "",
             codeSnippet: "",
             edges: new Set(),
         };
@@ -86,6 +91,7 @@ export class ExplorationGraph {
             const fileUri = vscode.Uri.parse(toUri);
             const document = await vscode.workspace.openTextDocument(fileUri);
             const lineText = document.lineAt(toLineNumber).text.trim();
+            const { contextText, startContextLine } = await getSurroundingCode(fileUri, toLineNumber, toLineNumber);
 
             // Create the new node
             const newNode: Node = {
@@ -93,7 +99,8 @@ export class ExplorationGraph {
                 fileUri: toUri,
                 lineNumber: toLineNumber,
                 variable: toVariable,
-                codeSnippet: lineText,
+                codeLine: lineText,
+                codeSnippet: contextText,
                 edges: new Set(),
             };
 
@@ -266,8 +273,8 @@ export class ExplorationGraph {
      * @param nodeIds - Array of node IDs to include in the tree.
      * @returns A tree structure ready for D3.js visualization.
      */
-    findSmallestTree(nodeIds: { [key: number]: string }): any {
-        const nodeIdArray = Object.values(nodeIds);
+    findSmallestTree(nodeIds: { [key: number]: { nodeID: string; statement: string } } = {}): any {
+        const nodeIdArray = Object.values(nodeIds).map((node) => node.nodeID);
         const shortestPathTree = new Map<string, string>(); // Stores parent-child relationships
         const nodeMap = new Map<string, any>();
 
@@ -309,16 +316,29 @@ export class ExplorationGraph {
         const createOrGetNode = (nodeId: string): any => {
             if (!nodeMap.has(nodeId)) {
                 const node = this.nodes.get(nodeId)!;
+                let isIntermediate = true;
+                let snippetKey = -1;
+                let statement = "";
+                // Find the snippet key and statement for the node if it is in the nodeIds
+                if (nodeIds) {
+                    const key = Object.keys(nodeIds).find((key: any) => nodeIds[key].nodeID === node.id);
+                    if (key) {
+                        snippetKey = parseInt(key, 10);
+                        statement = nodeIds[snippetKey].statement;
+                        isIntermediate = false;
+                    }
+                }
 
                 const newNode = {
                     id: node.id,
-                    snippetKey: Object.keys(nodeIds).find(key => nodeIds[+key] === node.id) || -1,
+                    snippetKey: snippetKey,
                     fileUri: node.fileUri,
                     lineNumber: node.lineNumber,
                     variable: node.variable,
+                    codeLine: node.codeLine,
                     codeSnippet: node.codeSnippet,
-                    isIntermediate: !nodeIdArray.includes(node.id),
-                    isOrigin: this.origins.has(node.id),
+                    isIntermediate: isIntermediate,
+                    statement: statement,
                     children: [],
                 };
 

@@ -3,7 +3,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
-import { test, getLineText, getLineNumber, getFileNameFromUri, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, analyze, findCompleteStatementText } from './codeContextUtils';
+import { test, getLineText, getSurroundingCode, getLineNumber, getFileNameFromUri, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, analyze, findCompleteStatementText } from './codeContextUtils';
 import { ExplorationGraph, Node, Edge, TreeNode } from './explorationGraph';
 
 // API key for OpenAI
@@ -238,17 +238,33 @@ const task6JsonSchema = {
                 },
                 "required": ["snippetKey", "statement", "outOfDate"]
             }
-        },
-        "final_decision_sufficient": { "type": "boolean" },
-        "final_answer": { "type": "string" }
+        }
     },
-    "required": ["filtered_findings", "final_decision_sufficient", "final_answer"]
+    "required": ["filtered_findings"]
+};
+
+const task7JsonSchema = {
+    "type": "object",
+    "properties": {
+        "final_decision_sufficient": {
+            "type": "boolean",
+            "description": "Indicates whether the current findings and exploration are sufficient to fully answer the refined question."
+        },
+        "final_answer": {
+            "type": "string",
+            "description": "A clear, evidence-based synthesis of findings and implementation details. Only provided if final_decision_sufficient is true.",
+            "nullable": true // final_answer is optional if final_decision_sufficient is false
+        }
+    },
+    "required": ["final_decision_sufficient"],
+    "additionalProperties": false
 };
 
 class Agent {
     private _model: ChatOpenAI;
     private _fasterModel: ChatOpenAI
     private _stepCounter: number = 0;
+    private _question: string = "";
     private _refined_question: string | null = null;
     private _numberOfVariablesThreshold: number = 15; // If the collection of variables is less than this threshold, explore them directly without using LLMs to choose the next steps
     private _sidebarViewProvider: SidebarView;
@@ -263,15 +279,17 @@ class Agent {
     private _importantCodeSnippets = new Map<number, { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }>();
     private _fileExtensionsToExclude = ['.test.ts', '.spec.ts', '.test.tsx', '.spec.tsx', '.test.js', '.spec.js', '.test.jsx', '.spec.jsx', '.d.ts'];
     private _importantCodePaths: Map<string, Array<{ nodes: Node[]; edges: (Edge | null)[] }>> = new Map();
-    private _previousParsedNodes: { [key: number]: string } = {};
+    private _previousParsedNodes: { [key: number]: { nodeID: string; statement: string } } = {};
     private _tree: TreeNode = {
         id: "root",
         snippetKey: 0,
         fileUri: "",
         lineNumber: 0,
         variable: "",
+        codeLine: "",
         codeSnippet: "",
         isIntermediate: false,
+        statement: "",
         children: []
     };
     private _findingsSummary: { snippetKey: number[], statement: string, outOfDate: boolean }[] = [];
@@ -315,6 +333,8 @@ class Agent {
     }
 
     async runWorkflow(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
+        this._question = question;
+
         const MAX_STEPS = 30;
         let sufficient = false;
         let refinedOutput;
@@ -335,7 +355,7 @@ class Agent {
         this._sidebarViewProvider.agentIsRunning();
 
         // Task 1: Refine the question and identify sub-problems
-        refinedOutput = await this.runTask1(question, uri, startLine, endLine);
+        refinedOutput = await this.runTask1(uri, startLine, endLine);
 
         // Loop to explore sub-problems
         while (!sufficient && this._stepCounter < MAX_STEPS && !this.isStopped) {
@@ -381,7 +401,7 @@ class Agent {
         }
     }
 
-    async runTask1(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
+    async runTask1(uri: vscode.Uri, startLine: number, endLine: number) {
         console.warn("Running Task 1");
         const fileUriString = uri.toString();
         const surroundingCode = await getLineTextFromRange(uri, startLine, endLine);
@@ -441,12 +461,18 @@ class Agent {
                 );
 
                 if (startLine <= variableInfo.lineNumber && variableInfo.lineNumber <= endLine) {
+                    let codeSnippet = statementText;
+                    if (statementText.split("\n").length == 1) {
+                        const { contextText, startContextLine } = await getSurroundingCode(uri, variableInfo.lineNumber, variableInfo.lineNumber);
+                        codeSnippet = contextText;
+                    }
                     this._explorationGraph.addOrigin({
                         id: `${fileUriString}:${variableInfo.lineNumber}:${variableInfo.variable}`,
                         fileUri: fileUriString,
                         lineNumber: variableInfo.lineNumber,
                         variable: variableInfo.variable,
-                        codeSnippet: statementText,
+                        codeLine: codeLine,
+                        codeSnippet: codeSnippet,
                         edges: new Set(),
                     });
 
@@ -472,13 +498,13 @@ class Agent {
         });
 
         let task1Output: any = {
-            refined_question: question,
+            refined_question: this._question,
             sub_problems: sub_problems
         };
 
         const inputJson = {
             task: 1,
-            question: question,
+            question: this._question,
             surrounding_code: surroundingCode,
             allowed_tools: allowedTools,
             code_context: codeContext,
@@ -496,12 +522,19 @@ class Agent {
             const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, subProblem.code_context.line_number);
             // Create a node for each sub-problem and mark it as an invoking place
             const nodeId = `${fileUriString}:${subProblem.code_context.line_number}:${subProblem.code_context.invoke_variable}`;
+            const codeLine = await getLineText(uri, subProblem.code_context.line_number);
+            let codeSnippet = statementText;
+            if (statementText.split("\n").length == 1) {
+                const { contextText, startContextLine } = await getSurroundingCode(uri, subProblem.code_context.line_number, subProblem.code_context.line_number);
+                codeSnippet = contextText;
+            }
             const newNode: Node = {
                 id: nodeId,
                 fileUri: fileUriString,
                 lineNumber: subProblem.code_context.line_number,
                 variable: subProblem.code_context.invoke_variable,
-                codeSnippet: statementText,
+                codeLine: codeLine,
+                codeSnippet: codeSnippet,
                 edges: new Set(),
             };
             if (!fromID || startLine <= subProblem.code_context.line_number && subProblem.code_context.line_number <= endLine) {
@@ -1113,8 +1146,13 @@ class Agent {
 
         const response = await this._callAgentAPI(inputJson, 5, task5JsonSchema);
         const task5Output = JSON.parse(response);
-        // nodeIds: {snippetKey: nodeID, ...} is an object that stores the node IDs with the snippetKey as the key in this._importantCodeSnippets
-        let nodeIds: { [key: number]: string } = {};
+        // nodeIds: {snippetKey: {nodeID: string, statement: string} ...} is an object that stores the node IDs and statement with the snippetKey as the key in this._importantCodeSnippets
+        let nodeIds: {
+            [key: number]: {
+                nodeID: string;
+                statement: string;
+            }
+        } = {};
         task5Output.ranked_results.forEach((result: {
             file_uri: string;
             line_number: number;
@@ -1170,7 +1208,10 @@ class Agent {
                 console.error(`Node ID not found for line ${result.line_number} in ${result.file_uri}`);
                 return {};
             } else {
-                nodeIds[snippetKey] = nodeId;
+                nodeIds[snippetKey] = {
+                    nodeID: nodeId,
+                    statement: result.finding ?? result.explanation
+                };
             }
 
             // Find the path for this variable only if not already stored
@@ -1212,11 +1253,21 @@ class Agent {
             console.log("Tree: ", newTree);
         }
 
-
         let task6Output = "";
         if (this._updateFindings) {
-            task6Output = await this.runTask6();
+            let task7Output = "";
+            [task7Output, task6Output] = await Promise.all([
+                this.runTask7(),
+                this.runTask6()
+            ]);
+            if (this._final_decision_sufficient) {
+                const answerP = `
+                    <div class="final-answer"><h1 style="font-weight: bold;">Final Answer:</h1> ${task7Output}</div>
+                `;
+                task6Output = answerP + task6Output;
+            }
         }
+
         return task6Output;
     }
 
@@ -1300,18 +1351,12 @@ class Agent {
             return "";
         }
 
-        this._final_decision_sufficient = task6Output.final_decision_sufficient;
-
         // Update the findings summary
         const updatedFindings = this.updateFindingsSummary(task6Output.filtered_findings);
 
         // Generate the HTML for the findings
         let concatenatedHtml = "";
-        if (task6Output.final_decision_sufficient) {
-            concatenatedHtml = `
-                <p class="final-answer"><span style="font-weight: bold;">Final Answer:</span> ${task6Output.final_answer}</p>
-            `;
-        }
+
         updatedFindings.forEach(finding => {
             const snippetKeys = `[${finding.snippetKey.map((key: number) => `<span class="citation-ref" data-ref="${key}">${key}</span>`).join(", ")}]`;
             const statementHtml = finding.outOfDate
@@ -1327,6 +1372,109 @@ class Agent {
         });
 
         return concatenatedHtml;
+    }
+
+    private processFinalAnswer(finalAnswer: string): string {
+        // Regular expression to find snippetKey references in the format [snippetKey: number]
+        const snippetKeyRegex = /\[snippetKey: (\d+)\]/g;
+
+        // Function to replace snippetKey with a styled span element
+        const replaceSnippetKey = (match: string, snippetKey: string): string => {
+            return `[<span class="citation-ref" data-ref="${snippetKey}">${snippetKey}</span>]`;
+        };
+
+        // Function to handle special content inside ** or `
+        const processSpecialContent = (content: string): string => {
+            return content.replace(snippetKeyRegex, replaceSnippetKey);
+        };
+
+        // Regular expression to handle special content wrapped in ** or `
+        const specialContentRegex = /(\*\*(.*?)\*\*|`([^`]*)`)/g;
+
+        // Convert lines starting with "-" into a list
+        const convertToList = (text: string): string => {
+            const lines = text.split("\n");
+            let inList = false;
+            const processedLines = lines.map((line) => {
+                if (line.trim().startsWith("-")) {
+                    const listItem = `<li>${line.trim().substring(1).trim()}</li>`;
+                    if (!inList) {
+                        inList = true;
+                        return `<ul>${listItem}`;
+                    }
+                    return listItem;
+                } else {
+                    if (inList) {
+                        inList = false;
+                        return `</ul>${line}`;
+                    }
+                    return line;
+                }
+            });
+            if (inList) {
+                processedLines.push("</ul>");
+            }
+            return processedLines.join("\n");
+        };
+
+        // Convert lines starting with "###" into <h3> tags
+        const convertHeadings = (text: string): string => {
+            return text.replace(/^###\s*(.*)$/gm, (_, headingContent) => {
+                return `<h3>${headingContent.trim()}</h3>`;
+            });
+        };
+
+        // Replace line breaks with <br>, excluding those handled by lists or headings
+        const replaceLineBreaks = (text: string): string => {
+            return text.replace(/\n/g, "<br>");
+        };
+
+        // Process the final_answer string
+        let processedAnswer = finalAnswer
+            .replace(specialContentRegex, (match, _, boldContent, inlineCode) => {
+                if (boldContent) {
+                    // Process and wrap bold content with a styled <span>
+                    const processedContent = processSpecialContent(boldContent);
+                    return `<span style="font-weight: bold;">${processedContent}</span>`;
+                } else if (inlineCode) {
+                    // Process and wrap inline code content with a styled <span>
+                    const processedContent = processSpecialContent(inlineCode);
+                    return `<span style="font-family: monospace;">${processedContent}</span>`;
+                }
+                return match;
+            })
+            .replace(snippetKeyRegex, replaceSnippetKey); // Replace snippetKeys outside special content
+
+        // Convert "###" to <h3> tags
+        processedAnswer = convertHeadings(processedAnswer);
+
+        // Convert "-" to list elements
+        processedAnswer = convertToList(processedAnswer);
+
+        // Replace remaining line breaks with <br>
+        processedAnswer = replaceLineBreaks(processedAnswer);
+
+        return processedAnswer;
+    }
+
+    async runTask7() {
+        console.warn("Running Task 7.");
+
+        const inputJson = {
+            task: 7,
+            refined_question: this._refined_question ?? this._question,
+            data_flow_tree: this._tree
+        };
+
+        const response = await this._callAgentAPI(inputJson, 7, task7JsonSchema);
+        const task7Output = JSON.parse(response);
+
+        this._final_decision_sufficient = task7Output.final_decision_sufficient;
+
+        if (task7Output.final_decision_sufficient) {
+            return this.processFinalAnswer(task7Output.final_answer);
+        }
+        return "";
     }
 
     private async _updateStepResults(refinedOutput: any) {
@@ -1356,7 +1504,7 @@ class Agent {
                     The output format should strictly follow the JSON schema provided, where the tool should be represented as an integer.
                     Do not change the code_line.
                     
-                    ** Output format for each variable if valuable **
+                     Output format for each variable if valuable 
                     sub_problems: [{
                         sub_question: "string" , // what is the sub-question can be answered by exploring the invoke_variable in the code line to answer the refined question
                         tool: "integer",
@@ -1383,13 +1531,13 @@ class Agent {
                 taskInstructions = `
                     Task 3: Evaluate the variables_wait_for_exploring based on the refined question and determine the next steps for further exploration.
 
-                    ### Instructions:
+                    Instructions:
 
-                    1. **Input Evaluation**:
+                    1. Input Evaluation:
                     - You are given a refined question and a list of variables_wait_for_exploring.
                     - Assess what variables in variables_wait_for_exploring are worth exploring next.
 
-                    2. **Output Requirements**:
+                    2. Output Requirements:
                     - Provide evaluations for each explored line:
                         - For each line, specify if it is valuable for further exploration. 
                         - Some lines may not be valuable for further exploration immediately but could be valuable later. So, try to mark all potentially valuable lines.
@@ -1397,17 +1545,17 @@ class Agent {
                         - Ensure at least one line is marked as valuable to explore next.
                         - Summarize the proposed next steps in "next_step_summary".
 
-                    3. **Line-by-Line Evaluation**:
+                    3. Line-by-Line Evaluation:
                     - For each variable in variables_wait_for_exploring:
                         - Specify whether the line is valuable for further exploration.
                         - If valuable:
                         - Identify the variable to explore next.
                         - Select the appropriate tool:
-                            - **0**: Go to Definition
-                            - **1**: Find References
+                            - 0: Go to Definition
+                            - 1: Find References
                         - Provide a reason for choosing the variable and tool.
 
-                    4. **Output Format**:
+                    4. Output Format:
 
                     {
                         "evaluations": [ // Evaluations of explored code lines
@@ -1431,30 +1579,30 @@ class Agent {
                 taskInstructions = taskInstructions = `
                     task 4: Evaluate the variables_wait_for_exploring based on the refined question and determine the next steps for further exploration.
     
-                    ### Instructions:
+                    Instructions:
     
-                    1. **Input Evaluation**:
+                    1. Input Evaluation:
                     - You are given a refined question and a list of variables wait for exploring.
                     - Assess what variables are worth exploring next.
     
-                    2. **Output Requirements**:
+                    2. Output Requirements:
                     - Provide evaluations for each explored line:
                         - For each line, specify if it is valuable for further exploration.
                         - If valuable, specify at least one variables, the exploration tool, and a reason.
                         - Ensure at least one line is marked as valuable to explore next.
                         - Summarize the proposed next steps in "next_step_summary".
     
-                    3. **Line-by-Line Evaluation**:
+                    3. Line-by-Line Evaluation:
                     - For each variable in variables_wait_for_exploring:
                         - Specify whether the line is valuable for further exploration.
                         - If valuable:
                         - Identify the variable to explore next.
                         - Select the appropriate tool:
-                            - **0**: Go to Definition
-                            - **1**: Find References
+                            - 0: Go to Definition
+                            - 1: Find References
                         - Provide a reason for choosing the variable and tool.
     
-                    4. **Output Format**:
+                    4. Output Format:
     
                     {
                         "evaluations": [ // Evaluations of variables wait for exploring
@@ -1487,8 +1635,8 @@ class Agent {
                     - Summarize the finding in one sentence under the "finding" field. Use the structure: 
                         "Function/Field/Variable ... + Verb + Function/Field/Variable ...", e.g., ".innerHTML sets the content of HTML as 'ABC'".
                         Ensure the sentence is concise, informative, and clear. Do not include a clause.
-                    - Add the **specific variable** being tracked for this result under the "variable" field. Only select one variable. 
-                        **Important**: The variable must be selected only from the "variables" array provided in the result. Do not use or infer any other variables.
+                    - Add the specific variable being tracked for this result under the "variable" field. Only select one variable. 
+                        Important: The variable must be selected only from the "variables" array provided in the result. Do not use or infer any other variables.
 
                     Important:
                     - Do not modify the values of "file_uri", "code_line", "line_number", "full_statement", or "variables" for each result.
@@ -1527,9 +1675,9 @@ class Agent {
                 break;
             case 6:
                 taskInstructions = taskInstructions = `
-                Task 6: Evaluate findings and their associated code snippets to provide a comprehensive, implementation-focused answer to the refined question.
-                
-                ### Input:
+                Task 6: Filter, consolidate, and refine findings based on the exploration results.
+
+                Input:
                 - A collection of findings where each finding contains:
                     - snippetKey: Array of reference keys
                     - statement: The finding statement
@@ -1537,68 +1685,26 @@ class Agent {
                     - codeSnippet: Array of corresponding code lines with their keys
                 - The refined question to be answered
                 
-                ### Instructions:
+                Instructions:
                 
-                1. **Code-Implementation Analysis:**
-                - For each finding, analyze its associated code snippets to verify:
-                    - The finding accurately reflects the actual implementation
-                    - The code demonstrates concrete behavior
-                    - The implementation details support the finding's statement
-                - Distinguish between documentation-level findings and implementation-proven findings
+                1. Filter Findings:
+                - Review all input findings.
+                - Mark any finding as outOfDate: true if it is irrelevant to the refined question, redundant, or does not contribute meaningful insight.
+                - Retain all findings in the output, even those marked as outOfDate.
                 
-                2. **Depth Verification:**
-                - For each code-backed finding, assess:
-                    - Does the code show the complete implementation?
-                    - Are there important related code sections missing?
-                    - Do the code snippets reveal internal mechanics?
-                    - Is the implementation context clear?
-                - Consider exploration insufficient if code snippets don't demonstrate the full picture
+                2. Consolidate Findings:
+                - Combine findings that describe similar or related concepts only if they follow the same structure.
+                - Consolidate findings by combining their snippet keys and creating a concise statement adhering to the original structure.
+                - Do not introduce new grammatical patterns or combine findings with differing structures.
+                - Example:
+                    - Input:
+                    - 'sm' sets width to 24px.
+                    - 'md' sets width to 48px.
+                    - 'lg' sets width to 72px.
+                    - Consolidated Output:
+                    - 'sm', 'md', 'lg' set width to 24, 48, 72px.
                 
-                3. **Implementation Coverage Assessment:**
-                - Evaluate if the collected code snippets show:
-                    - Primary implementation logic
-                    - Supporting utility functions
-                    - Usage patterns
-                    - Error handling
-                    - Integration points
-                - Set final_decision_sufficient: false if key implementation aspects are missing
-                
-                4. **Evidence-Based Answer Formation:**
-                When final_decision_sufficient is true, structure the final_answer to include:
-                    a. High-level implementation overview
-                    b. Specific code patterns found
-                    c. Technical constraints revealed by the code
-                    d. Real usage examples from the codebase
-                    e. Internal implementation details
-                
-                5. **Finding Consolidation Rules:**
-                - When consolidating findings:
-                    - Only combine findings if their code snippets demonstrate the same pattern
-                    - Preserve specific implementation details
-                    - Maintain all snippet references
-                    - Example:
-                        Original findings with code:
-                        - Finding 1: "Method accepts options parameter" [code: function test(options: Config)]
-                        - Finding 2: "Method validates options object" [code: validateConfig(options)]
-                        Consolidated:
-                        - "Method accepts and validates options parameter of type Config"
-                
-                6. **Insufficient Exploration Guidance:**
-                If setting final_decision_sufficient: false, specify:
-                    - Which implementation aspects need further investigation
-                    - What specific code patterns to look for
-                    - Areas where implementation details are unclear
-                    - Required technical context missing from current findings
-                
-                7. **Output Processing:**
-                - Remove duplicate code references while preserving unique implementation details
-                - Prioritize findings with concrete code evidence
-                - Mark findings as outOfDate: true if:
-                    - Code snippets contradict the finding
-                    - Implementation details are missing
-                    - Finding is too generic without code support
-                
-                ### Output Format:
+                Output Format:
                 {
                     "filtered_findings": [
                         {
@@ -1606,19 +1712,77 @@ class Agent {
                             "statement": "Implementation-specific finding",
                             "outOfDate": boolean
                         }
-                    ],
-                    "final_decision_sufficient": boolean,
-                    "final_answer": "Comprehensive answer based on code implementation evidence"
+                    ]
                 }
-                
-                ### Sufficiency Criteria:
-                1. Do code snippets prove each major claim?
-                2. Is the implementation flow clear from the collected code?
-                3. Are concrete usage patterns demonstrated?
-                4. Are technical limitations visible in the code?
-                5. Does the code reveal internal behavior?
-                
-                Remember: The final answer must be grounded in the actual code implementation, not general knowledge or documentation. Every significant claim should be supported by observed code patterns.
+                `;
+                break;
+            case 7:
+                taskInstructions = `
+                Task 7: Decide Sufficiency and Generate Final Answer
+
+                Objective:
+                1. Assess if the current findings and code exploration sufficiently answer the refined question.
+                2. If sufficient, generate a clear, evidence-based final answer with inline references to code snippets.
+
+                Input:
+                1. refined_question: The question to answer.
+                2. data_flow_tree: A structured tree containing findings and associated code snippets.
+
+                TreeNode = {
+                    id: string;
+                    snippetKey: number;
+                    fileUri: string;
+                    lineNumber: number;
+                    variable: string;
+                    codeLine: string;
+                    codeSnippet: string; // 3 lines before and after the codeLine
+                    isIntermediate: boolean;
+                    statement: string; // findings extracted from this line of code
+                    children: TreeNode[]; // Recursive definition
+                };
+
+                Instructions:
+
+                1. Decide final_decision_sufficient:
+                Evaluate if the current findings and data flow tree are enough to fully answer the refined question:
+                - Depth: Are the explored code snippets deep enough to reveal the full implementation? Ensure all key variables, functions, and connections in the tree are clearly understood.
+                - Coverage: Does the exploration address all major aspects of the question? Ensure no significant functionality or dependency is missing.
+                - Clarity: Is the implementation flow clear and traceable from the findings and tree?
+
+                Set:
+                - final_decision_sufficient: true if all aspects are covered.
+                - final_decision_sufficient: false if more exploration is needed, specifying:
+                    - Missing key areas (e.g., untraced dependencies or incomplete functions).
+                    - What to explore further in the codebase.
+
+                2. Generate Final Answer (Only if final_decision_sufficient is true):
+                When sufficient, synthesize a clear and beginner-friendly final answer. Use the following formats for inline elements:
+                - References to Code Snippets: Inline references to code snippets should use the format [snippetKey: number].
+                Example: The method validates the configuration object [snippetKey: 12].
+
+                - Bold Formatting: Use bold to emphasize key methods, variables, or concepts by wrapping them in a pair of **.
+                Example: The method **validateConfig** is crucial for configuration validation.
+
+                - Inline Code: Use inline code formatting for method names, variable names, or code elements by wrapping them in a pair of backticks.
+
+                Structure of the Final Answer:
+                1. Overview: Provide a high-level summary of the implementation relevant to the question.
+                2. Details: Include:
+                    - Key methods, variables, or utilities, referencing their snippetKey.
+                    - Code evidence supporting claims, formatted inline.
+                3. Observations for Novices: Highlight usage patterns, potential errors, and edge cases.
+                4. Data Flow Insights: Explain connections or logic paths from the tree, especially key nodes and their role.
+
+                Output Format:
+                {
+                    "final_decision_sufficient": boolean,
+                    "final_answer": "Structured, evidence-based answer with inline snippetKey references, bold formatting (**), and inline code formatting (backtick)."
+                }
+
+                Checklist for Sufficiency:
+                1. Are all relevant code paths and variables traced deeply enough in the data flow tree?
+                2. Does the exploration address all major aspects of the refined question?
+                3. Is the implementation flow clear, and are findings well-supported by code?
                 `;
                 break;
             default:
