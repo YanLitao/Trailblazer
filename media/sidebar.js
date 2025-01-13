@@ -267,6 +267,155 @@ function renderGraph(data) {
     const container = document.getElementById("graph-container");
     container.innerHTML = ""; // Clear previous graph
 
+    const margin = { top: 20, right: 200, bottom: 20, left: 80 }; // Increased left margin
+
+    // Create the SVG container
+    const svg = d3.select(container)
+        .append("svg")
+        .style("font", "12px sans-serif");
+
+    console.log("we get a tree data: ", data);
+
+    function drawGraph() {
+        const width = container.offsetWidth;
+        const nodeSize = 30;
+
+        // Helper function to sanitize the ID
+        function generateNodeId(data) {
+            const fileName = data.fileUri.split('/').pop(); // Get the file name
+            return `${fileName}_${data.lineNumber}_${data.variable}`.replace(/[^\w-]/g, "_");
+        }
+
+        // Clear existing content in SVG
+        svg.selectAll("*").remove();
+
+        const root = d3.hierarchy(data);
+
+        // Calculate vertical positions dynamically based on rectangle heights
+        let yOffset = margin.top; // Initial y-offset
+        root.eachBefore(d => {
+            const snippetHeight = getCodeSnippetHeight(d.data.codeSnippet);
+            const labelHeight = 20; // Approximate label height
+            d.yOffset = yOffset; // Store yOffset for the node
+            yOffset += snippetHeight + labelHeight + 20; // Add spacing between nodes
+        });
+
+        const nodes = root.descendants();
+        const links = root.links();
+        const height = yOffset + margin.bottom; // Total height of the graph
+
+        svg.attr("width", width).attr("height", height);
+
+        const g = svg.append("g")
+            .attr("transform", `translate(${margin.left}, ${margin.top})`); // Apply margin
+
+        // Add links (connecting lines)
+        g.append("g")
+            .attr("fill", "none")
+            .attr("stroke", "#ccc")
+            .attr("stroke-width", 1.5)
+            .selectAll("path")
+            .data(links)
+            .join("path")
+            .attr("d", d => {
+                const path = d3.path(); // Create a new path object
+                path.moveTo(d.source.depth * nodeSize, d.source.yOffset); // Move to source
+                path.lineTo(d.source.depth * nodeSize, d.target.yOffset); // Vertical line to target's level
+                path.lineTo((d.source.depth + 1) * nodeSize, d.target.yOffset); // Horizontal line to target's depth
+                return path.toString();
+            });
+
+        // Add nodes
+        const nodeGroup = g.append("g")
+            .selectAll("g")
+            .data(nodes)
+            .join("g")
+            .attr("class", "node")
+            .attr("transform", d => `translate(0,${d.yOffset})`);
+
+        // Add circles for nodes
+        nodeGroup.append("circle")
+            .attr("cx", d => d.depth * nodeSize)
+            .attr("r", 10) // Larger circle for better display
+            .attr("fill", "#aaa")
+            .attr("stroke", "#333");
+
+        // Add snippetKey or "+" for intermediate nodes
+        nodeGroup.append("text")
+            .attr("x", d => d.depth * nodeSize)
+            .attr("dy", "0.32em")
+            .attr("text-anchor", "middle")
+            .attr("fill", "white")
+            .style("font-size", "10px")
+            .text(d => {
+                if (d.data.snippetKey !== -1) return d.data.snippetKey; // Add snippetKey for labeled nodes
+                if (d.data.isIntermediate) return "";
+                return "";
+            });
+        /* .on("click", function (event, d) {
+            if (d.data.isIntermediate) {
+                const rect = d3.select(`#${generateNodeId(d.data)}`); // Use sanitized ID
+                const isVisible = rect.attr("display") === "block";
+                rect.attr("display", isVisible ? "none" : "block");
+                d3.select(this).text(isVisible ? "+" : "-"); // Toggle sign
+            }
+        }); */
+
+        // Add text labels
+        nodeGroup.append("text")
+            .attr("x", d => d.depth * nodeSize + 20)
+            .attr("dy", "0.32em")
+            .text(d => {
+                if (d.data.id === "fake-origin") {
+                    return "Exploration start point"; // Label for fake origin
+                }
+                return `${d.data.fileUri.split('/').pop()}:${d.data.lineNumber}:${d.data.variable}`;
+            });
+
+        // Add code snippets as rectangles
+        nodeGroup.append("foreignObject")
+            .attr("id", d => generateNodeId(d.data)) // Use sanitized ID for toggling visibility
+            .attr("x", d => d.depth * nodeSize + 10)
+            .attr("y", 20) // Position below the text label
+            .attr("width", width - margin.right - margin.left - 20) // Adjust for container size
+            .attr("height", d => getCodeSnippetHeight(d.data.codeSnippet))
+            .html(d => {
+                if (d.data.id === "fake-origin") return ""; // No rect for fake origin
+                return `
+                        <div class="code-box" style="border: ${d.data.isIntermediate ? "1px dashed #aaa" : "none"}">
+                            <code>${d.data.codeSnippet}</code>
+                        </div>
+                    `;
+            });
+    }
+
+    // Function to calculate the height of a code snippet rectangle
+    function getCodeSnippetHeight(codeSnippet) {
+        const tempDiv = document.createElement("div");
+        tempDiv.style.visibility = "hidden";
+        tempDiv.style.position = "absolute";
+        tempDiv.style.font = "12px monospace";
+        tempDiv.style.width = `${container.offsetWidth - margin.right - margin.left - 20}px`;
+        tempDiv.innerHTML = `<code>${codeSnippet}</code>`;
+        document.body.appendChild(tempDiv);
+        const height = tempDiv.getBoundingClientRect().height;
+        document.body.removeChild(tempDiv);
+        return height + 10; // Add padding
+    }
+
+    // Initial render
+    drawGraph();
+
+    // Make the graph responsive
+    window.addEventListener("resize", () => {
+        drawGraph(); // Redraw the graph on resize
+    });
+}
+
+/* function renderGraph(data) {
+    const container = document.getElementById("graph-container");
+    container.innerHTML = ""; // Clear previous graph
+
     const width = container.offsetWidth;
     const height = container.offsetHeight;
     const radius = Math.min(width, height) / 2 - 40;
@@ -361,4 +510,4 @@ function renderGraph(data) {
             return parts[parts.length - 1];
         })
         .style("font-size", "10px");
-}
+} */

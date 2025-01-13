@@ -17,27 +17,57 @@ export interface Edge {
     variable: string;
 }
 
+export type TreeNode = {
+    id: string;
+    snippetKey: number;
+    fileUri: string;
+    lineNumber: number;
+    variable: string;
+    codeSnippet: string;
+    isIntermediate: boolean;
+    children: TreeNode[]; // Recursive definition
+};
+
 // ExplorationGraph class managing nodes, edges, and graph operations
 export class ExplorationGraph {
     nodes: Map<string, Node>; // Map of node ID to Node
     edges: Set<Edge>; // Set of edges
     origins: Set<string>; // Set of origin node IDs
+    fakeOriginId: string; // ID of the fake origin
 
     constructor() {
         this.nodes = new Map();
-        this.edges = new Set([]);
+        this.edges = new Set();
         this.origins = new Set();
+        this.fakeOriginId = "fake-origin"; // ID for the fake origin
+
+        // Add the fake origin node
+        const fakeOriginNode: Node = {
+            id: this.fakeOriginId,
+            fileUri: "",
+            lineNumber: -1,
+            variable: "fakeOrigin",
+            codeSnippet: "",
+            edges: new Set(),
+        };
+        this.nodes.set(this.fakeOriginId, fakeOriginNode);
     }
 
-    /**
-     * Adds origin nodes to the graph.
-     * Origin nodes are starting points with no incoming edges.
-     */
+    // Add a real origin and link it to the fake origin
     addOrigin(originNode: Node) {
         if (!this.nodes.has(originNode.id)) {
-            this.upsertNode("", originNode.fileUri, originNode.lineNumber, originNode.variable, "origin");
+            this.nodes.set(originNode.id, originNode);
         }
         this.origins.add(originNode.id);
+
+        // Link the fake origin to this origin
+        const edge: Edge = {
+            from: this.fakeOriginId,
+            to: originNode.id,
+            tool: "assignment",
+            variable: "",
+        };
+        this.addEdge(edge);
     }
 
     /**
@@ -138,6 +168,7 @@ export class ExplorationGraph {
         }
 
         const originNodeIds = Array.from(this.origins);
+        const isFakeOrigin = (nodeId: string) => nodeId === "fake-origin"; // Helper to check fake origin
 
         // Map to track the shortest paths to each origin
         const shortestPathsMap: Map<string, { node: Node; edge?: Edge }[]> = new Map();
@@ -157,6 +188,11 @@ export class ExplorationGraph {
                     shortestPathsMap.set(currentNodeId, [...path]);
                 }
                 continue; // Do not explore further from this origin
+            }
+
+            // Avoid prioritizing paths through the fake origin unless explicitly needed
+            if (isFakeOrigin(currentNodeId) && path.length > 1) {
+                continue;
             }
 
             // Explore backward edges
@@ -182,18 +218,140 @@ export class ExplorationGraph {
             .slice(0, maxPaths)
             .map(path => path.reverse()); // Reverse each path so origin is first and startNode is last
 
-        /* // Log the nodes and edges of each path
-        console.log(`Top ${maxPaths} shortest paths from node ${startNodeId}:`);
-        shortestPaths.forEach((path, pathIndex) => {
-            console.log(`Path ${pathIndex + 1}:`);
-            path.forEach((entry, idx) => {
-                const edgeInfo = entry.edge
-                    ? ` --[${entry.edge.tool}]--> ${entry.node.id}`
-                    : ` (Node: ${entry.node.id})`;
-                console.log(`  Step ${idx + 1}: ${entry.node.id}${edgeInfo}`);
-            });
-        }); */
-
         return shortestPaths;
     }
+
+    findShortestPathFromNodeToFakeOrigin(startNodeId: string): { node: Node; edge?: Edge }[] {
+        if (!this.nodes.has(startNodeId)) {
+            console.warn(`Node with ID ${startNodeId} not found.`);
+            return [];
+        }
+
+        // BFS initialization
+        const queue: { path: { node: Node; edge?: Edge }[]; visited: Set<string> }[] = [
+            { path: [{ node: this.nodes.get(startNodeId)! }], visited: new Set([startNodeId]) },
+        ];
+
+        while (queue.length > 0) {
+            const { path, visited } = queue.shift()!;
+            const currentNodeId = path[path.length - 1].node.id;
+
+            // Stop if the current node is the fake origin
+            if (currentNodeId === this.fakeOriginId) {
+                return path.reverse(); // Reverse the path for consistency
+            }
+
+            // Explore backward edges
+            const backwardEdges = Array.from(this.edges).filter((edge) => edge.to === currentNodeId);
+
+            for (const edge of backwardEdges) {
+                const fromNode = this.getNode(edge.from);
+                if (!fromNode) continue;
+
+                // Avoid revisiting nodes
+                if (!visited.has(fromNode.id)) {
+                    queue.push({
+                        path: [...path, { node: fromNode, edge }],
+                        visited: new Set([...visited, fromNode.id]),
+                    });
+                }
+            }
+        }
+
+        return []; // Return an empty array if no path is found
+    }
+
+    /**
+     * Finds the smallest tree to include all given nodes.
+     * @param nodeIds - Array of node IDs to include in the tree.
+     * @returns A tree structure ready for D3.js visualization.
+     */
+    findSmallestTree(nodeIds: { [key: number]: string }): any {
+        const nodeIdArray = Object.values(nodeIds);
+        const shortestPathTree = new Map<string, string>(); // Stores parent-child relationships
+        const nodeMap = new Map<string, any>();
+
+        // Step 1: Build the shortest path tree using Dijkstra's algorithm
+        const computeShortestPathTree = (startNodeId: string) => {
+            const distances = new Map<string, number>();
+            const parents = new Map<string, string | null>();
+            const visited = new Set<string>();
+            const priorityQueue: { nodeId: string; cost: number }[] = [];
+
+            // Initialize distances and priority queue
+            distances.set(startNodeId, 0);
+            priorityQueue.push({ nodeId: startNodeId, cost: 0 });
+
+            while (priorityQueue.length > 0) {
+                priorityQueue.sort((a, b) => a.cost - b.cost);
+                const { nodeId } = priorityQueue.shift()!;
+                if (visited.has(nodeId)) continue;
+                visited.add(nodeId);
+
+                // Relax edges
+                const neighbors = Array.from(this.edges).filter(edge => edge.from === nodeId);
+                neighbors.forEach(edge => {
+                    const neighborId = edge.to;
+                    const newDist = (distances.get(nodeId) || Infinity) + 1;
+                    if (!distances.has(neighborId) || newDist < distances.get(neighborId)!) {
+                        distances.set(neighborId, newDist);
+                        parents.set(neighborId, nodeId);
+                        priorityQueue.push({ nodeId: neighborId, cost: newDist });
+                    }
+                });
+            }
+            return parents;
+        };
+
+        const parents = computeShortestPathTree(this.fakeOriginId);
+
+        // Step 2: Build the tree from paths
+        const createOrGetNode = (nodeId: string): any => {
+            if (!nodeMap.has(nodeId)) {
+                const node = this.nodes.get(nodeId)!;
+
+                const newNode = {
+                    id: node.id,
+                    snippetKey: Object.keys(nodeIds).find(key => nodeIds[+key] === node.id) || -1,
+                    fileUri: node.fileUri,
+                    lineNumber: node.lineNumber,
+                    variable: node.variable,
+                    codeSnippet: node.codeSnippet,
+                    isIntermediate: !nodeIdArray.includes(node.id),
+                    isOrigin: this.origins.has(node.id),
+                    children: [],
+                };
+
+                nodeMap.set(nodeId, newNode);
+            }
+
+            return nodeMap.get(nodeId);
+        };
+
+        const root = createOrGetNode(this.fakeOriginId);
+
+        nodeIdArray.forEach(nodeId => {
+            let currentNodeId = nodeId;
+
+            while (currentNodeId && !shortestPathTree.has(currentNodeId)) {
+                const parentId = parents.get(currentNodeId);
+
+                if (parentId) {
+                    shortestPathTree.set(currentNodeId, parentId); // Record parent-child relationship
+                }
+                currentNodeId = parentId!;
+            }
+        });
+
+        shortestPathTree.forEach((parentId, childId) => {
+            const parentNode = createOrGetNode(parentId);
+            const childNode = createOrGetNode(childId);
+
+            if (!parentNode.children.some((child: any) => child.id === childNode.id)) {
+                parentNode.children.push(childNode);
+            }
+        });
+        return root;
+    }
+
 }

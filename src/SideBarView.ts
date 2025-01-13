@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { getSurroundingCode, stripLineIndentation, alignCodeLeft } from './codeContextUtils';
-import { Node, Edge } from './explorationGraph';
+import { Node, Edge, TreeNode } from './explorationGraph';
 
 const allowedTools = {
     0: "Go to Definition",
@@ -787,11 +787,32 @@ export class SidebarView implements vscode.WebviewViewProvider {
             .replace(/'/g, "&#039;");
     }
 
-    public updateGraphVisualization(graphData: { nodes: any[], edges: any[] }) {
-        // Send the graph data to the webview for visualization
-        /* this._view?.webview.postMessage({
+    private removeCircularReferences(node: TreeNode, seen = new Set()): any {
+        if (seen.has(node)) {
+            return null; // Avoid circular references
+        }
+        seen.add(node);
+
+        const { children, ...rest } = node; // Exclude children to prevent infinite recursion
+
+        // Recursively process children and filter out null values
+        const sanitizedChildren = children
+            ? children
+                .map(child => this.removeCircularReferences(child, seen))
+                .filter(child => child !== null) // Remove null entries
+            : [];
+
+        return {
+            ...rest,
+            children: sanitizedChildren
+        };
+    }
+
+    public updateGraphVisualization(tree: TreeNode) {
+        const treeWithoutCircularReferences = this.removeCircularReferences(tree);
+        this._view?.webview.postMessage({
             command: 'renderGraph',
-            data: graphData
-        }); */
+            data: treeWithoutCircularReferences
+        });
     }
 }

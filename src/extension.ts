@@ -4,8 +4,8 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
 import { test, getLineText, getLineNumber, getFileNameFromUri, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, analyze, findCompleteStatementText } from './codeContextUtils';
-import { ExplorationGraph, Node, Edge } from './explorationGraph';
-import { get } from 'http';
+import { ExplorationGraph, Node, Edge, TreeNode } from './explorationGraph';
+
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
 
@@ -263,6 +263,17 @@ class Agent {
     private _importantCodeSnippets = new Map<number, { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }>();
     private _fileExtensionsToExclude = ['.test.ts', '.spec.ts', '.test.tsx', '.spec.tsx', '.test.js', '.spec.js', '.test.jsx', '.spec.jsx', '.d.ts'];
     private _importantCodePaths: Map<string, Array<{ nodes: Node[]; edges: (Edge | null)[] }>> = new Map();
+    private _previousParsedNodes: { [key: number]: string } = {};
+    private _tree: TreeNode = {
+        id: "root",
+        snippetKey: 0,
+        fileUri: "",
+        lineNumber: 0,
+        variable: "",
+        codeSnippet: "",
+        isIntermediate: false,
+        children: []
+    };
     private _findingsSummary: { snippetKey: number[], statement: string, outOfDate: boolean }[] = [];
     private _lastFindingSummary: { snippetKey: number[], statement: string, outOfDate: boolean }[] = [];
     private _updateFindings: boolean = false;
@@ -819,6 +830,10 @@ class Agent {
                         let full_statement = await findCompleteStatementText(vscode.Uri.parse(item.file_uri), item.line_number);
                         let codeLine = await getLineText(vscode.Uri.parse(item.file_uri), item.line_number);
 
+                        if (item.line_number == 76 || item.line_number == 119) {
+                            console.log("Unexpected lines: ", item.line_number, codeLine);
+                        }
+
                         if (!codeLine || !codeLine.includes(variable)) {
                             // find the accurate line number
                             const accurateLineNumber = getLineNumber(full_statement.statementText, variable, full_statement.startLineNum);
@@ -1098,7 +1113,8 @@ class Agent {
 
         const response = await this._callAgentAPI(inputJson, 5, task5JsonSchema);
         const task5Output = JSON.parse(response);
-
+        // nodeIds: {snippetKey: nodeID, ...} is an object that stores the node IDs with the snippetKey as the key in this._importantCodeSnippets
+        let nodeIds: { [key: number]: string } = {};
         task5Output.ranked_results.forEach((result: {
             file_uri: string;
             line_number: number;
@@ -1149,13 +1165,17 @@ class Agent {
                 snippetKey = existingEntry[0];
             }
 
+            const nodeId = this._explorationGraph.findNodeByLine(result.file_uri, result.line_number);
+            if (nodeId === null) {
+                console.error(`Node ID not found for line ${result.line_number} in ${result.file_uri}`);
+                return {};
+            } else {
+                nodeIds[snippetKey] = nodeId;
+            }
+
             // Find the path for this variable only if not already stored
             if (!this._importantCodePaths.has(pathId)) {
-                const nodeId = this._explorationGraph.findNodeByLine(result.file_uri, result.line_number);
-                if (nodeId === null) {
-                    console.error(`Node ID not found for line ${result.line_number} in ${result.file_uri}`);
-                    return {};
-                }
+
                 const paths = this._explorationGraph.findShortestPathFromNode(nodeId);
 
                 if (paths.length > 0) {
@@ -1173,6 +1193,25 @@ class Agent {
                 }
             }
         });
+
+        if (nodeIds !== this._previousParsedNodes) {
+            //Adding the previous parsed nodes to the nodeIds
+            for (const key in this._previousParsedNodes) {
+                if (!(key in nodeIds)) {
+                    nodeIds[key] = this._previousParsedNodes[key];
+                }
+            }
+            const newTree = this._explorationGraph.findSmallestTree(nodeIds);
+            if (newTree.children.length > 0) {
+                this._tree = newTree;
+                this._sidebarViewProvider.updateGraphVisualization(this._tree);
+                this._previousParsedNodes = nodeIds;
+            } else {
+                console.error("Failed to find the smallest tree with the given node IDs: ", nodeIds);
+            }
+            console.log("Tree: ", newTree);
+        }
+
 
         let task6Output = "";
         if (this._updateFindings) {
