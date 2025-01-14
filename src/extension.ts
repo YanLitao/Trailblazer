@@ -47,6 +47,9 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('extension.stopAgent', () => {
             agent.stop();
             vscode.window.showInformationMessage('Agent stopped.');
+        }),
+        vscode.commands.registerCommand('extension.followUpQuestion', (userInput, fileUri, lineNumber) => {
+            agent.followUpQuestion(userInput, fileUri, lineNumber);
         })
     );
 
@@ -332,11 +335,20 @@ class Agent {
         this.isStopped = true;
     }
 
+    followUpQuestion(userInput: string, fileUri: string, lineNumber: number) {
+        this.isPaused = false;
+        this._final_decision_sufficient = false;
+        this._question += " " + userInput;
+        if (this._sidebarViewProvider) {
+            this._sidebarViewProvider.updatetitleQuestion(this._question);
+        }
+        this.runWorkflow(this._question, vscode.Uri.parse(fileUri), lineNumber, lineNumber);
+    }
+
     async runWorkflow(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
         this._question = question;
 
         const MAX_STEPS = 30;
-        let sufficient = false;
         let refinedOutput;
 
         // Fetch the file content and add it to _exploredFiles if not already present
@@ -358,7 +370,7 @@ class Agent {
         refinedOutput = await this.runTask1(uri, startLine, endLine);
 
         // Loop to explore sub-problems
-        while (!sufficient && this._stepCounter < MAX_STEPS && !this.isStopped) {
+        while (!this._final_decision_sufficient && this._stepCounter < MAX_STEPS && !this.isStopped) {
             const startStep = new Date().getTime();
 
             if (!refinedOutput || !refinedOutput.sub_problems) {
@@ -386,12 +398,12 @@ class Agent {
             refinedOutput.answer = answerHtml;
             this._updateStepResults(refinedOutput);
 
+            const endStep = new Date().getTime();
+            console.log(`Step ${this._stepCounter} took ${endStep - startStep}ms`);
+
             if (this._final_decision_sufficient || refinedOutput.sub_problems.length === 0) {
                 break;
             }
-
-            const endStep = new Date().getTime();
-            console.log(`Step ${this._stepCounter} took ${endStep - startStep}ms`);
         }
 
         this._sidebarViewProvider.agentIsDone();
@@ -512,7 +524,7 @@ class Agent {
 
         const response = await this._callAgentAPI(inputJson, 1, task1JsonSchema);
         task1Output = JSON.parse(response);
-        this._refined_question = task1Output.refined_question;
+        this._refined_question += task1Output.refined_question;
 
         if (totalVariables <= this._numberOfVariablesThreshold) {
             task1Output.sub_problems = sub_problems;

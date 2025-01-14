@@ -58,7 +58,7 @@ h4 {
     /* Green for "Finished" */
 }
 
-.title-question {
+#title-question {
     font-style: italic;
 }
 
@@ -530,4 +530,45 @@ code {
     border: 1px solid #ddd;
     border-radius: 5px;
     padding: 5px;
+}
+
+.tooltip {
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 8px;
+    border-radius: 5px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    font-size: 14px;
+    max-width: 300px;
+    overflow: auto;
+}
+
+.tree-node-button-container {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding-top: 10px;
+    height: 30px;
+}
+
+.tree-node button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    /* Adjust size */
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    /* Add space between icon and text */
+}
+
+.tree-node button i {
+    color: #333;
+    /* Icon color */
+}
+
+.tree-node button:hover i {
+    color: #0078d7;
+    /* Change color on hover */
 }

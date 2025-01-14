@@ -44,6 +44,9 @@ window.addEventListener('message', event => {
         case 'renderGraph':
             renderGraph(message.data);
             break;
+        case 'updateTitleQuestion':
+            document.getElementById('title-question').innerText = message.question;
+            break;
     }
 });
 
@@ -105,6 +108,47 @@ document.addEventListener("click", function (event) {
             targetCodeBox.scrollIntoView({ behavior: "smooth", block: "center" });
             targetCodeBox.classList.add("highlight");
             setTimeout(() => targetCodeBox.classList.remove("highlight"), 2000);
+        }
+    }
+});
+
+document.addEventListener("mouseover", function (event) {
+    if (event.target.classList.contains("citation-ref")) {
+        const refId = event.target.getAttribute("data-ref");
+        const targetCodeBox = document.querySelector(`.code-box .code-index[data-ref="${refId}"]`);
+
+        if (targetCodeBox) {
+            // Create tooltip element
+            let tooltip = document.createElement("div");
+            tooltip.classList.add("tooltip");
+            tooltip.innerHTML = targetCodeBox.parentElement.innerHTML; // Set tooltip content
+            document.body.appendChild(tooltip);
+
+            // Calculate position
+            const rect = event.target.getBoundingClientRect();
+            const tooltipRect = tooltip.getBoundingClientRect();
+            const spaceAbove = rect.top;
+            const spaceBelow = window.innerHeight - rect.bottom;
+
+            if (spaceBelow >= tooltipRect.height || spaceBelow > spaceAbove) {
+                // Position below
+                tooltip.style.top = `${rect.bottom + window.scrollY + 5}px`;
+                tooltip.style.left = `${rect.left + window.scrollX}px`;
+            } else {
+                // Position above
+                tooltip.style.top = `${rect.top + window.scrollY - tooltipRect.height - 5}px`;
+                tooltip.style.left = `${rect.left + window.scrollX}px`;
+            }
+
+            // Show the tooltip
+            tooltip.style.position = "absolute";
+            tooltip.style.zIndex = "1000";
+
+            // Add event to remove tooltip on mouseout
+            event.target.addEventListener("mouseout", function hideTooltip() {
+                tooltip.remove();
+                event.target.removeEventListener("mouseout", hideTooltip);
+            });
         }
     }
 });
@@ -267,7 +311,7 @@ function renderGraph(data) {
     const container = document.getElementById("graph-container");
     container.innerHTML = ""; // Clear previous graph
 
-    const margin = { top: 20, right: 200, bottom: 20, left: 80 }; // Increased left margin
+    const margin = { top: 20, right: 80, bottom: 20, left: 80 };
 
     // Create the SVG container
     const svg = d3.select(container)
@@ -369,7 +413,7 @@ function renderGraph(data) {
                 if (d.data.id === "fake-origin") {
                     return "Exploration start point"; // Label for fake origin
                 }
-                return `${d.data.fileUri.split('/').pop()}:${d.data.lineNumber}:${d.data.variable}`;
+                return `${d.data.fileUri.split('/').pop()}:${d.data.lineNumber + 1}:${d.data.variable}`;
             });
 
         // Add code snippets as rectangles
@@ -377,16 +421,59 @@ function renderGraph(data) {
             .attr("id", d => generateNodeId(d.data)) // Use sanitized ID for toggling visibility
             .attr("x", d => d.depth * nodeSize + 10)
             .attr("y", 20) // Position below the text label
-            .attr("width", width - margin.right - margin.left - 20) // Adjust for container size
-            .attr("height", d => getCodeSnippetHeight(d.data.codeSnippet))
+            .attr("width", width - margin.right - margin.left - 30) // Adjust for container size
+            .attr("height", d => getCodeSnippetHeight(d.data.codeSnippet) + 50) // Add space for buttons
             .html(d => {
                 if (d.data.id === "fake-origin") return ""; // No rect for fake origin
                 return `
-                        <div class="code-box" style="border: ${d.data.isIntermediate ? "1px dashed #aaa" : "none"}">
-                            <code>${d.data.codeSnippet}</code>
-                        </div>
-                    `;
+            <div class="tree-node code-box" style="border: ${d.data.isIntermediate ? "1px dashed #aaa" : "1px solid #aaa"}">
+                <code style="white-space: pre;">${d.data.codeSnippet}</code>
+                <div class="tree-node-button-container">
+                    <!-- Replay Button -->
+                    <button class="replay-btn" title="Replay" data-id="${d.data.id}">
+                        <i class="fas fa-undo-alt"></i> Replay
+                    </button>
+                    <!-- Jump to Line Button -->
+                    <button class="jump-btn" title="Jump to Editor" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">
+                        <i class="fas fa-arrow-right"></i> Go to line
+                    </button>
+                    <!-- Search Button -->
+                    <button class="search-btn" title="Search" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">
+                        <i class="fas fa-search"></i> Search
+                    </button>
+                </div>
+            </div>
+        `;
             });
+
+        nodeGroup.selectAll(".replay-btn").on("click", function (event) {
+            const targetId = event.target.getAttribute("data-id");
+            vscode.postMessage({
+                command: 'replaySnippet',
+                targetId: targetId
+            });
+        });
+
+        nodeGroup.selectAll(".jump-btn").on("click", function (event) {
+            const fileUri = event.target.getAttribute("data-file-uri");
+            const lineNumber = event.target.getAttribute("data-line-number");
+            vscode.postMessage({
+                command: 'openFileAtLine',
+                fileUri: fileUri,
+                lineNumber: parseInt(lineNumber, 10)
+            });
+        });
+
+        nodeGroup.selectAll(".search-btn").on("click", function (event) {
+            const fileUri = event.target.getAttribute("data-file-uri");
+            const lineNumber = event.target.getAttribute("data-line-number");
+            vscode.postMessage({
+                command: 'openZoneWidget',
+                fileUri: fileUri,
+                lineNumber: parseInt(lineNumber, 10)
+            });
+        });
+
     }
 
     // Function to calculate the height of a code snippet rectangle
@@ -395,12 +482,12 @@ function renderGraph(data) {
         tempDiv.style.visibility = "hidden";
         tempDiv.style.position = "absolute";
         tempDiv.style.font = "12px monospace";
-        tempDiv.style.width = `${container.offsetWidth - margin.right - margin.left - 20}px`;
-        tempDiv.innerHTML = `<code>${codeSnippet}</code>`;
+        tempDiv.style.width = `${container.offsetWidth - margin.right - margin.left - 30}px`;
+        tempDiv.innerHTML = `<code style="white-space: pre;">${codeSnippet}</code>`;
         document.body.appendChild(tempDiv);
         const height = tempDiv.getBoundingClientRect().height;
         document.body.removeChild(tempDiv);
-        return height + 10; // Add padding
+        return height + 42; // Add padding for the buttons
     }
 
     // Initial render

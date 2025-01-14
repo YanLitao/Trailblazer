@@ -45,6 +45,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 const fileUri = vscode.Uri.parse(message.fileUri);
                 const lineNumber = message.lineNumber;
                 this.openFileAtLine(fileUri, lineNumber);
+            } else if (message.command === 'openZoneWidget') {
+                const { fileUri, lineNumber } = message;
+                this.createZoneWidget(fileUri, lineNumber);
             } else if (message.command === 'stopAgent') {
                 this.agentIsDone();
                 vscode.commands.executeCommand('extension.stopAgent');
@@ -142,6 +145,53 @@ export class SidebarView implements vscode.WebviewViewProvider {
         }
     }
 
+    async createZoneWidget(fileUri: string, lineNumber: number) {
+        try {
+            const uri = vscode.Uri.parse(fileUri);
+            const document = await vscode.workspace.openTextDocument(uri);
+            const editor = await vscode.window.showTextDocument(document);
+
+            // Move the cursor to the specified line
+            const position = new vscode.Position(lineNumber, 0); // Start of the line
+            editor.selection = new vscode.Selection(position, position);
+            editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+
+            // Create a range for the zone widget
+            const widgetPosition = new vscode.Position(lineNumber + 1, 0); // Below the target line
+            const widgetRange = new vscode.Range(widgetPosition, widgetPosition);
+
+            const decorationType = vscode.window.createTextEditorDecorationType({
+                isWholeLine: false,
+                after: {
+                    contentText: 'What is this line of code for?', // Placeholder for styling
+                    backgroundColor: 'lightyellow',
+                    margin: '4px 0',
+                    border: '1px solid lightgray',
+                },
+            });
+
+            // Add decoration for the zone widget
+            editor.setDecorations(decorationType, [widgetRange]);
+
+            // Show an input box to capture user input
+            const userInput = await vscode.window.showInputBox({
+                prompt: `Enter text below line ${lineNumber + 1}`,
+                placeHolder: 'Type your input here...',
+            });
+
+            if (userInput !== undefined) {
+                vscode.window.showInformationMessage(`You entered: ${userInput}`);
+                vscode.commands.executeCommand('extension.followUpQuestion', userInput, fileUri, lineNumber);
+            }
+
+            // Clean up the decoration after use
+            editor.setDecorations(decorationType, []);
+            decorationType.dispose();
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to create zone widget: ${String(error)}`);
+        }
+    }
+
     // Public method to update the content dynamically with the user question and selected code
     public updateWebviewContent(question: string, selectedCode: string, fileUri: string, lineNumber: number) {
         this._question = question;
@@ -198,11 +248,12 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
                 <link href="https://fonts.googleapis.com/css2?family=Lato:ital,wght@0,100;0,300;0,400;0,700;0,900;1,100;1,300;1,400;1,700;1,900&display=swap" rel="stylesheet">
                 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/9000.0.1/themes/prism.min.css" />
+                <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" rel="stylesheet">
                 <script src="${d3Uri}"></script>
             </head>
             <body>
                 <div id="header">
-                    <p>Searching for answer to "<span class="title-question">${this._question}</span>"</p>
+                    <p>Searching for answer to "<span id="title-question">${this._question}</span>"</p>
                     <p id="agent-status">
                         Status: <span id="agent-status-text" class="idle-status">Idle</span>
                     </p>
@@ -258,6 +309,12 @@ export class SidebarView implements vscode.WebviewViewProvider {
             </body>
             </html>
         `;
+    }
+
+    public updatetitleQuestion(newQuestion: string) {
+        if (this._view) {
+            this._view.webview.postMessage({ command: 'updateTitleQuestion', question: newQuestion });
+        }
     }
 
     // Function to add Task 1 results to the sidebar with surrounding code
@@ -630,7 +687,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
     }
 
     public async addTask5And6Results(importantCodeSnippets: Map<string, any>, importantCodePaths: Map<string, Array<{ nodes: Node[], edges: Edge[] }>>) {
-        const visibleLimit = 15; // Show this many results initially
+        const visibleLimit = 30; // Show this many results initially
         const results = [...importantCodeSnippets.entries()].map(([index, result]) => ({ index, ...result }));
         const initialVisibleResults = results.slice(0, visibleLimit);
         const additionalResults = results.slice(visibleLimit);
