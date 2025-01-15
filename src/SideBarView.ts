@@ -47,7 +47,10 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 this.openFileAtLine(fileUri, lineNumber);
             } else if (message.command === 'openZoneWidget') {
                 const { fileUri, lineNumber } = message;
-                this.createZoneWidget(fileUri, lineNumber);
+                this.createZoneWidget(fileUri, lineNumber, true);
+            } else if (message.command === 'replaySnippet') {
+                const { fileUri, lineNumber } = message;
+                this.createZoneWidget(fileUri, lineNumber, false);
             } else if (message.command === 'stopAgent') {
                 this.agentIsDone();
                 vscode.commands.executeCommand('extension.stopAgent');
@@ -55,8 +58,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 vscode.commands.executeCommand('extension.pauseAgent');
             } else if (message.command === 'continueAgent') {
                 vscode.commands.executeCommand('extension.continueAgent');
-            } else if (message.command === 'toggleWatchMode') {
-                this._watchMode = message.isActive;
             }
         });
     }
@@ -145,7 +146,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
         }
     }
 
-    async createZoneWidget(fileUri: string, lineNumber: number) {
+    async createZoneWidget(fileUri: string, lineNumber: number, questionFlag: boolean = false) {
         try {
             const uri = vscode.Uri.parse(fileUri);
             const document = await vscode.workspace.openTextDocument(uri);
@@ -173,15 +174,20 @@ export class SidebarView implements vscode.WebviewViewProvider {
             // Add decoration for the zone widget
             editor.setDecorations(decorationType, [widgetRange]);
 
-            // Show an input box to capture user input
-            const userInput = await vscode.window.showInputBox({
-                prompt: `Enter text below line ${lineNumber + 1}`,
-                placeHolder: 'Type your input here...',
-            });
+            if (questionFlag) {
+                // Show an input box to capture user input
+                const userInput = await vscode.window.showInputBox({
+                    prompt: `Enter text below line ${lineNumber + 1}`,
+                    placeHolder: 'Type your input here...',
+                });
 
-            if (userInput !== undefined) {
-                vscode.window.showInformationMessage(`You entered: ${userInput}`);
-                vscode.commands.executeCommand('extension.followUpQuestion', userInput, fileUri, lineNumber);
+                if (userInput !== undefined) {
+                    vscode.window.showInformationMessage(`You entered: ${userInput}`);
+                    vscode.commands.executeCommand('extension.followUpQuestion', userInput, fileUri, lineNumber);
+                }
+            } else {
+                // sleep for 10 seconds
+                await new Promise(resolve => setTimeout(resolve, 10000));
             }
 
             // Clean up the decoration after use

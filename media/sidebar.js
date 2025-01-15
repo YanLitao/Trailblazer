@@ -324,12 +324,6 @@ function renderGraph(data) {
         const width = container.offsetWidth;
         const nodeSize = 30;
 
-        // Helper function to sanitize the ID
-        function generateNodeId(data) {
-            const fileName = data.fileUri.split('/').pop(); // Get the file name
-            return `${fileName}_${data.lineNumber}_${data.variable}`.replace(/[^\w-]/g, "_");
-        }
-
         // Clear existing content in SVG
         svg.selectAll("*").remove();
 
@@ -361,6 +355,8 @@ function renderGraph(data) {
             .selectAll("path")
             .data(links)
             .join("path")
+            .attr("class", "link") // Add a class for consistent styling
+            .attr("id", (d, i) => `link-${generateNodeId(d.source.data)}-${generateNodeId(d.target.data)}`) // Unique ID for each link
             .attr("d", d => {
                 const path = d3.path(); // Create a new path object
                 path.moveTo(d.source.depth * nodeSize, d.source.yOffset); // Move to source
@@ -375,6 +371,7 @@ function renderGraph(data) {
             .data(nodes)
             .join("g")
             .attr("class", "node")
+            .attr("id", d => `node-${generateNodeId(d.data)}`)
             .attr("transform", d => `translate(0,${d.yOffset})`);
 
         // Add circles for nodes
@@ -384,7 +381,6 @@ function renderGraph(data) {
             .attr("fill", "#aaa")
             .attr("stroke", "#333");
 
-        // Add snippetKey or "+" for intermediate nodes
         nodeGroup.append("text")
             .attr("x", d => d.depth * nodeSize)
             .attr("dy", "0.32em")
@@ -418,7 +414,7 @@ function renderGraph(data) {
 
         // Add code snippets as rectangles
         nodeGroup.append("foreignObject")
-            .attr("id", d => generateNodeId(d.data)) // Use sanitized ID for toggling visibility
+            .attr("id", d => `box-${generateNodeId(d.data)}`) // Use sanitized ID for toggling visibility
             .attr("x", d => d.depth * nodeSize + 10)
             .attr("y", 20) // Position below the text label
             .attr("width", width - margin.right - margin.left - 30) // Adjust for container size
@@ -430,7 +426,7 @@ function renderGraph(data) {
                 <code style="white-space: pre;">${d.data.codeSnippet}</code>
                 <div class="tree-node-button-container">
                     <!-- Replay Button -->
-                    <button class="replay-btn" title="Replay" data-id="${d.data.id}">
+                    <button class="replay-btn" title="Replay" data-node-id="${d.data.id}">
                         <i class="fas fa-undo-alt"></i> Replay
                     </button>
                     <!-- Jump to Line Button -->
@@ -447,11 +443,22 @@ function renderGraph(data) {
             });
 
         nodeGroup.selectAll(".replay-btn").on("click", function (event) {
-            const targetId = event.target.getAttribute("data-id");
-            vscode.postMessage({
-                command: 'replaySnippet',
-                targetId: targetId
-            });
+            const nodeId = event.target.getAttribute("data-node-id");
+
+            // Find the clicked node by its ID
+            const clickedNode = nodes.find((node) => node.data.id === nodeId);
+
+            if (!clickedNode) {
+                console.error("Node not found!");
+                return;
+            }
+
+            // Find all parent nodes including the starting point
+            const parentNodes = findParentNodes(clickedNode);
+            console.log("Parent nodes: ", parentNodes);
+
+            // Animate the lines connecting these nodes
+            animateLines(parentNodes);
         });
 
         nodeGroup.selectAll(".jump-btn").on("click", function (event) {
@@ -490,6 +497,59 @@ function renderGraph(data) {
         return height + 42; // Add padding for the buttons
     }
 
+    function generateNodeId(data) {
+        const fileName = data.fileUri.split('/').pop(); // Get the file name
+        return `${fileName}_${data.lineNumber}_${data.variable}`.replace(/[^\w-]/g, "_");
+    }
+
+    function findParentNodes(node) {
+        const parents = [];
+        let current = node;
+
+        while (current) {
+            parents.push(current);
+            current = current.parent || null; // Ensure `parent` is checked
+        }
+
+        return parents.reverse(); // Reverse to get top-down order
+    }
+
+    function animateLines(nodes) {
+        // Step 1: Dim unrelated nodes and links
+        svg.selectAll(".node, .link").style("opacity", 0.2);
+
+        // Step 3: Start stepwise animation
+        stepThroughNodes(nodes, 0);
+    }
+
+    function stepThroughNodes(nodes, index) {
+        const sourceNode = nodes[index];
+        console.log("Source node: ", generateNodeId(sourceNode.data));
+        d3.select(`#node-${generateNodeId(sourceNode.data)}`).style("opacity", 1);
+        // scroll to the node in the graph
+        const nodeEle = document.getElementById(`node-${generateNodeId(sourceNode.data)}`);
+        nodeEle.scrollIntoView({ behavior: "smooth", block: "center" });
+
+        if (index >= nodes.length - 1) return; // Stop if we've reached the last node
+
+        const targetNode = nodes[index + 1];
+        d3.select(`#link-${generateNodeId(sourceNode.data)}-${generateNodeId(targetNode.data)}`).style("opacity", 1);
+
+        // Post a message to VSCode on the 8th second
+        setTimeout(() => {
+            vscode.postMessage({
+                command: "replaySnippet",
+                fileUri: targetNode.data.fileUri,
+                lineNumber: targetNode.data.lineNumber,
+            });
+        }, 8000);
+
+        // Schedule the next step
+        setTimeout(() => {
+            stepThroughNodes(nodes, index + 1);
+        }, 10000); // Wait for the current animation to complete
+    }
+
     // Initial render
     drawGraph();
 
@@ -498,103 +558,3 @@ function renderGraph(data) {
         drawGraph(); // Redraw the graph on resize
     });
 }
-
-/* function renderGraph(data) {
-    const container = document.getElementById("graph-container");
-    container.innerHTML = ""; // Clear previous graph
-
-    const width = container.offsetWidth;
-    const height = container.offsetHeight;
-    const radius = Math.min(width, height) / 2 - 40;
-
-    // Filter nodes to only include those marked as invoking places (isPlace=true)
-    const filteredNodes = data.nodes.filter(node => node.isPlace);
-    const filteredEdges = data.edges.filter(edge =>
-        filteredNodes.some(node => node.id === edge.source) &&
-        filteredNodes.some(node => node.id === edge.target)
-    );
-
-    const svg = d3.select("#graph-container")
-        .append("svg")
-        .attr("width", width)
-        .attr("height", height)
-        .append("g")
-        .attr("transform", `translate(${width / 2}, ${height / 2})`);
-
-    const colorScale = d3.scaleOrdinal(d3.schemeCategory10);
-
-    const groupedNodes = d3.group(filteredNodes, d => d.fileUri);
-
-    const rootData = {
-        name: "root",
-        children: Array.from(groupedNodes, ([fileUri, nodes]) => ({
-            fileUri,
-            children: nodes
-        }))
-    };
-
-    const root = d3.hierarchy(rootData).sum(d => d.children ? 0 : 1);
-    const clusterLayout = d3.cluster().size([2 * Math.PI, radius]);
-    clusterLayout(root);
-
-    const line = d3.lineRadial()
-        .curve(d3.curveBundle.beta(0.85))
-        .radius(d => d.y)
-        .angle(d => d.x);
-
-    svg.append("defs").append("marker")
-        .attr("id", "arrowhead")
-        .attr("viewBox", "0 -5 10 10")
-        .attr("refX", 10)
-        .attr("refY", 0)
-        .attr("markerWidth", 6)
-        .attr("markerHeight", 6)
-        .attr("orient", "auto")
-        .append("path")
-        .attr("d", "M0,-5L10,0L0,5")
-        .attr("fill", "#aaa");
-
-    const nodeColors = new Map();
-    root.leaves().forEach(leaf => {
-        nodeColors.set(leaf.data.id, colorScale(leaf.data.fileUri));
-    });
-
-    svg.append("g")
-        .selectAll("path")
-        .data(filteredEdges)
-        .join("path")
-        .attr("class", "link")
-        .attr("d", d => {
-            const sourceNode = root.descendants().find(node => node.data.id === d.source);
-            const targetNode = root.descendants().find(node => node.data.id === d.target);
-            return line(sourceNode.path(targetNode));
-        })
-        .attr("stroke", d => nodeColors.get(d.source))
-        .attr("stroke-width", 1.5)
-        .attr("marker-end", "url(#arrowhead)")
-        .style("fill", "none");
-
-    svg.append("g")
-        .selectAll("circle")
-        .data(root.leaves())
-        .join("circle")
-        .attr("transform", d => `rotate(${(d.x * 180 / Math.PI - 90)}) translate(${d.y},0)`)
-        .attr("r", 5)
-        .style("fill", d => colorScale(d.data.fileUri));
-
-    svg.append("g")
-        .selectAll("text")
-        .data(root.leaves())
-        .join("text")
-        .attr("transform", d => `
-            rotate(${(d.x * 180 / Math.PI - 90)})
-            translate(${d.y + 8}, 0)
-            ${d.x < Math.PI ? "" : "rotate(180)"}
-        `)
-        .attr("text-anchor", d => d.x < Math.PI ? "start" : "end")
-        .text(d => {
-            const parts = d.data.id ? d.data.id.split('/') : ["unknown"];
-            return parts[parts.length - 1];
-        })
-        .style("font-size", "10px");
-} */

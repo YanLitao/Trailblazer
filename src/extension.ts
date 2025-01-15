@@ -522,6 +522,8 @@ class Agent {
             code_context: codeContext,
         };
 
+        console.log("Task 1 input: ", inputJson);
+
         const response = await this._callAgentAPI(inputJson, 1, task1JsonSchema);
         task1Output = JSON.parse(response);
         this._refined_question += task1Output.refined_question;
@@ -532,10 +534,12 @@ class Agent {
 
         for (const subProblem of task1Output.sub_problems) {
             const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, subProblem.code_context.line_number);
+            subProblem.code_context.file_uri = fileUriString; // when running the agent, sometimes the file_uri is not included in the input
             // Create a node for each sub-problem and mark it as an invoking place
             const nodeId = `${fileUriString}:${subProblem.code_context.line_number}:${subProblem.code_context.invoke_variable}`;
             const codeLine = await getLineText(uri, subProblem.code_context.line_number);
             let codeSnippet = statementText;
+            // const accurateLineNumber = getLineNumber(statementText, subProblem.code_context.invoke_variable, startLineNum);
             if (statementText.split("\n").length == 1) {
                 const { contextText, startContextLine } = await getSurroundingCode(uri, subProblem.code_context.line_number, subProblem.code_context.line_number);
                 codeSnippet = contextText;
@@ -566,7 +570,7 @@ class Agent {
     }
 
     async runTask2(subProblems: any[]) {
-        console.warn("Running Task 2, processing ", subProblems.length, " sub-problems.");
+        console.warn("Running Task 2, processing ", subProblems.length, " sub-problems: ", subProblems);
 
         /* const task2Input: any = {
             task: 2,
@@ -875,10 +879,6 @@ class Agent {
                         let full_statement = await findCompleteStatementText(vscode.Uri.parse(item.file_uri), item.line_number);
                         let codeLine = await getLineText(vscode.Uri.parse(item.file_uri), item.line_number);
 
-                        if (item.line_number == 76 || item.line_number == 119) {
-                            console.log("Unexpected lines: ", item.line_number, codeLine);
-                        }
-
                         if (!codeLine || !codeLine.includes(variable)) {
                             // find the accurate line number
                             const accurateLineNumber = getLineNumber(full_statement.statementText, variable, full_statement.startLineNum);
@@ -1075,6 +1075,7 @@ class Agent {
         }
         this._newExploredCodeLines = []; // Reset the new explored code lines
         // log the task3Output
+        console.log("Task 3 output: ", task3Output);
         return task3Output;
     }
 
@@ -1128,6 +1129,7 @@ class Agent {
 
             task4Output = await this.processTask3andTask4Output(agentOutput);
         }
+        console.log("Task 4 output: ", task4Output);
         return task4Output;
     }
 
@@ -1254,6 +1256,7 @@ class Agent {
                     nodeIds[key] = this._previousParsedNodes[key];
                 }
             }
+            console.log("Node IDs to form a tree: ", nodeIds);
             const newTree = this._explorationGraph.findSmallestTree(nodeIds);
             if (newTree.children.length > 0) {
                 this._tree = newTree;
@@ -1516,16 +1519,16 @@ class Agent {
                     The output format should strictly follow the JSON schema provided, where the tool should be represented as an integer.
                     Do not change the code_line.
                     
-                     Output format for each variable if valuable 
+                    Output format for each variable if valuable 
                     sub_problems: [{
                         sub_question: "string" , // what is the sub-question can be answered by exploring the invoke_variable in the code line to answer the refined question
                         tool: "integer",
                         code_context: {
-                            file_uri: "string",
+                            file_uri: "string", // directly reuse the content file_uri from code_context, do not change
                             invoke_variable: "string" , // must be one of the variables in the variables array
-                            code_line: "string",
-                            line_number: "integer",
-                            full_statement: "string"
+                            code_line: "string", // directly reuse the content from code_context, do not change
+                            line_number: "integer", // directly reuse the content from code_context, do not change
+                            full_statement: "string" // directly reuse the content from code_context, do not change
                         },
                         reason: "string" // For each sub-question, provide a clear and specific “reason” explaining the goal of exploring this sub-question. Describe exactly what we aim to uncover, such as particular methods, patterns, or code structures relevant to the exploration. Be as precise as possible in defining what we are looking for and why it is essential to the investigation.
                     }, ...]
