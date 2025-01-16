@@ -504,6 +504,9 @@ code {
 
 #graph-container {
     font-size: 12px;
+    width: 100%;
+    min-height: 400px;
+    position: relative;
 }
 
 #graph-container .node circle {
@@ -571,4 +574,48 @@ code {
 .tree-node button:hover i {
     color: #0078d7;
     /* Change color on hover */
+}
+
+#control-panel {
+    position: fixed;
+    /* Position relative to the viewport */
+    bottom: 50px;
+    /* Always 50px above the bottom of the viewport */
+    left: 50%;
+    transform: translateX(-50%);
+    /* Center horizontally */
+    background-color: rgba(255, 255, 255, 0.9);
+    /* Slightly transparent */
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    padding: 10px 20px;
+    display: none;
+    /* Initially hidden */
+    gap: 10px;
+    z-index: 10;
+    /* Ensure it stays above other elements */
+}
+
+#control-panel button {
+    background-color: #007acc;
+    /* Primary button color */
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+#control-panel button:hover {
+    background-color: #005f99;
+    /* Darker shade on hover */
+}
+
+#control-panel button:disabled {
+    background-color: #ccc;
+    /* Disabled state */
+    cursor: not-allowed;
 }

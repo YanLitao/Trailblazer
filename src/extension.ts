@@ -503,8 +503,7 @@ class Agent {
                     variables: new Set(variables)
                 });
             });
-
-            this._addOrUpdateExploredCodeLines(fileUriString, sentenceStartLineNum, sentenceStartLineNum + codeLines.length, statementText, variables);
+            this._addOrUpdateExploredCodeLines(fileUriString, startLineNum, endLineNum, statementText, variables);
             sentenceStartLineNum += codeLines.length;
             totalVariables += extractedVariables.length;
         });
@@ -925,6 +924,9 @@ class Agent {
         let nextExploreVariables = [];
         for (const code of exploredCode) {
             for (const variable of code.variables) {
+                if (code.code_snippet == "") {
+                    console.error("Code snippet is empty for variable: ", code);
+                }
                 const accurateLineNumber = getLineNumber(code.code_snippet, variable, code.start_line);
                 const existingVariables = this._exploredVariables.filter(
                     v => v.invoke_variable === variable && v.line_number === accurateLineNumber && v.file_uri === code.file_uri
@@ -972,7 +974,6 @@ class Agent {
                 }
 
                 variableCount++;
-
                 newVariables.push({
                     file_uri: code.file_uri,
                     line_number: accurateLineNumber ?? code.start_line,
@@ -1009,8 +1010,7 @@ class Agent {
             answer: ""
         };
 
-        const filterResult = await this.filterInput(this._newExploredCodeLines);
-        const { newVariables, variableCount, nextExploreVariables } = filterResult;
+        const { newVariables, variableCount, nextExploreVariables } = await this.filterInput(this._newExploredCodeLines);
 
         // If there are no new code lines to explore, directly run Task 4
         if (variableCount === 0) {

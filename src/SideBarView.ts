@@ -289,7 +289,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     <div id="current-task-content">
                     </div>
                 </div>
-                <div id="graph-container" style="width: 100%; height: 400px;"></div>
+                <div id="graph-container"></div>
                 <div id="exploration-steps" style="display:none;">
                     <div class="task">
                         <div class="task-header">

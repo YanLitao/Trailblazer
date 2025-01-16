@@ -311,6 +311,19 @@ function renderGraph(data) {
     const container = document.getElementById("graph-container");
     container.innerHTML = ""; // Clear previous graph
 
+    // Create the replay control panel
+    const controlPanel = document.createElement("div");
+    controlPanel.id = "control-panel";
+    controlPanel.style.display = "none"; // Initially hidden
+    controlPanel.innerHTML = `
+        <button id="play-pause">Play/Pause</button>
+        <button id="prev-step">Previous Step</button>
+        <button id="next-step">Next Step</button>
+        <button id="start-over">Back to Start</button>
+        <button id="jump-to-end">Forward to End</button>
+    `;
+    container.appendChild(controlPanel);
+
     const margin = { top: 20, right: 80, bottom: 20, left: 80 };
 
     // Create the SVG container
@@ -341,6 +354,8 @@ function renderGraph(data) {
         const nodes = root.descendants();
         const links = root.links();
         const height = yOffset + margin.bottom; // Total height of the graph
+
+        container.style.height = `${height + 30}px`;
 
         svg.attr("width", width).attr("height", height);
 
@@ -458,6 +473,7 @@ function renderGraph(data) {
             console.log("Parent nodes: ", parentNodes);
 
             // Animate the lines connecting these nodes
+            ensureControlPanelVisibility();
             animateLines(parentNodes);
         });
 
@@ -514,6 +530,19 @@ function renderGraph(data) {
         return parents.reverse(); // Reverse to get top-down order
     }
 
+    function ensureControlPanelVisibility() {
+        const containerRect = container.getBoundingClientRect();
+        const isVisible =
+            containerRect.top < window.innerHeight &&
+            containerRect.bottom > 0;
+
+        if (isVisible) {
+            controlPanel.style.display = "flex";
+        } else {
+            controlPanel.style.display = "none";
+        }
+    }
+
     function animateLines(nodes) {
         // Step 1: Dim unrelated nodes and links
         svg.selectAll(".node, .link").style("opacity", 0.2);
@@ -535,19 +564,20 @@ function renderGraph(data) {
         const targetNode = nodes[index + 1];
         d3.select(`#link-${generateNodeId(sourceNode.data)}-${generateNodeId(targetNode.data)}`).style("opacity", 1);
 
-        // Post a message to VSCode on the 8th second
+        // Schedule the next step
+        let timeout = 8000; // Default timeout
+        if (index == 0) {
+            timeout = 2000;
+        }
         setTimeout(() => {
             vscode.postMessage({
                 command: "replaySnippet",
                 fileUri: targetNode.data.fileUri,
                 lineNumber: targetNode.data.lineNumber,
             });
-        }, 8000);
-
-        // Schedule the next step
-        setTimeout(() => {
             stepThroughNodes(nodes, index + 1);
-        }, 10000); // Wait for the current animation to complete
+        }, timeout); // Wait for the current animation to complete
+
     }
 
     // Initial render
@@ -558,3 +588,18 @@ function renderGraph(data) {
         drawGraph(); // Redraw the graph on resize
     });
 }
+
+/* document.addEventListener("scroll", () => {
+    const container = document.getElementById("graph-container");
+    const controlPanel = document.getElementById("control-panel");
+
+    const containerRect = container.getBoundingClientRect();
+
+    if (containerRect.bottom < 50 || containerRect.top > window.innerHeight) {
+        // Container is outside the viewport
+        controlPanel.style.display = "none";
+    } else {
+        // Container is within the viewport
+        controlPanel.style.display = "flex";
+    }
+}); */
