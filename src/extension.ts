@@ -1249,7 +1249,7 @@ class Agent {
             }
         });
 
-        if (nodeIds !== this._previousParsedNodes) {
+        if (nodeIds !== this._previousParsedNodes && Object.keys(nodeIds).length > 0) {
             //Adding the previous parsed nodes to the nodeIds
             for (const key in this._previousParsedNodes) {
                 if (!(key in nodeIds)) {

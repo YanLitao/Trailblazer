@@ -316,11 +316,11 @@ function renderGraph(data) {
     controlPanel.id = "control-panel";
     controlPanel.style.display = "none"; // Initially hidden
     controlPanel.innerHTML = `
-        <button id="play-pause">Play/Pause</button>
-        <button id="prev-step">Previous Step</button>
-        <button id="next-step">Next Step</button>
-        <button id="start-over">Back to Start</button>
-        <button id="jump-to-end">Forward to End</button>
+        <button id="start-over"><i class="fa-solid fa-backward-fast"></i></button>
+        <button id="prev-step"><i class="fa-solid fa-backward-step"></i></button>
+        <button id="play-pause"><i class="fa-solid fa-pause"></i></button>
+        <button id="next-step"><i class="fa-solid fa-forward-step"></i></button>
+        <button id="jump-to-end"><i class="fa-solid fa-forward-fast"></i></button>
     `;
     container.appendChild(controlPanel);
 
@@ -331,7 +331,10 @@ function renderGraph(data) {
         .append("svg")
         .style("font", "12px sans-serif");
 
-    console.log("we get a tree data: ", data);
+    let isPaused = false;
+    let currentTimeout = null;
+    let currentNodes = [];
+    let currentStepIndex = 0;
 
     function drawGraph() {
         const width = container.offsetWidth;
@@ -468,13 +471,10 @@ function renderGraph(data) {
                 return;
             }
 
-            // Find all parent nodes including the starting point
-            const parentNodes = findParentNodes(clickedNode);
-            console.log("Parent nodes: ", parentNodes);
-
-            // Animate the lines connecting these nodes
+            currentNodes = findParentNodes(clickedNode);
+            currentStepIndex = 0;
             ensureControlPanelVisibility();
-            animateLines(parentNodes);
+            animateLines(currentNodes);
         });
 
         nodeGroup.selectAll(".jump-btn").on("click", function (event) {
@@ -544,16 +544,14 @@ function renderGraph(data) {
     }
 
     function animateLines(nodes) {
-        // Step 1: Dim unrelated nodes and links
         svg.selectAll(".node, .link").style("opacity", 0.2);
-
-        // Step 3: Start stepwise animation
         stepThroughNodes(nodes, 0);
     }
 
     function stepThroughNodes(nodes, index) {
+        if (isPaused) return;
+        currentStepIndex = index;
         const sourceNode = nodes[index];
-        console.log("Source node: ", generateNodeId(sourceNode.data));
         d3.select(`#node-${generateNodeId(sourceNode.data)}`).style("opacity", 1);
         // scroll to the node in the graph
         const nodeEle = document.getElementById(`node-${generateNodeId(sourceNode.data)}`);
@@ -566,19 +564,129 @@ function renderGraph(data) {
 
         // Schedule the next step
         let timeout = 8000; // Default timeout
-        if (index == 0) {
-            timeout = 2000;
-        }
-        setTimeout(() => {
-            vscode.postMessage({
-                command: "replaySnippet",
-                fileUri: targetNode.data.fileUri,
-                lineNumber: targetNode.data.lineNumber,
-            });
+        if (index === 0) timeout = 2000;
+        currentTimeout = setTimeout(() => {
+            vscode.postMessage({ command: "replaySnippet", fileUri: targetNode.data.fileUri, lineNumber: targetNode.data.lineNumber });
             stepThroughNodes(nodes, index + 1);
-        }, timeout); // Wait for the current animation to complete
+        }, timeout);
 
     }
+
+    document.getElementById("play-pause").addEventListener("click", function () {
+        isPaused = !isPaused;
+
+        const icon = this.querySelector("i");
+        if (isPaused) {
+            icon.classList.remove("fa-pause");
+            icon.classList.add("fa-play");
+            if (currentTimeout) clearTimeout(currentTimeout); // Pause the animation
+        } else {
+            icon.classList.remove("fa-play");
+            icon.classList.add("fa-pause");
+            stepThroughNodes(currentNodes, currentStepIndex); // Resume the animation
+        }
+    });
+
+    document.getElementById("prev-step").addEventListener("click", function () {
+        if (currentStepIndex <= 0) return; // No previous step
+
+        // Reset opacity of the current node and link
+        const currentNode = currentNodes[currentStepIndex];
+        const previousNode = currentNodes[currentStepIndex - 1];
+        d3.select(`#node-${generateNodeId(currentNode.data)}`).style("opacity", 0.2);
+        d3.select(`#link-${generateNodeId(previousNode.data)}-${generateNodeId(currentNode.data)}`).style("opacity", 0.2);
+
+        currentStepIndex--; // Move back one step
+
+        // Restore opacity for the previous step
+        d3.select(`#node-${generateNodeId(previousNode.data)}`).style("opacity", 1);
+        if (currentStepIndex > 0) {
+            const secondPreviousNode = currentNodes[currentStepIndex - 1];
+            d3.select(`#link-${generateNodeId(secondPreviousNode.data)}-${generateNodeId(previousNode.data)}`).style("opacity", 1);
+        }
+
+        // Post message to VSCode to jump to the previous node's line
+        vscode.postMessage({
+            command: "replaySnippet",
+            fileUri: previousNode.data.fileUri,
+            lineNumber: previousNode.data.lineNumber,
+        });
+
+        // Scroll to the previous node
+        document.getElementById(`node-${generateNodeId(previousNode.data)}`).scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+
+    document.getElementById("next-step").addEventListener("click", function () {
+        if (currentStepIndex >= currentNodes.length - 1) return; // No next step
+
+        const currentNode = currentNodes[currentStepIndex];
+        const nextNode = currentNodes[currentStepIndex + 1];
+
+        // Update opacity for the current step and next step
+        d3.select(`#node-${generateNodeId(currentNode.data)}`).style("opacity", 1);
+        d3.select(`#link-${generateNodeId(currentNode.data)}-${generateNodeId(nextNode.data)}`).style("opacity", 1);
+        d3.select(`#node-${generateNodeId(nextNode.data)}`).style("opacity", 1);
+
+        currentStepIndex++; // Move forward one step
+
+        // Post message to VSCode to jump to the next node's line
+        vscode.postMessage({
+            command: "replaySnippet",
+            fileUri: nextNode.data.fileUri,
+            lineNumber: nextNode.data.lineNumber,
+        });
+
+        // Scroll to the next node
+        document.getElementById(`node-${generateNodeId(nextNode.data)}`).scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+
+    document.getElementById("start-over").addEventListener("click", function () {
+        if (!currentNodes.length) return; // No nodes to process
+
+        const firstNode = currentNodes[0]; // Get the first node
+
+        // Reset opacity for all nodes and links
+        svg.selectAll(".node, .link").style("opacity", 0.2);
+
+        // Post message to VSCode to jump to the first node's line
+        vscode.postMessage({
+            command: "replaySnippet",
+            fileUri: firstNode.data.fileUri,
+            lineNumber: firstNode.data.lineNumber,
+        });
+
+        // Restart the animation
+        currentStepIndex = 0; // Reset the step index
+        stepThroughNodes(currentNodes, currentStepIndex);
+    });
+
+    document.getElementById("jump-to-end").addEventListener("click", function () {
+        if (!currentNodes.length) return; // No nodes to process
+
+        const lastNode = currentNodes[currentNodes.length - 1]; // Get the last node
+
+        // Set opacity for all nodes and links in the path
+        currentNodes.forEach((node, index) => {
+            d3.select(`#node-${generateNodeId(node.data)}`).style("opacity", 1); // Highlight node
+            if (index > 0) {
+                const previousNode = currentNodes[index - 1];
+                d3.select(`#link-${generateNodeId(previousNode.data)}-${generateNodeId(node.data)}`).style("opacity", 1); // Highlight link
+            }
+        });
+
+        // Post message to VSCode to jump to the last node's line
+        vscode.postMessage({
+            command: "replaySnippet",
+            fileUri: lastNode.data.fileUri,
+            lineNumber: lastNode.data.lineNumber,
+        });
+
+        // Update the step index to the last node
+        currentStepIndex = currentNodes.length - 1;
+
+        // Scroll to the last node
+        document.getElementById(`node-${generateNodeId(lastNode.data)}`).scrollIntoView({ behavior: "smooth", block: "center" });
+    });
 
     // Initial render
     drawGraph();
@@ -588,18 +696,3 @@ function renderGraph(data) {
         drawGraph(); // Redraw the graph on resize
     });
 }
-
-/* document.addEventListener("scroll", () => {
-    const container = document.getElementById("graph-container");
-    const controlPanel = document.getElementById("control-panel");
-
-    const containerRect = container.getBoundingClientRect();
-
-    if (containerRect.bottom < 50 || containerRect.top > window.innerHeight) {
-        // Container is outside the viewport
-        controlPanel.style.display = "none";
-    } else {
-        // Container is within the viewport
-        controlPanel.style.display = "flex";
-    }
-}); */
