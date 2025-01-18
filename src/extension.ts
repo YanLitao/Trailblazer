@@ -1,5 +1,8 @@
 import * as vscode from 'vscode';
+import { z } from "zod";
 import { ChatOpenAI } from "@langchain/openai";
+import OpenAI from "openai";
+import { zodResponseFormat } from "openai/helpers/zod";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
@@ -102,170 +105,96 @@ const allowedTools = {
     1: "Find References"
 };
 
-const task1JsonSchema = {
-    type: "object",
-    properties: {
-        refined_question: { type: "string" },
-        sub_problems: {
-            type: "array",
-            items: {
-                type: "object",
-                properties: {
-                    sub_question: { type: "string" },
-                    tool: { type: "integer" },
-                    code_context: {
-                        type: "object",
-                        properties: {
-                            file_uri: { type: "string" },
-                            invoke_variable: { type: "string" },
-                            code_line: { type: "string" },
-                            line_number: { type: "integer" },
-                            full_statement: { type: "string" }
-                        },
-                        required: ["file_uri", "invoke_variable", "code_line", "full_statement"]
-                    },
-                    reason: { type: "string" }
-                },
-                required: ["sub_question", "tool", "code_context", "reason"]
-            }
-        }
-    },
-    required: ["refined_question", "sub_problems"]
-};
 
-const task3JsonSchema = {
-    "type": "object",
-    "properties": {
-        "evaluations": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "file_uri": { "type": "string" },
-                    "line_number": { "type": "integer" },
-                    "valuable": { "type": "boolean" },
-                    "next_step": {
-                        "type": ["object", "null"],
-                        "properties": {
-                            "variable": { "type": "string" },
-                            "tool": { "type": "integer", "enum": [0, 1] },
-                            "reason": { "type": "string" }
-                        },
-                        "required": ["variable", "tool", "reason"]
-                    }
-                },
-                "required": ["file_uri", "line_number", "valuable", "next_step"]
-            }
-        },
-        "next_step_summary": { "type": "string" }
-    },
-    "required": ["evaluations", "next_step_summary"]
-};
+const task1Schema = z.object({
+    refined_question: z.string(),
+    sub_problems: z.array(
+        z.object({
+            sub_question: z.string(),
+            tool: z.number(),
+            code_context: z.object({
+                file_uri: z.string(),
+                invoke_variable: z.string(),
+                code_line: z.string(),
+                line_number: z.number(),
+                full_statement: z.string(),
+            }).strict(),
+            reason: z.string(),
+        }).strict()
+    ),
+});
 
-const task4JsonSchema = {
-    "type": "object",
-    "properties": {
-        "evaluations": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "file_uri": { "type": "string" },
-                    "line_number": { "type": "integer" },
-                    "valuable": { "type": "boolean" },
-                    "next_step": {
-                        "type": ["object", "null"],
-                        "properties": {
-                            "variable": { "type": "string" },
-                            "tool": { "type": "integer", "enum": [0, 1] },
-                            "reason": { "type": "string" }
-                        },
-                        "required": ["variable", "tool", "reason"]
-                    }
-                },
-                "required": ["file_uri", "line_number", "valuable", "next_step"]
-            }
-        },
-        "next_step_summary": { "type": "string" }
-    },
-    "required": ["evaluations", "next_step_summary"]
-};
+const task3Schema = z.object({
+    evaluations: z.array(
+        z.object({
+            file_uri: z.string(),
+            line_number: z.number(),
+            valuable: z.boolean(),
+            next_step: z
+                .object({
+                    variable: z.string(),
+                    tool: z.union([z.literal(0), z.literal(1)]),
+                    reason: z.string(),
+                })
+                .nullable(),
+        }).strict()
+    ),
+    next_step_summary: z.string(),
+});
 
-const task5JsonSchema = {
-    type: "object",
-    properties: {
-        ranked_results: {
-            type: "array",
-            items: {
-                type: "object",
-                properties: {
-                    file_uri: { type: "string" },
-                    code_line: { type: "string" },
-                    line_number: { type: "integer" },
-                    full_statement: { type: "string" },
-                    explanation: { type: "string" },    // Explanation of why this result is helpful
-                    relevance_score: { type: "integer" },
-                    finding: { type: "string" },
-                    variable: { type: "string" }        // New: Variable to track for the result
-                },
-                required: ["file_uri", "code_line", "line_number", "full_statement", "explanation", "relevance_score", "finding", "variable"]
-            }
-        }
-    },
-    required: ["ranked_results"]
-};
+const task4Schema = z.object({
+    evaluations: z.array(
+        z.object({
+            file_uri: z.string(),
+            line_number: z.number(),
+            valuable: z.boolean(),
+            next_step: z
+                .object({
+                    variable: z.string(),
+                    tool: z.union([z.literal(0), z.literal(1)]),
+                    reason: z.string(),
+                })
+                .nullable(),
+        }).strict()
+    ),
+    next_step_summary: z.string(),
+});
 
-const task6JsonSchema = {
-    "type": "object",
-    "properties": {
-        "filtered_findings": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "snippetKey": {
-                        "type": "array",
-                        "items": {
-                            "type": "number"
-                        },
-                        "description": "Array of snippet keys referencing the finding"
-                    },
-                    "statement": {
-                        "type": "string",
-                        "description": "Consolidated or elided finding statement"
-                    },
-                    "outOfDate": {
-                        "type": "boolean",
-                        "description": "Marks if the finding is outdated or meaningless"
-                    }
-                },
-                "required": ["snippetKey", "statement", "outOfDate"]
-            }
-        }
-    },
-    "required": ["filtered_findings"]
-};
+const task5Schema = z.object({
+    ranked_results: z.array(
+        z.object({
+            file_uri: z.string(),
+            code_line: z.string(),
+            line_number: z.number(),
+            full_statement: z.string(),
+            explanation: z.string(),
+            relevance_score: z.number(),
+            finding: z.string(),
+            variable: z.string(),
+        }).strict()
+    ),
+});
 
-const task7JsonSchema = {
-    "type": "object",
-    "properties": {
-        "final_decision_sufficient": {
-            "type": "boolean",
-            "description": "Indicates whether the current findings and exploration are sufficient to fully answer the refined question."
-        },
-        "final_answer": {
-            "type": "string",
-            "description": "A clear, evidence-based synthesis of findings and implementation details. Only provided if final_decision_sufficient is true.",
-            "nullable": true // final_answer is optional if final_decision_sufficient is false
-        }
-    },
-    "required": ["final_decision_sufficient"],
-    "additionalProperties": false
-};
+const task6Schema = z.object({
+    filtered_findings: z.array(
+        z.object({
+            snippetKey: z.array(z.number()),
+            statement: z.string(),
+            outOfDate: z.boolean(),
+        }).strict()
+    ),
+});
+
+const task7Schema = z.object({
+    final_decision_sufficient: z.boolean(),
+    final_answer: z.string().nullable().optional(),
+}).strict();
 
 class Agent {
     private _model: ChatOpenAI;
-    private _fasterModel: ChatOpenAI
+    private _fasterModel: ChatOpenAI;
+    private _reasoningModel: ChatOpenAI;
+    private _openai: OpenAI;
     private _stepCounter: number = 0;
     private _question: string = "";
     private _refined_question: string | null = null;
@@ -293,6 +222,7 @@ class Agent {
         codeSnippet: "",
         isIntermediate: false,
         statement: "",
+        tool: "assignment",
         children: []
     };
     private _findingsSummary: { snippetKey: number[], statement: string, outOfDate: boolean }[] = [];
@@ -301,6 +231,7 @@ class Agent {
     private _final_decision_sufficient: boolean = false;
 
     constructor(sidebarViewProvider: SidebarView) {
+
         this._model = new ChatOpenAI({
             model: "gpt-4o",
             apiKey: API_KEY,
@@ -316,6 +247,19 @@ class Agent {
             temperature: 1.0,
             topP: 1,
         });
+
+        this._reasoningModel = new ChatOpenAI({
+            model: "o1",
+            apiKey: API_KEY,
+            maxTokens: 200000,
+            temperature: 1.0,
+            topP: 1,
+        });
+
+        this._openai = new OpenAI({
+            apiKey: API_KEY, // Your API key
+        });
+
         this._sidebarViewProvider = sidebarViewProvider;
         this._explorationGraph = new ExplorationGraph();
     }
@@ -523,7 +467,7 @@ class Agent {
 
         console.log("Task 1 input: ", inputJson);
 
-        const response = await this._callAgentAPI(inputJson, 1, task1JsonSchema);
+        const response = await this._callAgentAPI(inputJson, 1, task1Schema);
         task1Output = JSON.parse(response);
         this._refined_question += task1Output.refined_question;
 
@@ -561,9 +505,9 @@ class Agent {
         }
 
         // Update the sidebar view with Task 1 results after processing
-        if (this._sidebarViewProvider) {
+        /* if (this._sidebarViewProvider) {
             this._sidebarViewProvider.addTask1Results(task1Output);  // Add the Task 1 results to the sidebar
-        }
+        } */
 
         return task1Output;
     }
@@ -686,7 +630,7 @@ class Agent {
         }
 
         // Update the sidebar with the final Task 2 results
-        this._sidebarViewProvider.addTask2Results({ questions_and_results: task2Results });
+        // this._sidebarViewProvider.addTask2Results({ questions_and_results: task2Results });
 
         return newExploredLines;
     }
@@ -1044,7 +988,7 @@ class Agent {
                     variables_wait_for_exploring: newVariables
                 };
 
-                const response = await this._callAgentAPI(inputJson, 3, task3JsonSchema);
+                const response = await this._callAgentAPI(inputJson, 3, task3Schema);
                 const agentOutput = JSON.parse(response);
 
                 task3Output = await this.processTask3andTask4Output(agentOutput);
@@ -1116,7 +1060,7 @@ class Agent {
                 variables_wait_for_exploring: newVariables,
             };
 
-            const response = await this._callAgentAPI(inputJson, 4, task4JsonSchema);
+            const response = await this._callAgentAPI(inputJson, 4, task4Schema);
 
             // Validate JSON format
             let agentOutput;
@@ -1158,7 +1102,7 @@ class Agent {
             }))
         };
 
-        const response = await this._callAgentAPI(inputJson, 5, task5JsonSchema);
+        const response = await this._callAgentAPI(inputJson, 5, task5Schema);
         const task5Output = JSON.parse(response);
         // nodeIds: {snippetKey: {nodeID: string, statement: string} ...} is an object that stores the node IDs and statement with the snippetKey as the key in this._importantCodeSnippets
         let nodeIds: {
@@ -1358,7 +1302,7 @@ class Agent {
             findings: findingAndCode
         };
 
-        const response = await this._callAgentAPI(inputJson, 6, task6JsonSchema);
+        const response = await this._callAgentAPI(inputJson, 6, task6Schema);
         const task6Output = JSON.parse(response);
 
         if (!task6Output || !task6Output.filtered_findings) {
@@ -1481,7 +1425,7 @@ class Agent {
             data_flow_tree: this._tree
         };
 
-        const response = await this._callAgentAPI(inputJson, 7, task7JsonSchema);
+        const response = await this._callAgentAPI(inputJson, 7, task7Schema);
         const task7Output = JSON.parse(response);
 
         this._final_decision_sufficient = task7Output.final_decision_sufficient;
@@ -1804,8 +1748,8 @@ class Agent {
                 throw new Error("Unknown task number provided.");
         }
 
-        const systemMessage = new SystemMessage(`
-            You are Agent 0, an assistant designed to help users explore and understand codebases by performing tasks using VSCode tools. 
+        const systemMessage = `
+            You are an assistant designed to help users explore and understand codebases by performing tasks using VSCode tools. 
             Your role depends on the task in the input, and you must carefully follow task-specific instructions and formats.
             
             General Instructions:
@@ -1819,12 +1763,11 @@ class Agent {
     
             ${taskInstructions}
             
-            Ensure that your output matches the provided JSON schema.
-        `);
+            Ensure that your output matches the provided schema.
+        `;
 
 
         const prompt = JSON.stringify(inputJson);
-        const messages = [systemMessage, new HumanMessage(prompt)];
 
         let result: any;
         let valid = false;
@@ -1832,31 +1775,34 @@ class Agent {
         while (!valid) {
             // Time the agent's response
             const start = new Date().getTime();
-            const model = taskNumber === 3 || taskNumber === 4 || taskNumber === 6 ? this._model : this._fasterModel;
+            let model;
+            if (taskNumber === 3 || taskNumber === 4 || taskNumber === 6 || taskNumber === 7) {
+                model = this._model;
+            } /* else if (taskNumber === 7) {
+                model = this._reasoningModel; // need tier 5 users
+            } */ else {
+                model = this._fasterModel;
+            }
 
-            const rawResponse = await model.invoke(messages, {
-                response_format: {
-                    type: "json_schema",
-                    json_schema: {
-                        name: `task_${taskNumber}_schema`,
-                        schema: selectedSchema,
-                    },
-                },
+            const completion = await this._openai.beta.chat.completions.parse({
+                model: model.model,
+                messages: [
+                    { role: "system", content: systemMessage },
+                    { role: "user", content: prompt },
+                ],
+                response_format: zodResponseFormat(selectedSchema, `task_${taskNumber}_schema`),
             });
 
             const end = new Date().getTime();
             console.log(`Task ${taskNumber} Response Time: ${end - start} ms`);
 
-            const parser = new StringOutputParser();
-            const response = await parser.invoke(rawResponse);
+            const response = completion.choices[0].message.parsed;
 
             try {
-                result = JSON.parse(response);
-
-                // Validate the result against the schema
+                result = JSON.stringify(response);
                 valid = true;
             } catch (error) {
-                console.error(`Failed to parse JSON response for Task ${taskNumber}:`, error);
+                console.error(`Failed to parse response for Task ${taskNumber}:`, error);
                 valid = false;
             }
 
@@ -1868,7 +1814,7 @@ class Agent {
 
         // Log and return the validated result
         console.log(`Validated Task ${taskNumber} Output:`, result);
-        return JSON.stringify(result);
+        return result;
     }
 
     // Method to update the exploration graph and pass visualization data to SidebarView

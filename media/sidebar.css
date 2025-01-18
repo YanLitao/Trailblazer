@@ -509,6 +509,29 @@ code {
     position: relative;
 }
 
+#graph-container #sticky-header {
+    display: none;
+    position: sticky;
+    top: 0;
+    background-color: #f9f9f9;
+    border-bottom: 1px solid #ccc;
+    padding: 5px 10px;
+    font-family: monospace;
+    font-size: 12px;
+    font-weight: normal;
+    z-index: 1000;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#graph-container #sticky-header .sticky-header-item {
+    cursor: pointer;
+    padding: 8px;
+    background: #f9f9f9;
+    border-bottom: 1px solid #eee;
+}
+
 #graph-container .node circle {
     fill: white;
     stroke: steelblue;

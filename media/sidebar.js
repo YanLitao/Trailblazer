@@ -1,4 +1,3 @@
-
 const vscode = acquireVsCodeApi(); // This gives us access to the VSCode API
 
 // Listen to messages from the VSCode extension
@@ -427,7 +426,7 @@ function renderGraph(data) {
                 if (d.data.id === "fake-origin") {
                     return "Exploration start point"; // Label for fake origin
                 }
-                return `${d.data.fileUri.split('/').pop()}:${d.data.lineNumber + 1}:${d.data.variable}`;
+                return `Used "find ${d.data.tool}" to reach ${d.data.variable} in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}:`;
             });
 
         // Add code snippets as rectangles
@@ -436,28 +435,28 @@ function renderGraph(data) {
             .attr("x", d => d.depth * nodeSize + 10)
             .attr("y", 20) // Position below the text label
             .attr("width", width - margin.right - margin.left - 30) // Adjust for container size
-            .attr("height", d => getCodeSnippetHeight(d.data.codeSnippet) + 50) // Add space for buttons
+            .attr("height", d => getCodeSnippetHeight(d.data.codeSnippet)) // Add space for buttons
             .html(d => {
                 if (d.data.id === "fake-origin") return ""; // No rect for fake origin
                 return `
-            <div class="tree-node code-box" style="border: ${d.data.isIntermediate ? "1px dashed #aaa" : "1px solid #aaa"}">
-                <code style="white-space: pre;">${d.data.codeSnippet}</code>
-                <div class="tree-node-button-container">
-                    <!-- Replay Button -->
-                    <button class="replay-btn" title="Replay" data-node-id="${d.data.id}">
-                        <i class="fas fa-undo-alt"></i> Replay
-                    </button>
-                    <!-- Jump to Line Button -->
-                    <button class="jump-btn" title="Jump to Editor" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">
-                        <i class="fas fa-arrow-right"></i> Go to line
-                    </button>
-                    <!-- Search Button -->
-                    <button class="search-btn" title="Search" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">
-                        <i class="fas fa-search"></i> Search
-                    </button>
-                </div>
-            </div>
-        `;
+                    <div class="tree-node code-box" style="border: ${d.data.isIntermediate ? "1px dashed #aaa" : "1px solid #aaa"}">
+                        <code style="white-space: pre;">${d.data.codeSnippet}</code>
+                        <div class="tree-node-button-container">
+                            <!-- Replay Button -->
+                            <button class="replay-btn" title="Replay" data-node-id="${d.data.id}">
+                                <i class="fas fa-undo-alt"></i> Replay
+                            </button>
+                            <!-- Jump to Line Button -->
+                            <button class="jump-btn" title="Jump to Editor" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">
+                                <i class="fas fa-arrow-right"></i> Go to line
+                            </button>
+                            <!-- Search Button -->
+                            <button class="search-btn" title="Search" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">
+                                <i class="fas fa-search"></i> Search
+                            </button>
+                        </div>
+                    </div>
+                `;
             });
 
         nodeGroup.selectAll(".replay-btn").on("click", function (event) {
@@ -496,7 +495,6 @@ function renderGraph(data) {
                 lineNumber: parseInt(lineNumber, 10)
             });
         });
-
     }
 
     // Function to calculate the height of a code snippet rectangle
@@ -510,12 +508,91 @@ function renderGraph(data) {
         document.body.appendChild(tempDiv);
         const height = tempDiv.getBoundingClientRect().height;
         document.body.removeChild(tempDiv);
-        return height + 42; // Add padding for the buttons
+        return height + 55; // Add padding for the buttons
     }
 
     function generateNodeId(data) {
         const fileName = data.fileUri.split('/').pop(); // Get the file name
         return `${fileName}_${data.lineNumber}_${data.variable}`.replace(/[^\w-]/g, "_");
+    }
+
+    function addStickyScroll() {
+        // Create a sticky header if it doesn't exist
+        let stickyHeader = document.getElementById("sticky-header");
+        if (!stickyHeader) {
+            stickyHeader = document.createElement("div");
+            stickyHeader.id = "sticky-header";
+            stickyHeader.style.position = "sticky";
+            stickyHeader.style.top = "0";
+            stickyHeader.style.background = "white";
+            stickyHeader.style.padding = "10px";
+            stickyHeader.style.boxShadow = "0 2px 4px rgba(0,0,0,0.1)";
+            stickyHeader.style.zIndex = "1000";
+            stickyHeader.style.fontWeight = "bold";
+            stickyHeader.innerHTML = "Sticky Header"; // Default content
+            document.body.prepend(stickyHeader);
+        }
+
+        const nodeElements = Array.from(document.querySelectorAll(".node"));
+
+        // Add scroll listener
+        window.addEventListener("scroll", () => {
+            // Find the first visible node
+            const visibleNode = nodeElements.find((node) => {
+                let stickyHeaderRect = stickyHeader.getBoundingClientRect();
+                const rect = node.getBoundingClientRect();
+                return rect.top < stickyHeaderRect.bottom && rect.bottom > stickyHeaderRect.bottom;
+            });
+
+            if (visibleNode) {
+                // Collect data for the visible node and its ancestors
+                const ancestors = [];
+                let currentNode = visibleNode.__data__;
+
+                while (currentNode) {
+                    ancestors.push(currentNode.data); // Push the ancestor's data
+                    currentNode = currentNode.parent; // Move to the parent
+                }
+
+                ancestors.reverse();
+
+                // Generate sticky header content with indents
+                stickyHeader.innerHTML = ancestors
+                    .map((ancestor, index) => {
+                        const indent = "&nbsp;".repeat(index * 4); // Add indent for hierarchy
+                        if (ancestor.id === "fake-origin") {
+                            return `
+                                <div class="sticky-header-item" 
+                                    style="cursor: pointer; padding: 4px;" 
+                                    data-node-id="${generateNodeId(ancestor)}">
+                                    <strong>Exploration start point</strong>
+                                </div>`;
+                        }
+                        return `
+                            <div 
+                                class="sticky-header-item" 
+                                style="cursor: pointer; padding: 4px;" 
+                                data-node-id="${generateNodeId(ancestor)}">
+                                ${indent}${ancestor.fileUri.split('/').pop()}:${ancestor.lineNumber + 1}:${ancestor.variable} in "${ancestor.codeLine}"
+                            </div>`;
+                    })
+                    .join("");
+
+                // Add click event listeners to each sticky header item
+                document.querySelectorAll(".sticky-header-item").forEach((item) => {
+                    item.addEventListener("click", (event) => {
+                        const targetNodeId = event.target.getAttribute("data-node-id");
+                        const targetNodeElement = document.querySelector(`#node-${targetNodeId}`);
+                        if (targetNodeElement) {
+                            targetNodeElement.scrollIntoView({
+                                behavior: "smooth",
+                                block: "start",
+                            });
+                        }
+                    });
+                });
+            }
+        });
     }
 
     function findParentNodes(node) {
@@ -566,7 +643,7 @@ function renderGraph(data) {
         let timeout = 8000; // Default timeout
         if (index === 0) timeout = 2000;
         currentTimeout = setTimeout(() => {
-            vscode.postMessage({ command: "replaySnippet", fileUri: targetNode.data.fileUri, lineNumber: targetNode.data.lineNumber });
+            postReplayMessage(targetNode);
             stepThroughNodes(nodes, index + 1);
         }, timeout);
 
@@ -606,11 +683,7 @@ function renderGraph(data) {
         }
 
         // Post message to VSCode to jump to the previous node's line
-        vscode.postMessage({
-            command: "replaySnippet",
-            fileUri: previousNode.data.fileUri,
-            lineNumber: previousNode.data.lineNumber,
-        });
+        postReplayMessage(previousNode);
 
         // Scroll to the previous node
         document.getElementById(`node-${generateNodeId(previousNode.data)}`).scrollIntoView({ behavior: "smooth", block: "center" });
@@ -630,11 +703,7 @@ function renderGraph(data) {
         currentStepIndex++; // Move forward one step
 
         // Post message to VSCode to jump to the next node's line
-        vscode.postMessage({
-            command: "replaySnippet",
-            fileUri: nextNode.data.fileUri,
-            lineNumber: nextNode.data.lineNumber,
-        });
+        postReplayMessage(nextNode);
 
         // Scroll to the next node
         document.getElementById(`node-${generateNodeId(nextNode.data)}`).scrollIntoView({ behavior: "smooth", block: "center" });
@@ -649,11 +718,7 @@ function renderGraph(data) {
         svg.selectAll(".node, .link").style("opacity", 0.2);
 
         // Post message to VSCode to jump to the first node's line
-        vscode.postMessage({
-            command: "replaySnippet",
-            fileUri: firstNode.data.fileUri,
-            lineNumber: firstNode.data.lineNumber,
-        });
+        postReplayMessage(firstNode);
 
         // Restart the animation
         currentStepIndex = 0; // Reset the step index
@@ -675,11 +740,7 @@ function renderGraph(data) {
         });
 
         // Post message to VSCode to jump to the last node's line
-        vscode.postMessage({
-            command: "replaySnippet",
-            fileUri: lastNode.data.fileUri,
-            lineNumber: lastNode.data.lineNumber,
-        });
+        postReplayMessage(lastNode);
 
         // Update the step index to the last node
         currentStepIndex = currentNodes.length - 1;
@@ -688,8 +749,20 @@ function renderGraph(data) {
         document.getElementById(`node-${generateNodeId(lastNode.data)}`).scrollIntoView({ behavior: "smooth", block: "center" });
     });
 
+    function postReplayMessage(node) {
+        vscode.postMessage({
+            command: "replaySnippet",
+            fileUri: node.data.fileUri,
+            lineNumber: node.data.lineNumber,
+            variable: node.data.variable,
+            tool: node.data.tool,
+            finding: node.data.statement
+        });
+    }
+
     // Initial render
     drawGraph();
+    addStickyScroll();
 
     // Make the graph responsive
     window.addEventListener("resize", () => {

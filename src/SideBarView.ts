@@ -49,8 +49,8 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 const { fileUri, lineNumber } = message;
                 this.createZoneWidget(fileUri, lineNumber, true);
             } else if (message.command === 'replaySnippet') {
-                const { fileUri, lineNumber } = message;
-                this.createZoneWidget(fileUri, lineNumber, false);
+                const { fileUri, lineNumber, variable, tool, finding } = message;
+                this.createZoneWidget(fileUri, lineNumber, false, variable, tool, finding);
             } else if (message.command === 'stopAgent') {
                 this.agentIsDone();
                 vscode.commands.executeCommand('extension.stopAgent');
@@ -130,7 +130,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
 
             // Create a decoration type for highlighting the line
             const highlightDecoration = vscode.window.createTextEditorDecorationType({
-                backgroundColor: 'rgba(255, 255, 0, 0.3)' // Yellow background with some transparency
+                backgroundColor: 'rgba(173, 216, 230, 0.5)' // Yellow background with some transparency
             });
 
             // Apply the decoration to the line
@@ -146,7 +146,17 @@ export class SidebarView implements vscode.WebviewViewProvider {
         }
     }
 
-    async createZoneWidget(fileUri: string, lineNumber: number, questionFlag: boolean = false) {
+    async createZoneWidget(
+        fileUri: string,
+        lineNumber: number,
+        questionFlag: boolean = false,
+        variable: string = "",
+        tool: string = "",
+        finding: string = ""
+    ) {
+        if (fileUri === "" || lineNumber === -1) {
+            return;
+        }
         try {
             const uri = vscode.Uri.parse(fileUri);
             const document = await vscode.workspace.openTextDocument(uri);
@@ -161,38 +171,72 @@ export class SidebarView implements vscode.WebviewViewProvider {
             const widgetPosition = new vscode.Position(lineNumber + 1, 0); // Below the target line
             const widgetRange = new vscode.Range(widgetPosition, widgetPosition);
 
-            const decorationType = vscode.window.createTextEditorDecorationType({
-                isWholeLine: false,
-                after: {
-                    contentText: 'What is this line of code for?', // Placeholder for styling
-                    backgroundColor: 'lightyellow',
-                    margin: '4px 0',
-                    border: '1px solid lightgray',
-                },
-            });
+            let contentText = "What is this line of code for?";
 
-            // Add decoration for the zone widget
-            editor.setDecorations(decorationType, [widgetRange]);
+            // Decorations
+            let variableDecoration: vscode.TextEditorDecorationType | undefined;
+            let lineDecoration: vscode.TextEditorDecorationType | undefined;
+            let textDecoration: vscode.TextEditorDecorationType | undefined;
 
-            if (questionFlag) {
+            if (!questionFlag) {
+                const findingText = finding.length > 0 ? "Finding: " + finding + " " : "";
+                contentText = findingText + "Using " + tool + " on " + variable;
+
+                // Highlight the variable in the line
+                if (variable && variable.trim() !== "") {
+                    const lineText = document.lineAt(lineNumber).text;
+                    const variableIndex = lineText.indexOf(variable);
+
+                    if (variableIndex !== -1) {
+                        const variableStart = new vscode.Position(lineNumber, variableIndex);
+                        const variableEnd = new vscode.Position(lineNumber, variableIndex + variable.length);
+                        const variableRange = new vscode.Range(variableStart, variableEnd);
+
+                        variableDecoration = vscode.window.createTextEditorDecorationType({
+                            backgroundColor: "rgba(255, 223, 186, 0.5)", // Light orange background
+                            borderRadius: "3px",
+                        });
+                        editor.setDecorations(variableDecoration, [variableRange]);
+                    }
+                }
+
+                // Highlight the entire line
+                const lineRange = document.lineAt(lineNumber).range;
+                lineDecoration = vscode.window.createTextEditorDecorationType({
+                    backgroundColor: "rgba(173, 216, 230, 0.5)", // Light blue background
+                });
+                editor.setDecorations(lineDecoration, [lineRange]);
+
+                // Add a text decoration below the line
+                textDecoration = vscode.window.createTextEditorDecorationType({
+                    after: {
+                        contentText: contentText,
+                        backgroundColor: "lightyellow",
+                        margin: "4px 0",
+                        border: "1px solid lightgray",
+                    },
+                });
+                editor.setDecorations(textDecoration, [widgetRange]);
+
+                // Wait for 8 seconds
+                await new Promise((resolve) => setTimeout(resolve, 8000));
+
+                // Clean up the decorations
+                if (variableDecoration) variableDecoration.dispose();
+                if (lineDecoration) lineDecoration.dispose();
+                if (textDecoration) textDecoration.dispose();
+            } else {
                 // Show an input box to capture user input
                 const userInput = await vscode.window.showInputBox({
                     prompt: `Enter text below line ${lineNumber + 1}`,
-                    placeHolder: 'Type your input here...',
+                    placeHolder: "Type your input here...",
                 });
 
                 if (userInput !== undefined) {
                     vscode.window.showInformationMessage(`You entered: ${userInput}`);
-                    vscode.commands.executeCommand('extension.followUpQuestion', userInput, fileUri, lineNumber);
+                    vscode.commands.executeCommand("extension.followUpQuestion", userInput, fileUri, lineNumber);
                 }
-            } else {
-                // sleep for 10 seconds
-                await new Promise(resolve => setTimeout(resolve, 8000));
             }
-
-            // Clean up the decoration after use
-            editor.setDecorations(decorationType, []);
-            decorationType.dispose();
         } catch (error) {
             vscode.window.showErrorMessage(`Failed to create zone widget: ${String(error)}`);
         }
@@ -286,8 +330,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     </div>
                 </div>
                 <div id="current-task">
-                    <div id="current-task-content">
-                    </div>
+                    <div id="current-task-content"></div>
                 </div>
                 <div id="graph-container"></div>
                 <div id="exploration-steps" style="display:none;">
@@ -305,13 +348,10 @@ export class SidebarView implements vscode.WebviewViewProvider {
                                 <pre class="line-numbers language-ts"><code class="language-ts">${stripLineIndentation(this._selectedCode)}</code></pre>
                             </div>
                         </div>
-                </div> <!-- This div will hold all exploration steps --> 
+                </div> 
                 <script src="${prismJS}"></script>
                 <script src="${html2pdfJS}"></script>
                 <script src="${scriptUri}"></script>
-                <script>
-                    Prism.highlightAll();
-                </script>
             </body>
             </html>
         `;

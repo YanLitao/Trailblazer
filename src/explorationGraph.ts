@@ -29,6 +29,7 @@ export type TreeNode = {
     codeSnippet: string;
     isIntermediate: boolean;
     statement: string;
+    tool: "definition" | "reference" | "assignment";
     children: TreeNode[]; // Recursive definition
 };
 
@@ -275,13 +276,13 @@ export class ExplorationGraph {
      */
     findSmallestTree(nodeIds: { [key: number]: { nodeID: string; statement: string } } = {}): any {
         const nodeIdArray = Object.values(nodeIds).map((node) => node.nodeID);
-        const shortestPathTree = new Map<string, string>(); // Stores parent-child relationships
+        const shortestPathTree = new Map<string, { parent: string; tool: string }>(); // Stores parent-child relationships with tool
         const nodeMap = new Map<string, any>();
 
         // Step 1: Build the shortest path tree using Dijkstra's algorithm
         const computeShortestPathTree = (startNodeId: string) => {
             const distances = new Map<string, number>();
-            const parents = new Map<string, string | null>();
+            const parents = new Map<string, { parent: string; tool: string } | null>();
             const visited = new Set<string>();
             const priorityQueue: { nodeId: string; cost: number }[] = [];
 
@@ -300,9 +301,10 @@ export class ExplorationGraph {
                 neighbors.forEach(edge => {
                     const neighborId = edge.to;
                     const newDist = (distances.get(nodeId) || Infinity) + 1;
+
                     if (!distances.has(neighborId) || newDist < distances.get(neighborId)!) {
                         distances.set(neighborId, newDist);
-                        parents.set(neighborId, nodeId);
+                        parents.set(neighborId, { parent: nodeId, tool: edge.tool }); // Track parent and tool
                         priorityQueue.push({ nodeId: neighborId, cost: newDist });
                     }
                 });
@@ -313,12 +315,13 @@ export class ExplorationGraph {
         const parents = computeShortestPathTree(this.fakeOriginId);
 
         // Step 2: Build the tree from paths
-        const createOrGetNode = (nodeId: string): any => {
+        const createOrGetNode = (nodeId: string, tool: string | null = null): any => {
             if (!nodeMap.has(nodeId)) {
                 const node = this.nodes.get(nodeId)!;
                 let isIntermediate = true;
                 let snippetKey = -1;
                 let statement = "";
+
                 // Find the snippet key and statement for the node if it is in the nodeIds
                 if (nodeIds) {
                     const key = Object.keys(nodeIds).find((key: any) => nodeIds[key].nodeID === node.id);
@@ -339,6 +342,7 @@ export class ExplorationGraph {
                     codeSnippet: node.codeSnippet,
                     isIntermediate: isIntermediate,
                     statement: statement,
+                    tool: tool || "assignment", // Use the provided tool or a default value
                     children: [],
                 };
 
@@ -354,23 +358,24 @@ export class ExplorationGraph {
             let currentNodeId = nodeId;
 
             while (currentNodeId && !shortestPathTree.has(currentNodeId)) {
-                const parentId = parents.get(currentNodeId);
+                const parentData = parents.get(currentNodeId);
 
-                if (parentId) {
-                    shortestPathTree.set(currentNodeId, parentId); // Record parent-child relationship
+                if (parentData) {
+                    shortestPathTree.set(currentNodeId, { parent: parentData.parent, tool: parentData.tool }); // Record parent-child relationship
                 }
-                currentNodeId = parentId!;
+                currentNodeId = parentData?.parent!;
             }
         });
 
-        shortestPathTree.forEach((parentId, childId) => {
-            const parentNode = createOrGetNode(parentId);
-            const childNode = createOrGetNode(childId);
+        shortestPathTree.forEach((data, childId) => {
+            const parentNode = createOrGetNode(data.parent);
+            const childNode = createOrGetNode(childId, data.tool);
 
             if (!parentNode.children.some((child: any) => child.id === childNode.id)) {
                 parentNode.children.push(childNode);
             }
         });
+
         return root;
     }
 
