@@ -51,8 +51,8 @@ export function activate(context: vscode.ExtensionContext) {
             agent.stop();
             vscode.window.showInformationMessage('Agent stopped.');
         }),
-        vscode.commands.registerCommand('extension.followUpQuestion', (userInput, fileUri, lineNumber) => {
-            agent.followUpQuestion(userInput, fileUri, lineNumber);
+        vscode.commands.registerCommand('extension.followUpQuestion', (userInput, fileUri, lineNumber, variable) => {
+            agent.followUpQuestion(userInput, fileUri, lineNumber, variable);
         })
     );
 
@@ -225,6 +225,7 @@ class Agent {
         tool: "assignment",
         children: []
     };
+    private _followUpBranchNodeId: string = "";
     private _findingsSummary: { snippetKey: number[], statement: string, outOfDate: boolean }[] = [];
     private _lastFindingSummary: { snippetKey: number[], statement: string, outOfDate: boolean }[] = [];
     private _updateFindings: boolean = false;
@@ -279,13 +280,14 @@ class Agent {
         this.isStopped = true;
     }
 
-    followUpQuestion(userInput: string, fileUri: string, lineNumber: number) {
+    followUpQuestion(userInput: string, fileUri: string, lineNumber: number, variable: string) {
         this.isPaused = false;
         this._final_decision_sufficient = false;
         this._question += " " + userInput;
         if (this._sidebarViewProvider) {
             this._sidebarViewProvider.updatetitleQuestion(this._question);
         }
+        this._followUpBranchNodeId = `${fileUri}:${lineNumber}:${variable}`;
         this.runWorkflow(this._question, vscode.Uri.parse(fileUri), lineNumber, lineNumber);
     }
 
@@ -416,7 +418,7 @@ class Agent {
                     },
                 );
 
-                if (startLine <= variableInfo.lineNumber && variableInfo.lineNumber <= endLine) {
+                if (startLine <= variableInfo.lineNumber && variableInfo.lineNumber <= endLine && !this._followUpBranchNodeId) {
                     let codeSnippet = statementText;
                     if (statementText.split("\n").length == 1) {
                         const { contextText, startContextLine } = await getSurroundingCode(uri, variableInfo.lineNumber, variableInfo.lineNumber);
@@ -1194,20 +1196,25 @@ class Agent {
         });
 
         if (nodeIds !== this._previousParsedNodes && Object.keys(nodeIds).length > 0) {
-            //Adding the previous parsed nodes to the nodeIds
-            for (const key in this._previousParsedNodes) {
-                if (!(key in nodeIds)) {
-                    nodeIds[key] = this._previousParsedNodes[key];
-                }
-            }
+            // Merge previous parsed nodes with the current ones
+            nodeIds = { ...this._previousParsedNodes, ...nodeIds };
             console.log("Node IDs to form a tree: ", nodeIds);
-            const newTree = this._explorationGraph.findSmallestTree(nodeIds);
+            let newTree: TreeNode;
+            // Decide between branch-specific or global updates
+            if (this._followUpBranchNodeId) {
+                newTree = this._explorationGraph.appendOrAddNodesToTree(nodeIds, this._followUpBranchNodeId);
+            } else if (Object.keys(this._previousParsedNodes).length > 0) {
+                newTree = this._explorationGraph.appendOrAddNodesToTree(nodeIds);
+            } else {
+                newTree = this._explorationGraph.findSmallestTree(nodeIds);
+            }
+            // Update the tree and visualization
             if (newTree.children.length > 0) {
                 this._tree = newTree;
                 this._sidebarViewProvider.updateGraphVisualization(this._tree);
                 this._previousParsedNodes = nodeIds;
             } else {
-                console.error("Failed to find the smallest tree with the given node IDs: ", nodeIds);
+                console.error("Failed to update the tree with the given node IDs: ", nodeIds);
             }
             console.log("Tree: ", newTree);
         }

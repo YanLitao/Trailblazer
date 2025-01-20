@@ -46,8 +46,8 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 const lineNumber = message.lineNumber;
                 this.openFileAtLine(fileUri, lineNumber);
             } else if (message.command === 'openZoneWidget') {
-                const { fileUri, lineNumber } = message;
-                this.createZoneWidget(fileUri, lineNumber, true);
+                const { fileUri, lineNumber, variable } = message;
+                this.createZoneWidget(fileUri, lineNumber, true, variable);
             } else if (message.command === 'replaySnippet') {
                 const { fileUri, lineNumber, variable, tool, finding } = message;
                 this.createZoneWidget(fileUri, lineNumber, false, variable, tool, finding);
@@ -115,6 +115,42 @@ export class SidebarView implements vscode.WebviewViewProvider {
         this.processQueue(); // Process the next item in the queue
     }
 
+    /**
+     * Highlights a line in the editor.
+     * @param editor The text editor instance.
+     * @param lineNumber The line number to highlight.
+     * @param color The background color for the highlight.
+     * @param duration Optional duration (in milliseconds) for the highlight to persist.
+     * @returns A promise that resolves when the highlight is cleared, or immediately if no duration is provided.
+     */
+    private highlightLineInEditor(
+        editor: vscode.TextEditor,
+        lineNumber: number,
+        duration: number = 0,
+        color: string = "rgba(173, 216, 230, 0.5)",
+    ): Promise<void> {
+        return new Promise((resolve) => {
+            const lineRange = editor.document.lineAt(lineNumber).range;
+            const highlightDecoration = vscode.window.createTextEditorDecorationType({
+                backgroundColor: color,
+            });
+
+            // Apply the decoration to the line
+            editor.setDecorations(highlightDecoration, [lineRange]);
+
+            if (duration > 0) {
+                // Clear the decoration after the specified duration
+                setTimeout(() => {
+                    editor.setDecorations(highlightDecoration, []);
+                    highlightDecoration.dispose();
+                    resolve();
+                }, duration);
+            } else {
+                resolve();
+            }
+        });
+    }
+
     // Function to open the file and jump to the specific line
     private async openFileAtLine(fileUri: vscode.Uri, lineNumber: number) {
         try {
@@ -128,19 +164,8 @@ export class SidebarView implements vscode.WebviewViewProvider {
             editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
             editor.selection = new vscode.Selection(position, position);
 
-            // Create a decoration type for highlighting the line
-            const highlightDecoration = vscode.window.createTextEditorDecorationType({
-                backgroundColor: 'rgba(173, 216, 230, 0.5)' // Yellow background with some transparency
-            });
-
-            // Apply the decoration to the line
-            const lineRange = new vscode.Range(lineNumber, 0, lineNumber, document.lineAt(lineNumber).range.end.character);
-            editor.setDecorations(highlightDecoration, [lineRange]);
-
-            // Optional: Clear the decoration after a delay
-            setTimeout(() => {
-                editor.setDecorations(highlightDecoration, []); // Clear the highlight
-            }, 5000); // Adjust the delay as needed (e.g., 5 seconds)
+            // Highlight the line
+            await this.highlightLineInEditor(editor, lineNumber, 5000);
         } catch (error) {
             console.error(`Error opening file at line ${lineNumber}: `, error);
         }
@@ -167,22 +192,26 @@ export class SidebarView implements vscode.WebviewViewProvider {
             editor.selection = new vscode.Selection(position, position);
             editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
 
-            // Create a range for the zone widget
-            const widgetPosition = new vscode.Position(lineNumber + 1, 0); // Below the target line
-            const widgetRange = new vscode.Range(widgetPosition, widgetPosition);
+            // Function to highlight the line
+            const highlightLine = (): vscode.TextEditorDecorationType => {
+                const lineRange = document.lineAt(lineNumber).range;
+                const lineDecoration = vscode.window.createTextEditorDecorationType({
+                    backgroundColor: "rgba(173, 216, 230, 0.5)", // Light blue background
+                });
+                editor.setDecorations(lineDecoration, [lineRange]);
+                return lineDecoration;
+            };
 
-            let contentText = "What is this line of code for?";
-
-            // Decorations
-            let variableDecoration: vscode.TextEditorDecorationType | undefined;
-            let lineDecoration: vscode.TextEditorDecorationType | undefined;
-            let textDecoration: vscode.TextEditorDecorationType | undefined;
+            // Always highlight the line
+            const lineDecoration = highlightLine();
 
             if (!questionFlag) {
+                // Prepare content text for the decoration
                 const findingText = finding.length > 0 ? "Finding: " + finding + " " : "";
-                contentText = findingText + "Using " + tool + " on " + variable;
+                const contentText = findingText + "Using " + tool + " on " + variable;
 
-                // Highlight the variable in the line
+                // Highlight the variable in the line if it exists
+                let variableDecoration: vscode.TextEditorDecorationType | undefined;
                 if (variable && variable.trim() !== "") {
                     const lineText = document.lineAt(lineNumber).text;
                     const variableIndex = lineText.indexOf(variable);
@@ -200,15 +229,10 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     }
                 }
 
-                // Highlight the entire line
-                const lineRange = document.lineAt(lineNumber).range;
-                lineDecoration = vscode.window.createTextEditorDecorationType({
-                    backgroundColor: "rgba(173, 216, 230, 0.5)", // Light blue background
-                });
-                editor.setDecorations(lineDecoration, [lineRange]);
-
                 // Add a text decoration below the line
-                textDecoration = vscode.window.createTextEditorDecorationType({
+                const widgetPosition = new vscode.Position(lineNumber + 1, 0); // Below the target line
+                const widgetRange = new vscode.Range(widgetPosition, widgetPosition);
+                const textDecoration = vscode.window.createTextEditorDecorationType({
                     after: {
                         contentText: contentText,
                         backgroundColor: "lightyellow",
@@ -221,20 +245,31 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 // Wait for 8 seconds
                 await new Promise((resolve) => setTimeout(resolve, 8000));
 
-                // Clean up the decorations
+                // Clean up all decorations
+                lineDecoration.dispose();
                 if (variableDecoration) variableDecoration.dispose();
-                if (lineDecoration) lineDecoration.dispose();
-                if (textDecoration) textDecoration.dispose();
+                textDecoration.dispose();
             } else {
-                // Show an input box to capture user input
-                const userInput = await vscode.window.showInputBox({
-                    prompt: `Enter text below line ${lineNumber + 1}`,
-                    placeHolder: "Type your input here...",
-                });
+                // Show an input box and highlight until it is closed
+                try {
+                    const userInput = await vscode.window.showInputBox({
+                        prompt: `Enter text below line ${lineNumber + 1}`,
+                        placeHolder: "Type your input here...",
+                    });
 
-                if (userInput !== undefined) {
-                    vscode.window.showInformationMessage(`You entered: ${userInput}`);
-                    vscode.commands.executeCommand("extension.followUpQuestion", userInput, fileUri, lineNumber);
+                    if (userInput !== undefined) {
+                        vscode.window.showInformationMessage(`You entered: ${userInput}`);
+                        vscode.commands.executeCommand(
+                            "extension.followUpQuestion",
+                            userInput,
+                            fileUri,
+                            lineNumber,
+                            variable
+                        );
+                    }
+                } finally {
+                    // Clean up the line highlight when the input box is dismissed
+                    lineDecoration.dispose();
                 }
             }
         } catch (error) {

@@ -39,6 +39,19 @@ export class ExplorationGraph {
     edges: Set<Edge>; // Set of edges
     origins: Set<string>; // Set of origin node IDs
     fakeOriginId: string; // ID of the fake origin
+    tree: TreeNode = {
+        id: "fake-origin",
+        snippetKey: -1,
+        fileUri: "",
+        lineNumber: -1,
+        variable: "fakeOrigin",
+        codeLine: "",
+        codeSnippet: "",
+        isIntermediate: false,
+        statement: "",
+        tool: "assignment",
+        children: [],
+    }
 
     constructor() {
         this.nodes = new Map();
@@ -376,7 +389,134 @@ export class ExplorationGraph {
             }
         });
 
+        this.tree = root;
+
         return root;
+    }
+
+    appendOrAddNodesToTree(
+        nodeIds: { [key: number]: { nodeID: string; statement: string } } = {},
+        branchNodeId?: string // Optional: Specify a branch to append to
+    ) {
+        if (!this.tree) {
+            console.warn("Tree does not exist. Initializing the tree.");
+            this.tree = this.findSmallestTree(nodeIds);
+            return this.tree;
+        }
+
+        const nodeIdArray = Object.values(nodeIds).map((node) => node.nodeID);
+        const nodeMap = new Map<string, TreeNode>();
+        const buildNodeMap = (node: TreeNode) => {
+            nodeMap.set(node.id, node);
+            node.children.forEach(buildNodeMap);
+        };
+        buildNodeMap(this.tree); // Populate the node map
+
+        const findBranchNode = (node: TreeNode, targetId: string): TreeNode | null => {
+            if (node.id === targetId) return node;
+            for (const child of node.children) {
+                const result = findBranchNode(child, targetId);
+                if (result) return result;
+            }
+            return this.tree;
+        };
+
+        const branchNode = branchNodeId ? findBranchNode(this.tree, branchNodeId) : this.tree;
+        if (branchNodeId && !branchNode) {
+            console.warn(`Branch node ${branchNodeId} not found in the tree.`);
+            return this.tree;
+        }
+
+        nodeIdArray.forEach((newNodeId) => {
+            const newNode = this.getNode(newNodeId);
+            if (!newNode) {
+                console.warn(`Node ${newNodeId} not found in the graph.`);
+                return this.tree;
+            }
+
+            const statement = Object.values(nodeIds).find((n) => n.nodeID === newNodeId)?.statement || "";
+            const snippetKey = parseInt(
+                Object.keys(nodeIds).find((key: any) => nodeIds[key].nodeID === newNodeId) || "-1",
+                10
+            );
+
+            // Find the shortest path to the branch or tree
+            const pathToTree = this.findShortestPathToTree(newNodeId, nodeMap);
+
+            if (pathToTree.length === 0) {
+                console.warn(`Could not find a path to integrate node ${newNodeId} into the tree.`);
+                return;
+            }
+
+            // Integrate the path into the branch or tree
+            let parentNode = branchNode!;
+            for (const { node, edge } of pathToTree) {
+                if (!nodeMap.has(node.id)) {
+                    const newChild: TreeNode = {
+                        id: node.id,
+                        snippetKey: node.id === newNodeId ? snippetKey : -1,
+                        fileUri: node.fileUri,
+                        lineNumber: node.lineNumber,
+                        variable: node.variable,
+                        codeLine: node.codeLine,
+                        codeSnippet: node.codeSnippet,
+                        isIntermediate: node.id !== newNodeId,
+                        statement: node.id === newNodeId ? statement : "",
+                        tool: edge?.tool || "assignment",
+                        children: [],
+                    };
+                    parentNode.children.push(newChild);
+                    nodeMap.set(node.id, newChild);
+                    parentNode = newChild; // Update the parent for the next iteration
+                } else {
+                    parentNode = nodeMap.get(node.id)!; // Move to the next existing node
+                }
+            }
+        });
+
+        return this.tree;
+    }
+
+    findShortestPathToTree(
+        startNodeId: string,
+        nodeMap: Map<string, TreeNode>
+    ): { node: Node; edge?: Edge }[] {
+        if (!this.nodes.has(startNodeId)) {
+            console.warn(`Node with ID ${startNodeId} does not exist in the graph.`);
+            return [];
+        }
+
+        const visited = new Set<string>();
+        const queue: { path: { node: Node; edge?: Edge }[] }[] = [
+            { path: [{ node: this.getNode(startNodeId)! }] },
+        ];
+
+        while (queue.length > 0) {
+            const { path } = queue.shift()!;
+            const currentNodeId = path[path.length - 1].node.id;
+
+            // Check if the current node is in the tree
+            if (nodeMap.has(currentNodeId)) {
+                return path; // Found a connection to the tree
+            }
+
+            visited.add(currentNodeId);
+
+            // Explore backward edges to find parent nodes
+            const backwardEdges = Array.from(this.edges).filter((edge) => edge.to === currentNodeId);
+            for (const edge of backwardEdges) {
+                const fromNode = this.getNode(edge.from);
+                if (!fromNode) continue;
+
+                if (!visited.has(fromNode.id)) {
+                    queue.push({
+                        path: [...path, { node: fromNode, edge }],
+                    });
+                }
+            }
+        }
+
+        return []; // No path found
     }
 
 }

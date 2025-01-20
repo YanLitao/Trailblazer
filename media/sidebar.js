@@ -347,7 +347,7 @@ function renderGraph(data) {
         // Calculate vertical positions dynamically based on rectangle heights
         let yOffset = margin.top; // Initial y-offset
         root.eachBefore(d => {
-            const snippetHeight = getCodeSnippetHeight(d.data.codeSnippet);
+            const snippetHeight = getCodeSnippetHeight(d.data.codeSnippet, d.data.statement);
             const labelHeight = 20; // Approximate label height
             d.yOffset = yOffset; // Store yOffset for the node
             yOffset += snippetHeight + labelHeight + 20; // Add spacing between nodes
@@ -406,17 +406,17 @@ function renderGraph(data) {
             .style("font-size", "10px")
             .text(d => {
                 if (d.data.snippetKey !== -1) return d.data.snippetKey; // Add snippetKey for labeled nodes
-                if (d.data.isIntermediate) return "";
+                if (d.data.isIntermediate) return "+";
                 return "";
+            })
+            .on("click", function (event, d) {
+                if (d.data.isIntermediate) {
+                    const rect = d3.select(`#code-box-${generateNodeId(d.data)}`); // Use sanitized ID
+                    const isVisible = rect.style("display") === "block"
+                    rect.style("display", isVisible ? "none" : "block");
+                    d3.select(this).text(isVisible ? "+" : "-"); // Toggle sign
+                }
             });
-        /* .on("click", function (event, d) {
-            if (d.data.isIntermediate) {
-                const rect = d3.select(`#${generateNodeId(d.data)}`); // Use sanitized ID
-                const isVisible = rect.attr("display") === "block";
-                rect.attr("display", isVisible ? "none" : "block");
-                d3.select(this).text(isVisible ? "+" : "-"); // Toggle sign
-            }
-        }); */
 
         // Add text labels
         nodeGroup.append("text")
@@ -426,7 +426,7 @@ function renderGraph(data) {
                 if (d.data.id === "fake-origin") {
                     return "Exploration start point"; // Label for fake origin
                 }
-                return `Used "find ${d.data.tool}" to reach ${d.data.variable} in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}:`;
+                return `Used "find ${d.data.tool}" to reach "${d.data.variable}" in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}:`;
             });
 
         // Add code snippets as rectangles
@@ -435,11 +435,14 @@ function renderGraph(data) {
             .attr("x", d => d.depth * nodeSize + 10)
             .attr("y", 20) // Position below the text label
             .attr("width", width - margin.right - margin.left - 30) // Adjust for container size
-            .attr("height", d => getCodeSnippetHeight(d.data.codeSnippet)) // Add space for buttons
+            .attr("height", d => getCodeSnippetHeight(d.data.codeSnippet, d.data.statement)) // Add space for buttons
             .html(d => {
                 if (d.data.id === "fake-origin") return ""; // No rect for fake origin
-                return `
-                    <div class="tree-node code-box" style="border: ${d.data.isIntermediate ? "1px dashed #aaa" : "1px solid #aaa"}">
+                let borderStyle = d.data.isIntermediate ? "1px dashed #aaa" : "1px solid #aaa";
+                let displayment = d.data.isIntermediate ? "none" : "block";
+                let htmlContent = `
+                    <div id="code-box-${generateNodeId(d.data)}" class="tree-node code-box" 
+             style="border: ${borderStyle}; display: ${displayment};">
                         <code style="white-space: pre;">${d.data.codeSnippet}</code>
                         <div class="tree-node-button-container">
                             <!-- Replay Button -->
@@ -451,12 +454,20 @@ function renderGraph(data) {
                                 <i class="fas fa-arrow-right"></i> Go to line
                             </button>
                             <!-- Search Button -->
-                            <button class="search-btn" title="Search" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">
+                            <button class="search-btn" title="Search" data-node-id="${d.data.id}">
                                 <i class="fas fa-search"></i> Search
                             </button>
                         </div>
                     </div>
                 `;
+                if (!d.data.isIntermediate) {
+                    htmlContent += `
+                        <div class="tree-node-finding">
+                            <strong>Finding:</strong> ${d.data.statement}
+                        </div>
+                    `;
+                }
+                return htmlContent;
             });
 
         nodeGroup.selectAll(".replay-btn").on("click", function (event) {
@@ -487,28 +498,60 @@ function renderGraph(data) {
         });
 
         nodeGroup.selectAll(".search-btn").on("click", function (event) {
-            const fileUri = event.target.getAttribute("data-file-uri");
-            const lineNumber = event.target.getAttribute("data-line-number");
+            const nodeId = event.target.getAttribute("data-node-id");
+            // Find the clicked node by its ID
+            const clickedNode = nodes.find((node) => node.data.id === nodeId);
+            const fileUri = clickedNode.data.fileUri;
+            const lineNumber = clickedNode.data.lineNumber;
+            const variable = clickedNode.data.variable;
             vscode.postMessage({
                 command: 'openZoneWidget',
                 fileUri: fileUri,
-                lineNumber: parseInt(lineNumber, 10)
+                lineNumber: parseInt(lineNumber, 10),
+                variable: variable
             });
         });
     }
 
     // Function to calculate the height of a code snippet rectangle
-    function getCodeSnippetHeight(codeSnippet) {
+    function getCodeSnippetHeight(codeSnippet, statement) {
         const tempDiv = document.createElement("div");
         tempDiv.style.visibility = "hidden";
         tempDiv.style.position = "absolute";
         tempDiv.style.font = "12px monospace";
         tempDiv.style.width = `${container.offsetWidth - margin.right - margin.left - 30}px`;
-        tempDiv.innerHTML = `<code style="white-space: pre;">${codeSnippet}</code>`;
+
+        // Include both the code snippet and statement in the temporary div
+        let htmlContent = `
+            <div class="tree-node">
+                <div class="code-box">
+                    <code style="white-space: pre;">${codeSnippet}</code>
+                    <div class="tree-node-button-container">
+                    <!-- Buttons -->
+                    <button class="replay-btn" title="Replay"><i class="fas fa-undo-alt"></i> Replay</button>
+                    <button class="jump-btn" title="Jump to Editor"><i class="fas fa-arrow-right"></i> Go to line</button>
+                    <button class="search-btn" title="Search"><i class="fas fa-search"></i> Search</button>
+                </div>
+                </div>
+                <div class="tree-node-finding">
+                    <strong>Finding:</strong> ${statement}
+                </div>
+            </div>
+        `;
+        if (statement !== "") {
+            htmlContent += `
+                <div class="tree-node-finding">
+                    <strong>Finding:</strong> ${statement}
+                </div>
+            `;
+        }
+        tempDiv.innerHTML = htmlContent;
+
         document.body.appendChild(tempDiv);
-        const height = tempDiv.getBoundingClientRect().height;
-        document.body.removeChild(tempDiv);
-        return height + 55; // Add padding for the buttons
+        const height = tempDiv.getBoundingClientRect().height; // Measure total height
+        document.body.removeChild(tempDiv); // Clean up
+
+        return height;
     }
 
     function generateNodeId(data) {
