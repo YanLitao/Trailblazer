@@ -565,14 +565,6 @@ function renderGraph(data) {
         if (!stickyHeader) {
             stickyHeader = document.createElement("div");
             stickyHeader.id = "sticky-header";
-            stickyHeader.style.position = "sticky";
-            stickyHeader.style.top = "0";
-            stickyHeader.style.background = "white";
-            stickyHeader.style.padding = "10px";
-            stickyHeader.style.boxShadow = "0 2px 4px rgba(0,0,0,0.1)";
-            stickyHeader.style.zIndex = "1000";
-            stickyHeader.style.fontWeight = "bold";
-            stickyHeader.innerHTML = "Sticky Header"; // Default content
             document.body.prepend(stickyHeader);
         }
 
