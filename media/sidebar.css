@@ -30,6 +30,14 @@ h4 {
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
+#header .final-answer {
+    font-weight: 300;
+}
+
+#header .final-answer h1 {
+    font-size: 1.2em;
+}
+
 #agent-status-text {
     font-weight: bold;
     /* Example color for idle status */
@@ -307,6 +315,15 @@ current-task {
     overflow-x: auto;
 }
 
+.inline-code {
+    font-family: Consolas, Monaco, 'Andale Mono', monospace;
+    font-size: 0.9em;
+    background-color: #f5f2f0;
+    padding: 0px 4px;
+    border-radius: 3px;
+    border: 1px solid #ccc;
+}
+
 #preliminary-answer-text {
     font-weight: 300;
 }
@@ -354,7 +371,7 @@ current-task {
     /* Make it appear on its own line inside the box */
     margin-bottom: 4px;
     /* Add spacing below */
-    color: #4682b4;
+    color: #6c757d;
     /* Match the darker blue */
     font-weight: normal;
     /* Not bold */
@@ -362,7 +379,7 @@ current-task {
 }
 
 .code-index:hover {
-    color: #104e8b;
+    color: black;
     /* Hover effect matches citation hover */
 }
 
@@ -373,7 +390,7 @@ current-task {
     width: 18px;
     height: 18px;
     background-color: white;
-    color: #4682b4;
+    color: #6c757d;
     font-size: 14px;
     font-weight: bold;
     border-radius: 50%;
@@ -383,16 +400,16 @@ current-task {
 
 /* Styling for citation references within the answer */
 .citation-ref {
-    color: #4682b4;
+    color: #6c757d;
     /* Darker blue */
     font-weight: normal;
     /* Not bold */
     cursor: pointer;
-    margin: 0 3px;
+    margin: 0;
 }
 
 .citation-ref:hover {
-    color: #104e8b;
+    color: black;
     /* Slightly darker blue on hover */
     text-decoration: underline;
 }
@@ -571,6 +588,15 @@ code {
     text-overflow: ellipsis;
 }
 
+#graph-container .inline-variable {
+    background-color: #ffeeba;
+    font-family: Consolas, Monaco, 'Andale Mono', monospace;
+    font-size: 0.9em;
+    padding: 0px 4px;
+    border-radius: 3px;
+    border: 1px solid #ccc;
+}
+
 #graph-container .code-box {
     font-family: monospace;
     font-size: 12px;
@@ -588,8 +614,27 @@ code {
     border-radius: 5px;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
     font-size: 14px;
+
+}
+
+.tooltip .code-line {
+    color: black;
+}
+
+.tooltip .tooltip-header {
+    border-bottom: 1px solid #ccc;
+    color: steelblue;
+    max-width: 300px;
+    padding: 5px;
+    padding-top: 0;
+}
+
+.tooltip .tooltip-content {
     max-width: 300px;
     overflow: auto;
+    color: white;
+    white-space: pre-wrap;
+    word-wrap: break-word;
 }
 
 .tree-node-button-container {

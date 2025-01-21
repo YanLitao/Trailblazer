@@ -250,9 +250,9 @@ class Agent {
         });
 
         this._reasoningModel = new ChatOpenAI({
-            model: "o1",
+            model: "o1-mini",
             apiKey: API_KEY,
-            maxTokens: 200000,
+            maxTokens: 128000,
             temperature: 1.0,
             topP: 1,
         });
@@ -1187,7 +1187,7 @@ class Agent {
             if (!this._importantCodePaths.has(pathId)) {
 
                 const paths = this._explorationGraph.findShortestPathFromNode(nodeId);
-
+                console.log("Paths for ", pathId, ": ", paths, " with node ID: ", nodeId);
                 if (paths.length > 0) {
                     this._importantCodePaths.set(pathId, paths.map(path => {
                         const nodes: Node[] = [];
@@ -1330,7 +1330,7 @@ class Agent {
         const updatedFindings = this.updateFindingsSummary(task6Output.filtered_findings);
 
         // Generate the HTML for the findings
-        let concatenatedHtml = "";
+        let concatenatedHtml = "Finding: <ul>";
 
         updatedFindings.forEach(finding => {
             const snippetKeys = `[${finding.snippetKey.map((key: number) => `<span class="citation-ref" data-ref="${key}">${key}</span>`).join(", ")}]`;
@@ -1346,16 +1346,16 @@ class Agent {
             `;
         });
 
-        return concatenatedHtml;
+        return concatenatedHtml + "</ul>";
     }
 
     private processFinalAnswer(finalAnswer: string): string {
-        // Regular expression to find snippetKey references in the format [snippetKey: number]
-        const snippetKeyRegex = /\[snippetKey: (\d+)\]/g;
+        // Updated regular expression to find snippetKey references, including optional negative numbers
+        const snippetKeyRegex = /snippetKey:\s*(-?\d+)/g;
 
         // Function to replace snippetKey with a styled span element
         const replaceSnippetKey = (match: string, snippetKey: string): string => {
-            return `[<span class="citation-ref" data-ref="${snippetKey}">${snippetKey}</span>]`;
+            return `<span class="citation-ref" data-ref="${snippetKey}">${snippetKey}</span>`;
         };
 
         // Function to handle special content inside ** or `
@@ -1410,11 +1410,11 @@ class Agent {
                 if (boldContent) {
                     // Process and wrap bold content with a styled <span>
                     const processedContent = processSpecialContent(boldContent);
-                    return `<span style="font-weight: bold;">${processedContent}</span>`;
+                    return `<span style="font-weight: normal;">${processedContent}</span>`;
                 } else if (inlineCode) {
                     // Process and wrap inline code content with a styled <span>
                     const processedContent = processSpecialContent(inlineCode);
-                    return `<span style="font-family: monospace;">${processedContent}</span>`;
+                    return `<span class="inline-code">${processedContent}</span>`;
                 }
                 return match;
             })
@@ -1733,7 +1733,7 @@ class Agent {
                 2. Generate Final Answer (Only if final_decision_sufficient is true):
                 When sufficient, synthesize a clear and beginner-friendly final answer. Use the following formats for inline elements:
                 - References to Code Snippets: Inline references to code snippets should use the format [snippetKey: number].
-                Example: The method validates the configuration object [snippetKey: 12].
+                Example: The method validates the configuration object [snippetKey: 2]. If there are multiple references, list them in ascending order: [snippetKey: 1, snippetKey: 2].
 
                 - Bold Formatting: Use bold to emphasize key methods, variables, or concepts by wrapping them in a pair of **.
                 Example: The method **validateConfig** is crucial for configuration validation.

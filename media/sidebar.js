@@ -54,7 +54,7 @@ document.getElementById('save-pdf').addEventListener('click', function () {
     html2pdf().from(element).save('search-copilot.pdf');
 });
 
-// Add event listener for watch mode toggle switch
+/* // Add event listener for watch mode toggle switch
 document.getElementById('watch-mode-toggle').addEventListener('change', (event) => {
     const isActive = event.target.checked;
 
@@ -63,7 +63,7 @@ document.getElementById('watch-mode-toggle').addEventListener('change', (event) 
         command: 'toggleWatchMode',
         isActive: isActive
     });
-});
+}); */
 
 // Function to toggle the visibility of the exploration steps
 document.getElementById('toggle-log').addEventListener('click', function () {
@@ -100,13 +100,28 @@ document.getElementById('stop-agent').addEventListener('click', function () {
 
 document.addEventListener("click", function (event) {
     if (event.target.classList.contains("citation-ref")) {
-        const refId = event.target.getAttribute("data-ref");
-        const targetCodeBox = document.querySelector(`.code-box .code-index[data-ref="${refId}"]`);
+        const refId = event.target.getAttribute("data-ref"); // Get the reference ID from the clicked element
+        const targetNodeElement = document.querySelector(`.tree-node.code-box[data-ref="${refId}"]`); // Find the target element by data-ref
+        console.log(refId, targetNodeElement);
+        if (targetNodeElement) {
+            // Dynamically get the current height of the sticky header
+            const stickyHeader = document.querySelector("#sticky-header");
+            const stickyHeaderHeight = stickyHeader ? stickyHeader.offsetHeight : 0;
 
-        if (targetCodeBox) {
-            targetCodeBox.scrollIntoView({ behavior: "smooth", block: "center" });
-            targetCodeBox.classList.add("highlight");
-            setTimeout(() => targetCodeBox.classList.remove("highlight"), 2000);
+            // Calculate the scroll position, accounting for the sticky header height
+            const targetOffset = targetNodeElement.getBoundingClientRect().top + window.scrollY - stickyHeaderHeight;
+
+            // Scroll to the calculated position
+            window.scrollTo({
+                top: targetOffset,
+                behavior: "smooth",
+            });
+
+            // Highlight the target element
+            targetNodeElement.classList.add("highlight");
+            setTimeout(() => targetNodeElement.classList.remove("highlight"), 2000);
+        } else {
+            console.warn(`Target node with data-ref "${refId}" not found.`);
         }
     }
 });
@@ -114,13 +129,30 @@ document.addEventListener("click", function (event) {
 document.addEventListener("mouseover", function (event) {
     if (event.target.classList.contains("citation-ref")) {
         const refId = event.target.getAttribute("data-ref");
-        const targetCodeBox = document.querySelector(`.code-box .code-index[data-ref="${refId}"]`);
+        const targetCodeBox = document.querySelector(`.tree-node.code-box[data-ref="${refId}"] > code`);
 
         if (targetCodeBox) {
+            // Extract file URI and line number from data attributes
+            const fileUri = targetCodeBox.getAttribute("data-file-uri");
+            const lineNumber = targetCodeBox.getAttribute("data-line-number");
+
             // Create tooltip element
-            let tooltip = document.createElement("div");
+            const tooltip = document.createElement("div");
             tooltip.classList.add("tooltip");
-            tooltip.innerHTML = targetCodeBox.parentElement.innerHTML; // Set tooltip content
+
+            // Add a header with file and line information
+            const fileName = fileUri ? fileUri.split("/").pop() : "Unknown file";
+            const header = `<div class="tooltip-header">
+                                ${fileName}, line ${lineNumber}:
+                            </div>`;
+
+            // Add the code content
+            const codeContent = `<div class="tooltip-content">${targetCodeBox.innerHTML}</div>`;
+
+            // Combine header and code content
+            tooltip.innerHTML = header + codeContent;
+
+            // Style and append the tooltip
             document.body.appendChild(tooltip);
 
             // Calculate position
@@ -130,11 +162,11 @@ document.addEventListener("mouseover", function (event) {
             const spaceBelow = window.innerHeight - rect.bottom;
 
             if (spaceBelow >= tooltipRect.height || spaceBelow > spaceAbove) {
-                // Position below
+                // Position below the citation-ref
                 tooltip.style.top = `${rect.bottom + window.scrollY + 5}px`;
                 tooltip.style.left = `${rect.left + window.scrollX}px`;
             } else {
-                // Position above
+                // Position above the citation-ref
                 tooltip.style.top = `${rect.top + window.scrollY - tooltipRect.height - 5}px`;
                 tooltip.style.left = `${rect.left + window.scrollX}px`;
             }
@@ -408,11 +440,11 @@ function renderGraph(data) {
             .style("font-size", "10px")
             .text(d => {
                 if (d.data.snippetKey !== -1) return d.data.snippetKey; // Add snippetKey for labeled nodes
-                if (d.data.isIntermediate) return "+";
+                if (d.data.isIntermediate && d.data.id !== "fake-origin") return "+";
                 return "";
             })
             .on("click", function (event, d) {
-                if (d.data.isIntermediate) {
+                if (d.data.isIntermediate && d.data.id !== "fake-origin") {
                     const rect = d3.select(`#code-box-${generateNodeId(d.data)}`); // Use sanitized ID
                     const isVisible = rect.style("display") === "block"
                     rect.style("display", isVisible ? "none" : "block");
@@ -423,7 +455,7 @@ function renderGraph(data) {
         nodeGroup.append("foreignObject")
             .attr("id", d => `box-${generateNodeId(d.data)}`) // Use sanitized ID for toggling visibility
             .attr("x", d => d.depth * nodeSize + 20)
-            .attr("y", 0) // Position below the text label
+            .attr("y", -10)
             .attr("width", width - margin.right - margin.left - 30) // Adjust for container size
             .attr("height", d => getCodeSnippetHeight(d.data.codeSnippet, d.data.statement)) // Add space for buttons
             .html(d => {
@@ -437,7 +469,7 @@ function renderGraph(data) {
                     // Node with fake-origin as parent
                     descriptionHTML = `
                         <div class="node-description">
-                            <span style="background-color: #ffeeba; font-weight: bold;">${d.data.variable}</span> 
+                            <span class="inline-variable">${d.data.variable}</span> 
                             in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1} 
                             is extracted from your selected code for further exploration.
                         </div>
@@ -447,7 +479,7 @@ function renderGraph(data) {
                     const parentInfo = d.parent.data.variable;
                     descriptionHTML = `
                         <div class="node-description">
-                            <span style="background-color: #ffeeba; font-weight: bold;">${d.data.variable}</span> 
+                            <span class="inline-variable">${d.data.variable}</span> 
                             in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}
                             is another reference to ${parentInfo}.
                         </div>
@@ -457,7 +489,7 @@ function renderGraph(data) {
                     const parentInfo = d.parent.data.variable;
                     descriptionHTML = `
                         <div class="node-description">
-                            Found <span style="background-color: #ffeeba; font-weight: bold;">${d.data.variable}</span>
+                            Found <span class="inline-variable">${d.data.variable}</span>
                             in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}, because ${parentInfo} was assigned to it.
                         </div>
                     `;
@@ -465,15 +497,16 @@ function renderGraph(data) {
                     // Default Case
                     descriptionHTML = `
                         <div class="node-description">
-                            Found the definition of <span style="background-color: #ffeeba; font-weight: bold;">${d.data.variable}</span>
+                            Found the definition of <span class="inline-variable">${d.data.variable}</span>
                             in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}.
                         </div>
                     `;
                 }
 
-                const borderStyle = d.data.isIntermediate ? "1px dashed #aaa" : "1px solid #aaa";
+                let borderStyle = d.data.isIntermediate ? "1px dashed #aaa" : "1px solid #aaa";
                 let displayment = d.data.isIntermediate ? "none" : "block";
                 if (d.data.id === "fake-origin") {
+                    borderStyle = "1px solid #aaa";
                     displayment = "block";
                 }
 
@@ -483,14 +516,14 @@ function renderGraph(data) {
                     snippetLines = d.data.codeSnippet.split("\n").map((line, index) => {
                         if (line.trim() === d.data.codeLine.trim()) {
                             // Highlight the variable within the line
-                            const highlightedVariable = `<span style="background-color: #ffeeba; font-weight: bold;">${d.data.variable}</span>`;
+                            const highlightedVariable = `<span class="inline-variable">${d.data.variable}</span>`;
                             const highlightedLine = line.replace(
                                 new RegExp(`\\b${d.data.variable}\\b`, "g"),
                                 highlightedVariable
                             );
 
                             // Highlight the full line
-                            return `<span style="background-color: #d1ecf1;">${highlightedLine}</span>`;
+                            return `<span class="code-line" style="background-color: #d1ecf1;">${highlightedLine}</span>`;
                         }
                         return line;
                     }).join("\n");
@@ -499,8 +532,9 @@ function renderGraph(data) {
                 let htmlContent = `
                     ${descriptionHTML}
                     <div id="code-box-${generateNodeId(d.data)}" class="tree-node code-box" 
-                         style="border: ${borderStyle}; display: ${displayment};">
-                        <code style="white-space: pre;">${snippetLines}</code>
+                         style="border: ${borderStyle}; display: ${displayment};"
+                         data-ref="${d.data.snippetKey}">
+                        <code style="white-space: pre;" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">${snippetLines}</code>
                         <div class="tree-node-button-container">
                             <!-- Replay Button -->
                             <button class="replay-btn" title="Replay" data-node-id="${d.data.id}">
@@ -678,9 +712,9 @@ function renderGraph(data) {
                         // highlight the variable in the code line
                         const highlightedLine = ancestor.codeLine.replace(
                             new RegExp(`\\b${ancestor.variable}\\b`, "g"),
-                            `<span style="background-color: #d1ecf1;">${ancestor.variable}</span>`
+                            `<span style="background-color: #ffeeba;">${ancestor.variable}</span>`
                         );
-                        const variableHighlight = `<span style="background-color: #d1ecf1; ">${ancestor.variable}</span>`;
+                        const variableHighlight = `<span style="background-color: #ffeeba; ">${ancestor.variable}</span>`;
                         return `
                             <div 
                                 class="sticky-header-item"

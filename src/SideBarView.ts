@@ -392,25 +392,14 @@ export class SidebarView implements vscode.WebviewViewProvider {
                         <button id="toggle-log" class="action-btn">See full log</button>
                         <button id="save-pdf" class="action-btn">Save Log</button>
                     </div>
-                    <p id="preliminary-answer">
-                        Findings:
-                        <ul id="preliminary-answer-text"></ul>
-                    </p>
-                    <p>Snippets:</p>
-                    <div id="findings"></div>
-                    <p id="still-to-be-found">Still to be found: <span id="exploration-summary"></span></p>
-                    <div id="button-container">
-                        <label for="watch-mode-toggle" class="switch-label">Watch Mode</label>
-                        <label class="switch">
-                            <input type="checkbox" id="watch-mode-toggle">
-                            <span class="slider round"></span>
-                        </label>
+                    <div id="preliminary-answer-text">
                     </div>
+                    <p id="still-to-be-found">Still to be found: <span id="exploration-summary"></span></p>
                 </div>
+                <div id="graph-container"></div>
                 <div id="current-task">
                     <div id="current-task-content"></div>
                 </div>
-                <div id="graph-container"></div>
                 <div id="exploration-steps" style="display:none;">
                     <div class="task">
                         <div class="task-header">
@@ -673,9 +662,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 : (task3Output.next_step_summary || "");
 
             let findingsHtml = "";
-            if (importantCodeSnippets && importantCodePaths) {
+            /* if (importantCodeSnippets && importantCodePaths) {
                 findingsHtml = await this.addTask5And6Results(importantCodeSnippets, importantCodePaths);
-            }
+            } */
 
             // Generate HTML for exploration steps
             let explorationStepsHtml = `
