@@ -413,7 +413,22 @@ code {
     padding: 0;
     font-size: 0.9em;
     text-shadow: none;
-    background-color: #f5f2f0;
+    background-color: rgb(0, 0, 0, 0);
+    color: black;
+    font-family: Consolas, Monaco, 'Andale Mono', monospace;
+    direction: ltr;
+    text-align: left;
+    white-space: pre;
+    word-spacing: normal;
+    word-break: normal;
+    line-height: 1.5;
+    -moz-tab-size: 4;
+    -o-tab-size: 4;
+    tab-size: 4;
+    -webkit-hyphens: none;
+    -moz-hyphens: none;
+    -ms-hyphens: none;
+    hyphens: none
 }
 
 .highlighted-code {
@@ -516,9 +531,7 @@ code {
     background-color: #f9f9f9;
     border-bottom: 1px solid #ccc;
     padding: 5px 10px;
-    font-family: monospace;
-    font-size: 12px;
-    font-weight: normal;
+    font-size: 0.9em;
     z-index: 1000;
     white-space: nowrap;
     overflow: hidden;
@@ -530,6 +543,9 @@ code {
     padding: 8px;
     background: #f9f9f9;
     border-bottom: 1px solid #eee;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 #graph-container .node circle {
@@ -549,6 +565,12 @@ code {
     stroke-width: 1.5px;
 }
 
+#graph-container .node-description {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 #graph-container .code-box {
     font-family: monospace;
     font-size: 12px;
@@ -556,6 +578,7 @@ code {
     border: 1px solid #ddd;
     border-radius: 5px;
     padding: 5px;
+    color: black;
 }
 
 .tooltip {

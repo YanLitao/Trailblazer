@@ -49,8 +49,8 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 const { fileUri, lineNumber, variable } = message;
                 this.createZoneWidget(fileUri, lineNumber, true, variable);
             } else if (message.command === 'replaySnippet') {
-                const { fileUri, lineNumber, variable, tool, finding } = message;
-                this.createZoneWidget(fileUri, lineNumber, false, variable, tool, finding);
+                const { fileUri, lineNumber, variable, tool, finding, incomingMessage, outgoingMessage } = message;
+                this.createZoneWidget(fileUri, lineNumber, false, variable, tool, finding, incomingMessage, outgoingMessage);
             } else if (message.command === 'stopAgent') {
                 this.agentIsDone();
                 vscode.commands.executeCommand('extension.stopAgent');
@@ -177,7 +177,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
         questionFlag: boolean = false,
         variable: string = "",
         tool: string = "",
-        finding: string = ""
+        finding: string = "",
+        incomingMessage: string = "",
+        outgoingMessage: string = ""
     ) {
         if (fileUri === "" || lineNumber === -1) {
             return;
@@ -196,7 +198,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
             const highlightLine = (): vscode.TextEditorDecorationType => {
                 const lineRange = document.lineAt(lineNumber).range;
                 const lineDecoration = vscode.window.createTextEditorDecorationType({
-                    backgroundColor: "rgba(173, 216, 230, 0.5)", // Light blue background
+                    backgroundColor: "rgba(173, 216, 230)", // Light blue background
                 });
                 editor.setDecorations(lineDecoration, [lineRange]);
                 return lineDecoration;
@@ -206,10 +208,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
             const lineDecoration = highlightLine();
 
             if (!questionFlag) {
-                // Prepare content text for the decoration
-                const findingText = finding.length > 0 ? "Finding: " + finding + " " : "";
-                const contentText = findingText + "Using " + tool + " on " + variable;
-
                 // Highlight the variable in the line if it exists
                 let variableDecoration: vscode.TextEditorDecorationType | undefined;
                 if (variable && variable.trim() !== "") {
@@ -222,25 +220,68 @@ export class SidebarView implements vscode.WebviewViewProvider {
                         const variableRange = new vscode.Range(variableStart, variableEnd);
 
                         variableDecoration = vscode.window.createTextEditorDecorationType({
-                            backgroundColor: "rgba(255, 223, 186, 0.5)", // Light orange background
+                            backgroundColor: "rgba(255, 223, 186)", // Light orange background
                             borderRadius: "3px",
                         });
                         editor.setDecorations(variableDecoration, [variableRange]);
                     }
                 }
 
-                // Add a text decoration below the line
-                const widgetPosition = new vscode.Position(lineNumber + 1, 0); // Below the target line
-                const widgetRange = new vscode.Range(widgetPosition, widgetPosition);
-                const textDecoration = vscode.window.createTextEditorDecorationType({
-                    after: {
-                        contentText: contentText,
-                        backgroundColor: "lightyellow",
-                        margin: "4px 0",
-                        border: "1px solid lightgray",
-                    },
-                });
-                editor.setDecorations(textDecoration, [widgetRange]);
+                // Helper to get indents from a line
+                const getIndent = (line: string): string => {
+                    return line.match(/^\s*/)?.[0] || "";
+                };
+
+                const lineText = document.lineAt(lineNumber).text;
+                const indent = getIndent(lineText);
+
+                // Add finding text below the target line if not empty
+                let findingTextDecoration: vscode.TextEditorDecorationType | undefined;
+                if (finding) {
+                    const findingPosition = new vscode.Position(lineNumber + 1, 0);
+                    const findingRange = new vscode.Range(findingPosition, findingPosition);
+                    findingTextDecoration = vscode.window.createTextEditorDecorationType({
+                        after: {
+                            contentText: `${indent}Finding: ${finding}`,
+                            backgroundColor: "lightyellow",
+                            margin: "4px 0",
+                            border: "1px solid lightgray",
+                        },
+                    });
+                    editor.setDecorations(findingTextDecoration, [findingRange]);
+                }
+
+                // Add incoming text above the target line
+                let incomingTextDecoration: vscode.TextEditorDecorationType | undefined;
+                if (incomingMessage) {
+                    const incomingPosition = new vscode.Position(lineNumber - 1, 0);
+                    const incomingRange = new vscode.Range(incomingPosition, incomingPosition);
+                    incomingTextDecoration = vscode.window.createTextEditorDecorationType({
+                        after: {
+                            contentText: `${indent}${incomingMessage}`,
+                            backgroundColor: "lightyellow",
+                            margin: "4px 0",
+                            border: "1px solid lightgray",
+                        },
+                    });
+                    editor.setDecorations(incomingTextDecoration, [incomingRange]);
+                }
+
+                // Add outgoing text two lines below the target line if not empty
+                let outgoingTextDecoration: vscode.TextEditorDecorationType | undefined;
+                if (outgoingMessage) {
+                    const outgoingPosition = finding ? new vscode.Position(lineNumber + 2, 0) : new vscode.Position(lineNumber + 1, 0);
+                    const outgoingRange = new vscode.Range(outgoingPosition, outgoingPosition);
+                    outgoingTextDecoration = vscode.window.createTextEditorDecorationType({
+                        after: {
+                            contentText: `${indent}${outgoingMessage}`,
+                            backgroundColor: "lightyellow",
+                            margin: "4px 0",
+                            border: "1px solid lightgray",
+                        },
+                    });
+                    editor.setDecorations(outgoingTextDecoration, [outgoingRange]);
+                }
 
                 // Wait for 8 seconds
                 await new Promise((resolve) => setTimeout(resolve, 8000));
@@ -248,7 +289,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 // Clean up all decorations
                 lineDecoration.dispose();
                 if (variableDecoration) variableDecoration.dispose();
-                textDecoration.dispose();
+                if (findingTextDecoration) findingTextDecoration.dispose();
+                if (incomingTextDecoration) incomingTextDecoration.dispose();
+                if (outgoingTextDecoration) outgoingTextDecoration.dispose();
             } else {
                 // Show an input box and highlight until it is closed
                 try {
@@ -929,6 +972,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
         if (seen.has(node)) {
             return null; // Avoid circular references
         }
+        node.codeSnippet = stripLineIndentation(node.codeSnippet);
         seen.add(node);
 
         const { children, ...rest } = node; // Exclude children to prevent infinite recursion

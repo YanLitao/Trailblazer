@@ -2,10 +2,6 @@ import * as vscode from 'vscode';
 import * as ts from "typescript";
 import * as path from 'path';
 import * as url from 'url';
-import { start } from 'repl';
-import { get } from 'http';
-import exp from 'constants';
-import { sleep } from 'langchain/util/time';
 
 // Function to extract the file name from a file URI
 export function getFileNameFromUri(fileUri: string | undefined): string {

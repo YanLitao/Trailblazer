@@ -72,6 +72,19 @@ export class ExplorationGraph {
         this.nodes.set(this.fakeOriginId, fakeOriginNode);
     }
 
+    updateFakeOrigin(fileUri: string, lineNumber: number, codeSnippet: string) {
+        const fakeOriginNode: Node = {
+            id: this.fakeOriginId,
+            fileUri: fileUri,
+            lineNumber: lineNumber,
+            variable: "fakeOrigin",
+            codeLine: "",
+            codeSnippet: codeSnippet,
+            edges: new Set(),
+        };
+        this.nodes.set(this.fakeOriginId, fakeOriginNode);
+    }
+
     // Add a real origin and link it to the fake origin
     addOrigin(originNode: Node) {
         if (!this.nodes.has(originNode.id)) {
@@ -441,16 +454,18 @@ export class ExplorationGraph {
             );
 
             // Find the shortest path to the branch or tree
-            const pathToTree = this.findShortestPathToTree(newNodeId, nodeMap);
+            const pathToTree = this.findShortestPathToTree(newNodeId, nodeMap, branchNodeId);
 
             if (pathToTree.length === 0) {
                 console.warn(`Could not find a path to integrate node ${newNodeId} into the tree.`);
                 return;
             }
 
+            const reversedPath = pathToTree.reverse();
+
             // Integrate the path into the branch or tree
             let parentNode = branchNode!;
-            for (const { node, edge } of pathToTree) {
+            for (const { node, edge } of reversedPath) {
                 if (!nodeMap.has(node.id)) {
                     const newChild: TreeNode = {
                         id: node.id,
@@ -479,7 +494,8 @@ export class ExplorationGraph {
 
     findShortestPathToTree(
         startNodeId: string,
-        nodeMap: Map<string, TreeNode>
+        nodeMap: Map<string, TreeNode>,
+        branchNodeId?: string
     ): { node: Node; edge?: Edge }[] {
         if (!this.nodes.has(startNodeId)) {
             console.warn(`Node with ID ${startNodeId} does not exist in the graph.`);
@@ -491,13 +507,31 @@ export class ExplorationGraph {
             { path: [{ node: this.getNode(startNodeId)! }] },
         ];
 
+        let prioritizedConnection: { path: { node: Node; edge?: Edge }[] } | null = null;
+        let fakeOriginPath: { path: { node: Node; edge?: Edge }[] } | null = null;
+
         while (queue.length > 0) {
             const { path } = queue.shift()!;
             const currentNodeId = path[path.length - 1].node.id;
 
             // Check if the current node is in the tree
             if (nodeMap.has(currentNodeId)) {
-                return path; // Found a connection to the tree
+                const treeNode = nodeMap.get(currentNodeId)!;
+
+                // If a branchNodeId is provided, prioritize connecting to its parent node
+                if (branchNodeId && treeNode.id === branchNodeId) {
+                    return path; // Found the branch node
+                }
+
+                // Avoid directly connecting to the fake-origin if other nodes are available
+                if (!prioritizedConnection && currentNodeId !== "fake-origin") {
+                    prioritizedConnection = { path }; // Keep track of the first non-fake-origin connection
+                }
+
+                // Track connection to the fake-origin as a fallback
+                if (currentNodeId === "fake-origin" && !fakeOriginPath) {
+                    fakeOriginPath = { path };
+                }
             }
 
             visited.add(currentNodeId);
@@ -514,6 +548,18 @@ export class ExplorationGraph {
                     });
                 }
             }
+        }
+
+        // Return the prioritized non-fake-origin connection if found
+        if (prioritizedConnection) {
+            console.log("Prioritized connection found.");
+            return prioritizedConnection.path;
+        }
+
+        // Fallback to fake-origin connection if no other connections are found
+        if (fakeOriginPath) {
+            console.log("Fallback to fake-origin connection.");
+            return fakeOriginPath.path;
         }
 
         return []; // No path found

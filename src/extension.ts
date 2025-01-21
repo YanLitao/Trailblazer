@@ -363,6 +363,12 @@ class Agent {
         console.warn("Running Task 1");
         const fileUriString = uri.toString();
         const surroundingCode = await getLineTextFromRange(uri, startLine, endLine);
+
+        // update fake origin node
+        if (!this._followUpBranchNodeId) {
+            this._explorationGraph.updateFakeOrigin(fileUriString, startLine, surroundingCode);
+        }
+
         const codeContext: { file_uri: string, line_number: number, code_line: string, variables: Set<string> }[] = [];
         let totalVariables = 0;
         let sub_problems: {
@@ -480,29 +486,32 @@ class Agent {
         for (const subProblem of task1Output.sub_problems) {
             const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, subProblem.code_context.line_number);
             subProblem.code_context.file_uri = fileUriString; // when running the agent, sometimes the file_uri is not included in the input
-            // Create a node for each sub-problem and mark it as an invoking place
-            const nodeId = `${fileUriString}:${subProblem.code_context.line_number}:${subProblem.code_context.invoke_variable}`;
-            const codeLine = await getLineText(uri, subProblem.code_context.line_number);
-            let codeSnippet = statementText;
-            // const accurateLineNumber = getLineNumber(statementText, subProblem.code_context.invoke_variable, startLineNum);
-            if (statementText.split("\n").length == 1) {
-                const { contextText, startContextLine } = await getSurroundingCode(uri, subProblem.code_context.line_number, subProblem.code_context.line_number);
-                codeSnippet = contextText;
-            }
-            const newNode: Node = {
-                id: nodeId,
-                fileUri: fileUriString,
-                lineNumber: subProblem.code_context.line_number,
-                variable: subProblem.code_context.invoke_variable,
-                codeLine: codeLine,
-                codeSnippet: codeSnippet,
-                edges: new Set(),
-            };
-            if (!fromID || startLine <= subProblem.code_context.line_number && subProblem.code_context.line_number <= endLine) {
-                this._explorationGraph.addOrigin(newNode);
-                if (!fromID) fromID = nodeId;
-            } else {
-                this._explorationGraph.upsertNode(fromID, fileUriString, subProblem.code_context.line_number, subProblem.code_context.invoke_variable, "assignment");
+
+            if (!this._followUpBranchNodeId) {
+                // Create a node for each sub-problem and mark it as an invoking place
+                const nodeId = `${fileUriString}:${subProblem.code_context.line_number}:${subProblem.code_context.invoke_variable}`;
+                const codeLine = await getLineText(uri, subProblem.code_context.line_number);
+                let codeSnippet = statementText;
+                // const accurateLineNumber = getLineNumber(statementText, subProblem.code_context.invoke_variable, startLineNum);
+                if (statementText.split("\n").length == 1) {
+                    const { contextText, startContextLine } = await getSurroundingCode(uri, subProblem.code_context.line_number, subProblem.code_context.line_number);
+                    codeSnippet = contextText;
+                }
+                const newNode: Node = {
+                    id: nodeId,
+                    fileUri: fileUriString,
+                    lineNumber: subProblem.code_context.line_number,
+                    variable: subProblem.code_context.invoke_variable,
+                    codeLine: codeLine,
+                    codeSnippet: codeSnippet,
+                    edges: new Set(),
+                };
+                if (!fromID || startLine <= subProblem.code_context.line_number && subProblem.code_context.line_number <= endLine) {
+                    this._explorationGraph.addOrigin(newNode);
+                    if (!fromID) fromID = nodeId;
+                } else {
+                    this._explorationGraph.upsertNode(fromID, fileUriString, subProblem.code_context.line_number, subProblem.code_context.invoke_variable, "assignment");
+                }
             }
         }
 

@@ -320,6 +320,7 @@ function renderGraph(data) {
         <button id="play-pause"><i class="fa-solid fa-pause"></i></button>
         <button id="next-step"><i class="fa-solid fa-forward-step"></i></button>
         <button id="jump-to-end"><i class="fa-solid fa-forward-fast"></i></button>
+        <button id="exit-replay"><i class="fa-solid fa-times"></i></button>
     `;
     container.appendChild(controlPanel);
 
@@ -331,6 +332,7 @@ function renderGraph(data) {
         .style("font", "12px sans-serif");
 
     let isPaused = false;
+    let replayMode = false;
     let currentTimeout = null;
     let currentNodes = [];
     let currentStepIndex = 0;
@@ -418,32 +420,87 @@ function renderGraph(data) {
                 }
             });
 
-        // Add text labels
-        nodeGroup.append("text")
-            .attr("x", d => d.depth * nodeSize + 20)
-            .attr("dy", "0.32em")
-            .text(d => {
-                if (d.data.id === "fake-origin") {
-                    return "Exploration start point"; // Label for fake origin
-                }
-                return `Used "find ${d.data.tool}" to reach "${d.data.variable}" in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}:`;
-            });
-
-        // Add code snippets as rectangles
         nodeGroup.append("foreignObject")
             .attr("id", d => `box-${generateNodeId(d.data)}`) // Use sanitized ID for toggling visibility
-            .attr("x", d => d.depth * nodeSize + 10)
-            .attr("y", 20) // Position below the text label
+            .attr("x", d => d.depth * nodeSize + 20)
+            .attr("y", 0) // Position below the text label
             .attr("width", width - margin.right - margin.left - 30) // Adjust for container size
             .attr("height", d => getCodeSnippetHeight(d.data.codeSnippet, d.data.statement)) // Add space for buttons
             .html(d => {
-                if (d.data.id === "fake-origin") return ""; // No rect for fake origin
-                let borderStyle = d.data.isIntermediate ? "1px dashed #aaa" : "1px solid #aaa";
+                // Description Text for Each Node
+                let descriptionHTML = "";
+                if (d.data.id === "fake-origin") {
+                    descriptionHTML = `<div class="node-description">Start exploration 
+                    in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1} </div>
+                    `;
+                } else if (d.parent && d.parent.data.id === "fake-origin") {
+                    // Node with fake-origin as parent
+                    descriptionHTML = `
+                        <div class="node-description">
+                            <span style="background-color: #ffeeba; font-weight: bold;">${d.data.variable}</span> 
+                            in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1} 
+                            is extracted from your selected code for further exploration.
+                        </div>
+                    `;
+                } else if (d.data.tool === "reference") {
+                    // Reference Node
+                    const parentInfo = d.parent.data.variable;
+                    descriptionHTML = `
+                        <div class="node-description">
+                            <span style="background-color: #ffeeba; font-weight: bold;">${d.data.variable}</span> 
+                            in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}
+                            is another reference to ${parentInfo}.
+                        </div>
+                    `;
+                } else if (d.data.tool === "assignment") {
+                    // Assignment Node
+                    const parentInfo = d.parent.data.variable;
+                    descriptionHTML = `
+                        <div class="node-description">
+                            Found <span style="background-color: #ffeeba; font-weight: bold;">${d.data.variable}</span>
+                            in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}, because ${parentInfo} was assigned to it.
+                        </div>
+                    `;
+                } else {
+                    // Default Case
+                    descriptionHTML = `
+                        <div class="node-description">
+                            Found the definition of <span style="background-color: #ffeeba; font-weight: bold;">${d.data.variable}</span>
+                            in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}.
+                        </div>
+                    `;
+                }
+
+                const borderStyle = d.data.isIntermediate ? "1px dashed #aaa" : "1px solid #aaa";
                 let displayment = d.data.isIntermediate ? "none" : "block";
+                if (d.data.id === "fake-origin") {
+                    displayment = "block";
+                }
+
+                let snippetLines = d.data.codeSnippet;
+                // Highlight the line containing `codeLine` and the `variable`
+                if (d.data.id !== "fake-origin") {
+                    snippetLines = d.data.codeSnippet.split("\n").map((line, index) => {
+                        if (line.trim() === d.data.codeLine.trim()) {
+                            // Highlight the variable within the line
+                            const highlightedVariable = `<span style="background-color: #ffeeba; font-weight: bold;">${d.data.variable}</span>`;
+                            const highlightedLine = line.replace(
+                                new RegExp(`\\b${d.data.variable}\\b`, "g"),
+                                highlightedVariable
+                            );
+
+                            // Highlight the full line
+                            return `<span style="background-color: #d1ecf1;">${highlightedLine}</span>`;
+                        }
+                        return line;
+                    }).join("\n");
+                }
+
                 let htmlContent = `
+                    ${descriptionHTML}
                     <div id="code-box-${generateNodeId(d.data)}" class="tree-node code-box" 
-             style="border: ${borderStyle}; display: ${displayment};">
-                        <code style="white-space: pre;">${d.data.codeSnippet}</code>
+                         style="border: ${borderStyle}; display: ${displayment};">
+                        <code style="white-space: pre;">${snippetLines}</code>
                         <div class="tree-node-button-container">
                             <!-- Replay Button -->
                             <button class="replay-btn" title="Replay" data-node-id="${d.data.id}">
@@ -471,6 +528,7 @@ function renderGraph(data) {
             });
 
         nodeGroup.selectAll(".replay-btn").on("click", function (event) {
+            replayMode = true;
             const nodeId = event.target.getAttribute("data-node-id");
 
             // Find the clicked node by its ID
@@ -524,6 +582,7 @@ function renderGraph(data) {
         // Include both the code snippet and statement in the temporary div
         let htmlContent = `
             <div class="tree-node">
+                <div class="node-description">Node description</div>
                 <div class="code-box">
                     <code style="white-space: pre;">${codeSnippet}</code>
                     <div class="tree-node-button-container">
@@ -565,6 +624,13 @@ function renderGraph(data) {
         if (!stickyHeader) {
             stickyHeader = document.createElement("div");
             stickyHeader.id = "sticky-header";
+            stickyHeader.style.position = "sticky";
+            stickyHeader.style.top = "0";
+            stickyHeader.style.background = "white";
+            stickyHeader.style.padding = "10px";
+            stickyHeader.style.boxShadow = "0 2px 4px rgba(0,0,0,0.1)";
+            stickyHeader.style.zIndex = "1000";
+            stickyHeader.style.display = "none"; // Initially hidden
             document.body.prepend(stickyHeader);
         }
 
@@ -572,6 +638,13 @@ function renderGraph(data) {
 
         // Add scroll listener
         window.addEventListener("scroll", () => {
+            const containerRect = container.getBoundingClientRect();
+            const isVisible = containerRect.top < 0;
+            if (isVisible) {
+                stickyHeader.style.display = "block";
+            } else {
+                stickyHeader.style.display = "none";
+            }
             // Find the first visible node
             const visibleNode = nodeElements.find((node) => {
                 let stickyHeaderRect = stickyHeader.getBoundingClientRect();
@@ -597,18 +670,22 @@ function renderGraph(data) {
                         const indent = "&nbsp;".repeat(index * 4); // Add indent for hierarchy
                         if (ancestor.id === "fake-origin") {
                             return `
-                                <div class="sticky-header-item" 
-                                    style="cursor: pointer; padding: 4px;" 
+                                <div class="sticky-header-item"
                                     data-node-id="${generateNodeId(ancestor)}">
                                     <strong>Exploration start point</strong>
                                 </div>`;
                         }
+                        // highlight the variable in the code line
+                        const highlightedLine = ancestor.codeLine.replace(
+                            new RegExp(`\\b${ancestor.variable}\\b`, "g"),
+                            `<span style="background-color: #d1ecf1;">${ancestor.variable}</span>`
+                        );
+                        const variableHighlight = `<span style="background-color: #d1ecf1; ">${ancestor.variable}</span>`;
                         return `
                             <div 
-                                class="sticky-header-item" 
-                                style="cursor: pointer; padding: 4px;" 
+                                class="sticky-header-item"
                                 data-node-id="${generateNodeId(ancestor)}">
-                                ${indent}${ancestor.fileUri.split('/').pop()}:${ancestor.lineNumber + 1}:${ancestor.variable} in "${ancestor.codeLine}"
+                                ${indent}${ancestor.fileUri.split('/').pop()}:${ancestor.lineNumber + 1}:${variableHighlight} in "${highlightedLine}"
                             </div>`;
                     })
                     .join("");
@@ -619,9 +696,19 @@ function renderGraph(data) {
                         const targetNodeId = event.target.getAttribute("data-node-id");
                         const targetNodeElement = document.querySelector(`#node-${targetNodeId}`);
                         if (targetNodeElement) {
-                            targetNodeElement.scrollIntoView({
+                            console.log("targetNodeElement: ", targetNodeElement);
+
+                            // Dynamically get the current height of the sticky header
+                            const stickyHeader = document.querySelector("#sticky-header");
+                            const stickyHeaderHeight = stickyHeader ? stickyHeader.offsetHeight : 0;
+
+                            // Calculate the scroll position, accounting for the sticky header height
+                            const targetOffset = targetNodeElement.getBoundingClientRect().top + window.scrollY - stickyHeaderHeight;
+
+                            // Scroll to the calculated position
+                            window.scrollTo({
+                                top: targetOffset,
                                 behavior: "smooth",
-                                block: "start",
                             });
                         }
                     });
@@ -643,17 +730,26 @@ function renderGraph(data) {
     }
 
     function ensureControlPanelVisibility() {
+        if (!replayMode) {
+            controlPanel.style.display = "none"; // Hide the control panel if not in replay mode
+            return;
+        }
+
+        // Get the container's bounding rectangle
         const containerRect = container.getBoundingClientRect();
         const isVisible =
             containerRect.top < window.innerHeight &&
             containerRect.bottom > 0;
 
         if (isVisible) {
-            controlPanel.style.display = "flex";
+            controlPanel.style.display = "flex"; // Show the control panel when the container is visible
         } else {
-            controlPanel.style.display = "none";
+            controlPanel.style.display = "none"; // Hide the control panel when the container is not visible
         }
     }
+
+    // Add a scroll event listener to dynamically adjust control panel visibility
+    window.addEventListener("scroll", ensureControlPanelVisibility);
 
     function animateLines(nodes) {
         svg.selectAll(".node, .link").style("opacity", 0.2);
@@ -674,14 +770,55 @@ function renderGraph(data) {
         const targetNode = nodes[index + 1];
         d3.select(`#link-${generateNodeId(sourceNode.data)}-${generateNodeId(targetNode.data)}`).style("opacity", 1);
 
+        // Generate incoming and outgoing messages
+        const { incomingMessage, outgoingMessage } = generateMessages(nodes, index);
+
         // Schedule the next step
         let timeout = 8000; // Default timeout
-        if (index === 0) timeout = 2000;
+        if (index === 0) timeout = 5000;
         currentTimeout = setTimeout(() => {
-            postReplayMessage(targetNode);
+            postReplayMessage(targetNode, incomingMessage, outgoingMessage);
             stepThroughNodes(nodes, index + 1);
         }, timeout);
+    }
 
+    function generateMessages(nodes, index) {
+        let incomingMessage = "";
+        let outgoingMessage = "";
+
+        // Generate incoming message
+        if (index === 0 || nodes[index - 1].data.id === "fake-origin") {
+            incomingMessage = "";
+        } else {
+            const previousNode = nodes[index - 1];
+            const currentNode = nodes[index];
+            if (currentNode.data.tool === "definition") {
+                incomingMessage = `Found the definition of ${previousNode.data.variable}`;
+            } else if (currentNode.data.tool === "reference") {
+                incomingMessage = `Found another reference of ${previousNode.data.variable}`;
+            } else if (currentNode.data.tool === "assignment") {
+                incomingMessage = `${previousNode.data.variable} is assigned to ${currentNode.data.variable}.`;
+            }
+        }
+
+        // Generate outgoing message
+        if (index + 1 >= nodes.length) {
+            outgoingMessage = "";
+        } else {
+            const nextNode = nodes[index + 1];
+            const currentNode = nodes[index];
+            if (currentNode.data.id === "fake-origin") {
+                outgoingMessage = `Next, explore ${nextNode.data.variable} from your selected code.`;
+            } else if (nextNode.data.tool === "definition") {
+                outgoingMessage = `Next, find the definition of ${currentNode.data.variable}`;
+            } else if (nextNode.data.tool === "reference") {
+                outgoingMessage = `Next, find another reference of ${currentNode.data.variable}`;
+            } else if (nextNode.data.tool === "assignment") {
+                outgoingMessage = `Next, find another variable that ${currentNode.data.variable} is assigned to.`;
+            }
+        }
+
+        return { incomingMessage, outgoingMessage };
     }
 
     document.getElementById("play-pause").addEventListener("click", function () {
@@ -695,6 +832,10 @@ function renderGraph(data) {
         } else {
             icon.classList.remove("fa-play");
             icon.classList.add("fa-pause");
+
+            // Generate messages for the current step
+            const { incomingMessage, outgoingMessage } = generateMessages(currentNodes, currentStepIndex);
+            postReplayMessage(currentNodes[currentStepIndex], incomingMessage, outgoingMessage);
             stepThroughNodes(currentNodes, currentStepIndex); // Resume the animation
         }
     });
@@ -717,8 +858,9 @@ function renderGraph(data) {
             d3.select(`#link-${generateNodeId(secondPreviousNode.data)}-${generateNodeId(previousNode.data)}`).style("opacity", 1);
         }
 
-        // Post message to VSCode to jump to the previous node's line
-        postReplayMessage(previousNode);
+        // Generate messages for the previous step
+        const { incomingMessage, outgoingMessage } = generateMessages(currentNodes, currentStepIndex);
+        postReplayMessage(previousNode, incomingMessage, outgoingMessage);
 
         // Scroll to the previous node
         document.getElementById(`node-${generateNodeId(previousNode.data)}`).scrollIntoView({ behavior: "smooth", block: "center" });
@@ -737,8 +879,9 @@ function renderGraph(data) {
 
         currentStepIndex++; // Move forward one step
 
-        // Post message to VSCode to jump to the next node's line
-        postReplayMessage(nextNode);
+        // Generate messages for the next step
+        const { incomingMessage, outgoingMessage } = generateMessages(currentNodes, currentStepIndex);
+        postReplayMessage(nextNode, incomingMessage, outgoingMessage);
 
         // Scroll to the next node
         document.getElementById(`node-${generateNodeId(nextNode.data)}`).scrollIntoView({ behavior: "smooth", block: "center" });
@@ -752,8 +895,9 @@ function renderGraph(data) {
         // Reset opacity for all nodes and links
         svg.selectAll(".node, .link").style("opacity", 0.2);
 
-        // Post message to VSCode to jump to the first node's line
-        postReplayMessage(firstNode);
+        // Generate messages for the first step
+        const { incomingMessage, outgoingMessage } = generateMessages(currentNodes, 0);
+        postReplayMessage(firstNode, incomingMessage, outgoingMessage);
 
         // Restart the animation
         currentStepIndex = 0; // Reset the step index
@@ -774,8 +918,9 @@ function renderGraph(data) {
             }
         });
 
-        // Post message to VSCode to jump to the last node's line
-        postReplayMessage(lastNode);
+        // Generate messages for the last step
+        const { incomingMessage, outgoingMessage } = generateMessages(currentNodes, currentNodes.length - 1);
+        postReplayMessage(lastNode, incomingMessage, outgoingMessage);
 
         // Update the step index to the last node
         currentStepIndex = currentNodes.length - 1;
@@ -784,14 +929,35 @@ function renderGraph(data) {
         document.getElementById(`node-${generateNodeId(lastNode.data)}`).scrollIntoView({ behavior: "smooth", block: "center" });
     });
 
-    function postReplayMessage(node) {
+    // Define the exit-replay functionality
+    document.getElementById("exit-replay").addEventListener("click", function () {
+        // 1. Hide the control panel
+        controlPanel.style.display = "none";
+
+        // 2. Reset the opacity of all nodes and links
+        svg.selectAll(".node, .link").style("opacity", 1);
+
+        // 3. Handle replay variables
+        isPaused = false; // Reset the pause state
+        replayMode = false; // Reset the replay mode
+        if (currentTimeout) {
+            clearTimeout(currentTimeout); // Clear any ongoing timeout to stop replay
+            currentTimeout = null; // Reset the timeout reference
+        }
+        currentNodes = []; // Clear the current replay nodes
+        currentStepIndex = 0; // Reset the replay step index
+    });
+
+    function postReplayMessage(node, incomingMessage, outgoingMessage) {
         vscode.postMessage({
             command: "replaySnippet",
             fileUri: node.data.fileUri,
             lineNumber: node.data.lineNumber,
             variable: node.data.variable,
             tool: node.data.tool,
-            finding: node.data.statement
+            finding: node.data.statement,
+            incomingMessage: incomingMessage,
+            outgoingMessage: outgoingMessage
         });
     }
 
