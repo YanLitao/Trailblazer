@@ -197,7 +197,7 @@ const task7Schema = z.object({
             })
         ),
         Practical_Insights: z.string(), // Summary of best practices, tips, or pitfalls.
-    }).nullable().optional(), // Allow answer to be null or optional
+    })
 }).strict();
 
 class Agent {
@@ -1417,7 +1417,8 @@ class Agent {
                         <div class="insight" 
                             data-file-uri="${snippetData?.fileUri || ''}" 
                             data-line-number="${snippetData?.lineNumber || ''}" 
-                            onmouseenter="postMessageToBackend(event)">
+                            data-ref="${snippetKey}"
+                            onmouseenter="hoverInsight(event)">
                             <h3>${insight.insightName}</h3>
                             <p>${insight.details}
                                 [<span class="citation-ref" data-ref="${snippetKey}">${snippetKey}</span>]
@@ -1477,10 +1478,7 @@ class Agent {
 
         this._final_decision_sufficient = task7Output.final_decision_sufficient;
 
-        if (task7Output.final_decision_sufficient) {
-            return this.processFinalAnswer(task7Output);
-        }
-        return "";
+        return this.processFinalAnswer(task7Output);
     }
 
     private async _updateStepResults(refinedOutput: any) {

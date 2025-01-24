@@ -78,7 +78,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
 
         // Dequeue and display the next item
         const { answer, nextStepSummary, findingsHtml, taskContentHtml, locations } = this._displayQueue.shift()!;
-
         // Send message to update preliminary answer and current task content
         this._view?.webview.postMessage({
             command: 'updateAnswer',
@@ -165,7 +164,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
             editor.selection = new vscode.Selection(position, position);
 
             // Highlight the line
-            await this.highlightLineInEditor(editor, lineNumber, 5000);
+            await this.highlightLineInEditor(editor, lineNumber, 2000);
         } catch (error) {
             console.error(`Error opening file at line ${lineNumber}: `, error);
         }
@@ -386,11 +385,10 @@ export class SidebarView implements vscode.WebviewViewProvider {
                         Status: <span id="agent-status-text" class="idle-status">Idle</span>
                     </p>
                     <div id="actions" style="display: flex; justify-content: space-around; padding: 10px;">
-                        <button id="continue-agent" class="action-btn">Continue</button>
-                        <button id="pause-agent" class="action-btn">Pause</button>
-                        <button id="stop-agent" class="action-btn">Stop</button>
-                        <button id="toggle-log" class="action-btn">See full log</button>
-                        <button id="save-pdf" class="action-btn">Save Log</button>
+                        <button id="pause-agent" class="action-btn"><i class="fa-solid fa-pause"></i></button>
+                        <button id="stop-agent" class="action-btn"><i class="fa-solid fa-stop"></i></button>
+                        <button id="toggle-log" class="action-btn"><i class="fa-solid fa-list"></i></button>
+                        <button id="save-pdf" class="action-btn"><i class="fa-solid fa-file-pdf"></i></button>
                     </div>
                     <div id="preliminary-answer-text">
                     </div>
@@ -646,10 +644,11 @@ export class SidebarView implements vscode.WebviewViewProvider {
     // Function to add Task 3 results (final decision and explanation) with surrounding code
     public async addTask3Results(final_decision_sufficient: boolean, task3Output: any, importantCodeSnippets: any, importantCodePaths: any) {
         if (this._view) {
-            const webview = this._view.webview;
+            /* const webview = this._view.webview;
             const explorationUniqueId = `exploration-task3-results-${this._stepCounter}`; // Unique ID for exploration steps
+             */
             const currentTaskUniqueId = `current-task3-results-${this._stepCounter}`; // Unique ID for current task
-            var i = -1;
+            //var i = -1;
 
             // Update the preliminary answer text in the webview
             let answerText = "";
@@ -666,7 +665,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 findingsHtml = await this.addTask5And6Results(importantCodeSnippets, importantCodePaths);
             } */
 
-            // Generate HTML for exploration steps
+            /* // Generate HTML for exploration steps
             let explorationStepsHtml = `
             <div class="task">
                 <div class="task-header">
@@ -677,7 +676,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
             `;
 
             // If sufficient, display the final answer
-            /* if (final_decision_sufficient) {
+            if (final_decision_sufficient) {
                 explorationStepsHtml += `<p><strong>Answer: </strong>${task3Output.answer}</p>`;
             } else if (task3Output.sub_problems.length > 0) {
                 explorationStepsHtml += `<p>Propose <strong>${task3Output.sub_problems.length}</strong> sub-questions:</p>`;

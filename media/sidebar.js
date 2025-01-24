@@ -292,7 +292,7 @@ function setupJumpToLine() {
     });
 }
 
-function postMessageToBackend(event) {
+function hoverInsight(event) {
     const fileUri = event.target.getAttribute("data-file-uri");
     const lineNumber = event.target.getAttribute("data-line-number");
 
@@ -339,6 +339,19 @@ function updateStatus(status) {
         case 'Paused':
             statusText.textContent = 'Paused';
             statusText.className = 'paused-status';
+
+            // Select the pause button and its icon
+            const pauseButton = document.getElementById('pause-agent');
+            const icon = pauseButton.querySelector('i');
+
+            // Toggle the icon between play and pause
+            if (icon.classList.contains('fa-pause')) {
+                icon.classList.remove('fa-pause');
+                icon.classList.add('fa-play');
+            } else {
+                icon.classList.remove('fa-play');
+                icon.classList.add('fa-pause');
+            }
             break;
         case 'Stopped':
             statusText.textContent = 'Stopped';
