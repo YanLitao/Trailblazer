@@ -81,7 +81,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
 
         // Send message to update preliminary answer and current task content
         this._view?.webview.postMessage({
-            command: 'updatePreliminaryAnswer',
+            command: 'updateAnswer',
             answer: answer
         });
 
@@ -677,7 +677,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
             `;
 
             // If sufficient, display the final answer
-            if (final_decision_sufficient) {
+            /* if (final_decision_sufficient) {
                 explorationStepsHtml += `<p><strong>Answer: </strong>${task3Output.answer}</p>`;
             } else if (task3Output.sub_problems.length > 0) {
                 explorationStepsHtml += `<p>Propose <strong>${task3Output.sub_problems.length}</strong> sub-questions:</p>`;
@@ -712,12 +712,12 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 explorationStepsHtml += `</div></div>`; // Close all divs
             } else {
                 explorationStepsHtml += `<p>No sub-questions proposed.</p></div></div>`;
-            }
+            }*/
 
             let currentTaskHtml = "";
 
             // Post the HTML to the exploration steps
-            webview.postMessage({ command: 'appendHtml', html: explorationStepsHtml, id: explorationUniqueId, num: i });
+            //webview.postMessage({ command: 'appendHtml', html: explorationStepsHtml, id: explorationUniqueId, num: i });
 
             // Generate HTML for current task content (show only the first invocation place)
 

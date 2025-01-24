@@ -30,12 +30,100 @@ h4 {
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-#header .final-answer {
-    font-weight: 300;
+/* Container for the Final Answer */
+.final-answer {
+    font-family: sans-serif;
+    background-color: #ffffff;
+    border: 1px solid #e5e5e5;
+    border-radius: 12px;
+    padding: 24px;
+    margin: 40px auto;
+    max-width: 450px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
 }
 
-#header .final-answer h1 {
-    font-size: 1.2em;
+/* Header Sections (Overview, Lifecycle, etc.) */
+.final-answer h2 {
+    margin-top: 16px;
+    margin-bottom: 16px;
+    border-bottom: 2px solid #e5e5e5;
+    padding-bottom: 6px;
+    font-weight: bold;
+    font-size: 1.1em;
+}
+
+.final-answer h3 {
+    font-size: 1em;
+}
+
+/* Subheaders in Markdown */
+.final-answer h1,
+.final-answer h2,
+.final-answer h3 {
+    font-weight: bold;
+    margin-top: 0em;
+    margin-bottom: 0.5em;
+}
+
+.final-answer p {
+    margin: 0;
+    line-height: 1.2;
+    color: #555555;
+}
+
+/* Bullet Points */
+.final-answer ul {
+    margin: 16px 0;
+    padding-left: 20px;
+    list-style-type: disc;
+    color: #555555;
+}
+
+.final-answer li {
+    margin-bottom: 8px;
+    line-height: 1.6;
+}
+
+.final-answer #toggle-details-btn {
+    cursor: pointer;
+    margin-top: 20px;
+}
+
+.final-answer #details-container {
+    margin-top: 20px;
+}
+
+/* Individual Insight Cards */
+.lifecycle .insight {
+    background-color: #f9f9f9;
+    border: 1px solid #e5e5e5;
+    border-radius: 6px;
+    margin-bottom: 1.5rem;
+    padding: 12px 16px;
+    transition: box-shadow 0.3s ease, transform 0.3s ease;
+}
+
+/* Insight Hover Effect */
+.lifecycle .insight:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    transform: translateY(-4px);
+    cursor: pointer;
+    border-left: 4px solid #007bff;
+}
+
+/* Inline Code */
+.inline-code {
+    font-family: "Courier New", Courier, monospace;
+    background-color: #f3f3f3;
+    color: #d6336c;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+/* Add Smooth Scroll for Scrollytelling */
+html {
+    scroll-behavior: smooth;
+    /* Smooth scrolling for user experience */
 }
 
 #agent-status-text {

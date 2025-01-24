@@ -13,9 +13,8 @@ window.addEventListener('message', event => {
         case 'updateCurrentTaskContent':
             updateCurrentTaskContent(message.html, message.id, message.num);
             break;
-        case 'updatePreliminaryAnswer':
+        case 'updateAnswer':
             const answerDiv = document.getElementById('preliminary-answer-text');
-
             // De-highlight previous findings
             if (message.answer) {
                 answerDiv.innerHTML = message.answer;
@@ -102,7 +101,7 @@ document.addEventListener("click", function (event) {
     if (event.target.classList.contains("citation-ref")) {
         const refId = event.target.getAttribute("data-ref"); // Get the reference ID from the clicked element
         const targetNodeElement = document.querySelector(`.tree-node.code-box[data-ref="${refId}"]`); // Find the target element by data-ref
-        console.log(refId, targetNodeElement);
+
         if (targetNodeElement) {
             // Dynamically get the current height of the sticky header
             const stickyHeader = document.querySelector("#sticky-header");
@@ -183,6 +182,20 @@ document.addEventListener("mouseover", function (event) {
         }
     }
 });
+
+// control showing the preliminary answer
+function toggleDetails() {
+    const container = document.getElementById("details-container");
+    const button = document.getElementById("toggle-details-btn");
+
+    if (container.style.display === "none") {
+        container.style.display = "block";
+        button.textContent = "Hide Details";
+    } else {
+        container.style.display = "none";
+        button.textContent = "Show Details";
+    }
+}
 
 // JavaScript to toggle additional invocations
 function toggleAdditionalInvocations(elementId) {
@@ -279,6 +292,19 @@ function setupJumpToLine() {
     });
 }
 
+function postMessageToBackend(event) {
+    const fileUri = event.target.getAttribute("data-file-uri");
+    const lineNumber = event.target.getAttribute("data-line-number");
+
+    if (fileUri && lineNumber) {
+        vscode.postMessage({
+            command: 'openFileAtLine',
+            fileUri: fileUri,
+            lineNumber: parseInt(lineNumber, 10),
+        });
+    }
+}
+
 function setupToggleDetails(id, num) {
     for (let i = 0; i <= num; i++) {
         document.getElementById(id + "-btn-" + i).addEventListener('click', function () {
@@ -356,7 +382,7 @@ function renderGraph(data) {
     `;
     container.appendChild(controlPanel);
 
-    const margin = { top: 20, right: 80, bottom: 20, left: 80 };
+    const margin = { top: 20, right: 30, bottom: 20, left: 30 };
 
     // Create the SVG container
     const svg = d3.select(container)
@@ -371,7 +397,7 @@ function renderGraph(data) {
 
     function drawGraph() {
         const width = container.offsetWidth;
-        const nodeSize = 30;
+        const nodeSize = 20;
 
         // Clear existing content in SVG
         svg.selectAll("*").remove();

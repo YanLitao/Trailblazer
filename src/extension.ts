@@ -187,7 +187,17 @@ const task6Schema = z.object({
 
 const task7Schema = z.object({
     final_decision_sufficient: z.boolean(),
-    final_answer: z.string().nullable().optional(),
+    answer: z.object({
+        Overview: z.string(), // High-level summary of the question and findings.
+        Lifecycle: z.array(
+            z.object({
+                insightName: z.string(), // Name of the lifecycle stage or behavior.
+                details: z.string(), // Explanation of the stage's role or function.
+                reference: z.string(),
+            })
+        ),
+        Practical_Insights: z.string(), // Summary of best practices, tips, or pitfalls.
+    }).nullable().optional(), // Allow answer to be null or optional
 }).strict();
 
 class Agent {
@@ -1228,22 +1238,16 @@ class Agent {
             console.log("Tree: ", newTree);
         }
 
-        let task6Output = "";
+        let evaluationOutput = "";
         if (this._updateFindings) {
-            let task7Output = "";
-            [task7Output, task6Output] = await Promise.all([
+            let [task7Output, task6Output] = await Promise.all([
                 this.runTask7(),
                 this.runTask6()
             ]);
-            if (this._final_decision_sufficient) {
-                const answerP = `
-                    <div class="final-answer"><h1 style="font-weight: bold;">Final Answer:</h1> ${task7Output}</div>
-                `;
-                task6Output = answerP + task6Output;
-            }
+            evaluationOutput = task7Output + task6Output;
         }
 
-        return task6Output;
+        return evaluationOutput;
     }
 
     updateFindingsSummary = (newFindings: any[]): any[] => {
@@ -1349,85 +1353,112 @@ class Agent {
         return concatenatedHtml + "</ul>";
     }
 
-    private processFinalAnswer(finalAnswer: string): string {
-        // Updated regular expression to find snippetKey references, including optional negative numbers
-        const snippetKeyRegex = /snippetKey:\s*(-?\d+)/g;
-
-        // Function to replace snippetKey with a styled span element
-        const replaceSnippetKey = (match: string, snippetKey: string): string => {
-            return `<span class="citation-ref" data-ref="${snippetKey}">${snippetKey}</span>`;
-        };
-
-        // Function to handle special content inside ** or `
-        const processSpecialContent = (content: string): string => {
-            return content.replace(snippetKeyRegex, replaceSnippetKey);
-        };
-
-        // Regular expression to handle special content wrapped in ** or `
-        const specialContentRegex = /(\*\*(.*?)\*\*|`([^`]*)`)/g;
-
-        // Convert lines starting with "-" into a list
-        const convertToList = (text: string): string => {
-            const lines = text.split("\n");
-            let inList = false;
-            const processedLines = lines.map((line) => {
-                if (line.trim().startsWith("-")) {
-                    const listItem = `<li>${line.trim().substring(1).trim()}</li>`;
-                    if (!inList) {
-                        inList = true;
-                        return `<ul>${listItem}`;
-                    }
-                    return listItem;
-                } else {
-                    if (inList) {
-                        inList = false;
-                        return `</ul>${line}`;
-                    }
-                    return line;
-                }
-            });
-            if (inList) {
-                processedLines.push("</ul>");
+    private findSnippetBySnippetKey(snippetKey: number): { fileUri: string; lineNumber: number } | null {
+        // Recursive function to search the tree
+        const traverseTree = (node: TreeNode): { fileUri: string; lineNumber: number } | null => {
+            if (node.snippetKey === snippetKey) {
+                return { fileUri: node.fileUri, lineNumber: node.lineNumber };
             }
-            return processedLines.join("\n");
-        };
 
-        // Convert lines starting with "###" into <h3> tags
-        const convertHeadings = (text: string): string => {
-            return text.replace(/^###\s*(.*)$/gm, (_, headingContent) => {
-                return `<h3>${headingContent.trim()}</h3>`;
-            });
-        };
-
-        // Replace line breaks with <br>, excluding those handled by lists or headings
-        const replaceLineBreaks = (text: string): string => {
-            return text.replace(/\n/g, "<br>");
-        };
-
-        // Process the final_answer string
-        let processedAnswer = finalAnswer
-            .replace(specialContentRegex, (match, _, boldContent, inlineCode) => {
-                if (boldContent) {
-                    // Process and wrap bold content with a styled <span>
-                    const processedContent = processSpecialContent(boldContent);
-                    return `<span style="font-weight: normal;">${processedContent}</span>`;
-                } else if (inlineCode) {
-                    // Process and wrap inline code content with a styled <span>
-                    const processedContent = processSpecialContent(inlineCode);
-                    return `<span class="inline-code">${processedContent}</span>`;
+            for (const child of node.children) {
+                const result = traverseTree(child);
+                if (result) {
+                    return result; // Return as soon as a match is found
                 }
-                return match;
-            })
-            .replace(snippetKeyRegex, replaceSnippetKey); // Replace snippetKeys outside special content
+            }
 
-        // Convert "###" to <h3> tags
-        processedAnswer = convertHeadings(processedAnswer);
+            return null; // Return null if no match is found
+        };
 
-        // Convert "-" to list elements
-        processedAnswer = convertToList(processedAnswer);
+        return traverseTree(this._tree);
+    }
 
-        // Replace remaining line breaks with <br>
-        processedAnswer = replaceLineBreaks(processedAnswer);
+    private processFinalAnswer(task7Output: any): string {
+        const { Overview, Lifecycle, Practical_Insights } = task7Output.answer;
+
+        // Helper functions for markdown processing
+        const processMarkdown = (text: string): string => {
+            // Handle headers
+            text = text.replace(/^###\s*(.*)$/gm, (_, content) => `<h3>${content.trim()}</h3>`);
+            text = text.replace(/^##\s*(.*)$/gm, (_, content) => `<h2>${content.trim()}</h2>`);
+            text = text.replace(/^#\s*(.*)$/gm, (_, content) => `<h1>${content.trim()}</h1>`);
+
+            // Handle bold (**content**)
+            text = text.replace(/\*\*(.*?)\*\*/g, (_, content) => `<b>${content}</b>`);
+
+            // Handle inline code (`content`)
+            text = text.replace(/`([^`]*)`/g, (_, content) => `<span class="inline-code">${content}</span>`);
+
+            // Handle line breaks (\n -> <br>)
+            text = text.replace(/\n/g, "<br>");
+
+            return text;
+        };
+
+        // Process the "Overview" section
+        const processOverview = (overview: string): string => {
+            return `<div class="overview"><h2>Overview</h2><p>${processMarkdown(overview)}</p></div>`;
+        };
+
+        // Process each insight in the "Lifecycle" section
+        const processLifecycle = (lifecycle: Array<{ insightName: string; details: string; reference: string }>): string => {
+            return lifecycle
+                .map((insight) => {
+                    insight.details = processMarkdown(insight.details);
+                    // Extract snippetKey from reference
+                    const snippetKeyMatch = insight.reference.match(/snippetKey:\s*(-?\d+)/);
+                    const snippetKey = snippetKeyMatch ? parseInt(snippetKeyMatch[1], 10) : null;
+
+                    // Find snippet data using the recursive traversal function
+                    const snippetData = snippetKey !== null ? this.findSnippetBySnippetKey(snippetKey) : null;
+
+                    // Add data attributes for fileUri and lineNumber
+                    return `
+                        <div class="insight" 
+                            data-file-uri="${snippetData?.fileUri || ''}" 
+                            data-line-number="${snippetData?.lineNumber || ''}" 
+                            onmouseenter="postMessageToBackend(event)">
+                            <h3>${insight.insightName}</h3>
+                            <p>${insight.details}
+                                [<span class="citation-ref" data-ref="${snippetKey}">${snippetKey}</span>]
+                            </p>
+                        </div>`;
+                })
+                .join("");
+        };
+
+        // Process the "Practical_Insights" section
+        const processPracticalInsights = (insights: string): string => {
+            return `<div class="practical-insights"><h2>Practical Insights</h2><p>${processMarkdown(insights)}</p></div>`;
+        };
+
+        // Add the lifecycle and practical insights container with toggle functionality
+        const lifecycleAndInsightsContainer = `
+            <div id="details-container" style="display: ${task7Output.final_decision_sufficient ? "block" : "none"};">
+                <div class="lifecycle">
+                    <h2>Lifecycle</h2>
+                    ${processLifecycle(Lifecycle)}
+                </div>
+                ${processPracticalInsights(Practical_Insights)}
+            </div>
+        `;
+
+        // Add a button to toggle the visibility of the container
+        const toggleButton = `
+            <button id="toggle-details-btn" onclick="toggleDetails()">
+                ${task7Output.final_decision_sufficient ? "Hide Details" : "Show Details"}
+            </button>
+        `;
+
+        // Wrap the entire answer in a container div
+        const processedAnswer = `
+            <div class="final-answer">
+                <h1 style="font-weight: bold;">${task7Output.final_decision_sufficient ? "Final Answer" : "Preliminary Answer"}:</h1>
+                ${processOverview(Overview)}
+                ${toggleButton}
+                ${lifecycleAndInsightsContainer}
+            </div>
+        `;
 
         return processedAnswer;
     }
@@ -1447,7 +1478,7 @@ class Agent {
         this._final_decision_sufficient = task7Output.final_decision_sufficient;
 
         if (task7Output.final_decision_sufficient) {
-            return this.processFinalAnswer(task7Output.final_answer);
+            return this.processFinalAnswer(task7Output);
         }
         return "";
     }
@@ -1693,14 +1724,14 @@ class Agent {
                 break;
             case 7:
                 taskInstructions = `
-                Task 7: Decide Sufficiency and Generate Final Answer
+                Task 7: Decide Sufficiency and Generate Answer
 
                 Objective:
                 1. Assess if the current findings and code exploration sufficiently answer the refined question.
-                2. If sufficient, generate a clear, evidence-based final answer with inline references to code snippets.
+                2. Generate a structured, evidence-based answer that includes lifecycle insights, practical tips, and clarity for developers.
 
                 Input:
-                1. refined_question: The question to answer.
+                1. refined_question: The question to answer (e.g., "What does this function do?", "Why is this parameter needed?", "How does this variable handle X?").
                 2. data_flow_tree: A structured tree containing findings and associated code snippets.
 
                 TreeNode = {
@@ -1720,44 +1751,48 @@ class Agent {
 
                 1. Decide final_decision_sufficient:
                 Evaluate if the current findings and data flow tree are enough to fully answer the refined question:
-                - Depth: Are the explored code snippets deep enough to reveal the full implementation? Ensure all key variables, functions, and connections in the tree are clearly understood.
-                - Coverage: Does the exploration address all major aspects of the question? Ensure no significant functionality or dependency is missing.
-                - Clarity: Is the implementation flow clear and traceable from the findings and tree?
+                - **Depth**: Are the explored code snippets detailed enough to address the question's scope (e.g., logic, behavior, dependencies)?
+                - **Coverage**: Does the exploration include all relevant parts of the codebase (e.g., key functions, variables, structures) needed to answer the question?
+                - **Clarity**: Is the data flow traceable, and are the findings coherent enough to form a beginner-friendly answer?
 
                 Set:
-                - final_decision_sufficient: true if all aspects are covered.
-                - final_decision_sufficient: false if more exploration is needed, specifying:
-                    - Missing key areas (e.g., untraced dependencies or incomplete functions).
-                    - What to explore further in the codebase.
+                - **final_decision_sufficient**: true if all aspects are covered.
+                - **final_decision_sufficient**: false if further exploration is needed, specifying:
+                    - Missing areas (e.g., unexamined dependencies, unexplored control flows, or unclear logic).
 
-                2. Generate Final Answer (Only if final_decision_sufficient is true):
-                When sufficient, synthesize a clear and beginner-friendly final answer. Use the following formats for inline elements:
-                - References to Code Snippets: Inline references to code snippets should use the format [snippetKey: number].
-                Example: The method validates the configuration object [snippetKey: 2]. If there are multiple references, list them in ascending order: [snippetKey: 1, snippetKey: 2].
+                2. Generate Answer:
+                Provide a structured, detailed answer object, whether or not findings are sufficient. The structure should include:
+                - **Overview:** A concise summary of the code element's purpose and relevance to the question.
+                - **Lifecycle:** An array of objects, each representing a lifecycle stage, behavior, or key relationship:
+                   - **insightName:** Name of the lifecycle stage or behavior (e.g., "Initialization," "Mounting").
+                   - **details:** A short explanation of the stage or behavior.
+                   - **reference:** A single snippetKey reference ([snippetKey: number]) that supports the explanation.
+                - **Practical_Insights:** A string summarizing best practices, tips, or common pitfalls relevant to the question.
 
-                - Bold Formatting: Use bold to emphasize key methods, variables, or concepts by wrapping them in a pair of **.
-                Example: The method **validateConfig** is crucial for configuration validation.
-
-                - Inline Code: Use inline code formatting for method names, variable names, or code elements by wrapping them in a pair of backticks.
-
-                Structure of the Final Answer:
-                1. Overview: Provide a high-level summary of the implementation relevant to the question.
-                2. Details: Include:
-                    - Key methods, variables, or utilities, referencing their snippetKey.
-                    - Code evidence supporting claims, formatted inline.
-                3. Observations for Novices: Highlight usage patterns, potential errors, and edge cases.
-                4. Data Flow Insights: Explain connections or logic paths from the tree, especially key nodes and their role.
+                **Formatting and Reference Guidelines:**
+                - **References to Code Snippets:** Each item in the Lifecycle section must include one and only one reference using [snippetKey: number].
+                - **Bold Emphasis:** Highlight critical methods, variables, or concepts with **bold** text.
+                - **Inline Code:** Use backticks (\`) for inline code elements.
 
                 Output Format:
                 {
                     "final_decision_sufficient": boolean,
-                    "final_answer": "Structured, evidence-based answer with inline snippetKey references, bold formatting (**), and inline code formatting (backtick)."
+                    "answer": {
+                        "Overview": string, // High-level summary of the question and findings.
+                        "Lifecycle": Array<{
+                            insightName: string, // Name of the lifecycle stage or behavior.
+                            details: string, // Explanation of the stage's role or function.
+                            reference: string // Single code snippet reference in the form [snippetKey: number].
+                        }>,
+                        "Practical_Insights": string // Summary of best practices, tips, or pitfalls.
+                    }
                 }
 
                 Checklist for Sufficiency:
-                1. Are all relevant code paths and variables traced deeply enough in the data flow tree?
-                2. Does the exploration address all major aspects of the refined question?
-                3. Is the implementation flow clear, and are findings well-supported by code?
+                1. Are all relevant aspects of the refined question addressed (e.g., logic, dependencies, behavior)?
+                2. Is the explanation clear, detailed, and well-supported by code snippets?
+                3. Are key relationships, lifecycle stages, and logic paths traceable and easy to follow?
+                4. Is the final answer concise, actionable, and suitable for both novice and experienced developers?
                 `;
                 break;
             default:
