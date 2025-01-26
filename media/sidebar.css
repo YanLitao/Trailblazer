@@ -93,42 +93,12 @@ h4 {
     margin-top: 20px;
 }
 
-/* Individual Insight Cards */
-.lifecycle .insight {
-    background-color: #f9f9f9;
-    border: 1px solid #e5e5e5;
-    border-radius: 6px;
-    margin-bottom: 1.5rem;
-    padding: 12px 16px;
-    transition: box-shadow 0.3s ease, transform 0.3s ease;
-}
-
-/* Insight Hover Effect */
-.lifecycle .insight:hover {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-    transform: translateY(-4px);
-    cursor: pointer;
-    border-left: 4px solid #007bff;
-}
-
-/* Inline Code */
-.inline-code {
-    font-family: "Courier New", Courier, monospace;
-    background-color: #f3f3f3;
-    color: #d6336c;
-    padding: 2px 6px;
-    border-radius: 4px;
-}
-
-/* Add Smooth Scroll for Scrollytelling */
 html {
     scroll-behavior: smooth;
-    /* Smooth scrolling for user experience */
 }
 
 #agent-status-text {
     font-weight: bold;
-    /* Example color for idle status */
 }
 
 .idle-status {
@@ -275,7 +245,6 @@ button.action-btn {
     border-radius: 4px;
     cursor: pointer;
     font-size: 0.9em;
-    transition: background-color 0.3s ease;
 }
 
 button.action-btn:hover {
@@ -357,8 +326,6 @@ current-task {
     padding: 0;
     margin-right: 10px;
     transform: rotate(0deg);
-    /* Initial state */
-    transition: transform 0.3s ease;
 }
 
 .toggle-button.active {
@@ -399,7 +366,6 @@ current-task {
 
 .code-box {
     padding: 0;
-    border-radius: 5px;
     overflow-x: auto;
 }
 
@@ -414,6 +380,14 @@ current-task {
 
 #preliminary-answer-text {
     font-weight: 300;
+}
+
+.insight {
+    background-color: #f9f9f9;
+    border: 1px solid #e5e5e5;
+    border-radius: 6px;
+    margin-bottom: 1.5rem;
+    padding: 12px 16px;
 }
 
 .finding-summary {
@@ -451,7 +425,6 @@ current-task {
 
 .highlight {
     background-color: #f0f8ff;
-    transition: background-color 0.3s ease;
 }
 
 .code-index {
@@ -524,9 +497,9 @@ code {
     direction: ltr;
     text-align: left;
     white-space: pre;
+    overflow-x: auto;
     word-spacing: normal;
     word-break: normal;
-    line-height: 1.5;
     -moz-tab-size: 4;
     -o-tab-size: 4;
     tab-size: 4;
@@ -653,6 +626,10 @@ code {
     text-overflow: ellipsis;
 }
 
+.inline-variable {
+    background-color: #ffffcc;
+}
+
 #graph-container .node circle {
     fill: white;
     stroke: steelblue;
@@ -676,23 +653,13 @@ code {
     text-overflow: ellipsis;
 }
 
-#graph-container .inline-variable {
-    background-color: #ffeeba;
-    font-family: Consolas, Monaco, 'Andale Mono', monospace;
-    font-size: 0.9em;
-    padding: 0px 4px;
-    border-radius: 3px;
-    border: 1px solid #ccc;
-}
-
-#graph-container .code-box {
-    font-family: monospace;
-    font-size: 12px;
-    background-color: #f9f9f9;
+#graph-container .node-container-box {
+    display: flex;
+    align-items: stretch;
     border: 1px solid #ddd;
-    border-radius: 5px;
-    padding: 5px;
-    color: black;
+    border-radius: 6px;
+    margin-bottom: 10px;
+    overflow: hidden;
 }
 
 .tooltip {
@@ -725,34 +692,71 @@ code {
     word-wrap: break-word;
 }
 
-.tree-node-button-container {
+.node-container-box.insight-in-container {
     display: flex;
-    justify-content: flex-end;
-    gap: 10px;
-    padding-top: 10px;
-    height: 30px;
+    align-items: flex-start;
 }
 
-.tree-node button {
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-size: 14px;
-    /* Adjust size */
+.tree-node.code-box {
+    position: relative;
+    background-color: #fff;
     display: flex;
-    align-items: center;
+    flex-direction: column;
+}
+
+.code-container {
+    flex-grow: 1;
+    padding-left: 10px;
+}
+
+.insight-copy {
+    width: 40%;
+    background-color: #eef6ff;
+    padding: 10px;
+    border: 1px solid #ddd;
+    overflow-y: auto;
+}
+
+/* Match the height of insight-copy to code-box */
+.node-container-box.insight-in-container .insight-copy {
+    display: block;
+    height: auto;
+    /* Dynamically adjusts to the height of the code box */
+}
+
+.node-container-box.insight-in-container .tree-node.code-box {
+    width: 60%;
+    /* Adjust code box width when insight is present */
+}
+
+.tree-node-button-container {
+    display: flex;
     gap: 5px;
-    /* Add space between icon and text */
+    justify-content: flex-end;
+    padding: 5px;
+    background: rgba(255, 255, 255, 0.9);
+}
+
+.tree-node-button-container button {
+    font-size: 12px;
+    padding: 4px 6px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    cursor: pointer;
 }
 
 .tree-node button i {
     color: #333;
-    /* Icon color */
+    font-size: 14px;
 }
 
 .tree-node button:hover i {
     color: #0078d7;
-    /* Change color on hover */
+}
+
+.tree-node button:hover {
+    background-color: #f0f0f0;
+    border-radius: 3px;
 }
 
 #control-panel {
@@ -785,7 +789,6 @@ code {
     padding: 8px 12px;
     font-size: 14px;
     cursor: pointer;
-    transition: background-color 0.2s;
 }
 
 #control-panel button:hover {

@@ -1,5 +1,30 @@
 const vscode = acquireVsCodeApi(); // This gives us access to the VSCode API
 
+// Persistent storage for insights
+const insightMap = new Map();
+
+// Re-append insights after graph redraw
+function reAppendInsights() {
+    insightMap.forEach((insightHTML, snippetKey) => {
+        const insightContainer = document.querySelector(`.node-container-box[data-snippet-key="${snippetKey}"]`);
+        if (insightContainer) {
+            // Check if an insight-copy already exists
+            const existingInsightCopy = insightContainer.querySelector('.insight-copy');
+            if (!existingInsightCopy) {
+                // Create a new div for the insight copy
+                const clonedInsightContainer = document.createElement('div');
+                clonedInsightContainer.classList.add('insight-copy');
+                clonedInsightContainer.innerHTML = insightHTML; // Set the innerHTML from the map
+                insightContainer.appendChild(clonedInsightContainer);
+
+                // Style the container as needed
+                insightContainer.classList.add('insight-in-container');
+                insightContainer.style.display = 'flex';
+            }
+        }
+    });
+}
+
 // Listen to messages from the VSCode extension
 window.addEventListener('message', event => {
     const message = event.data;
@@ -15,18 +40,33 @@ window.addEventListener('message', event => {
             break;
         case 'updateAnswer':
             const answerDiv = document.getElementById('preliminary-answer-text');
-            // De-highlight previous findings
+
             if (message.answer) {
                 answerDiv.innerHTML = message.answer;
-                document.querySelectorAll('.additional-finding').forEach(finding => {
-                    finding.addEventListener('click', function () {
-                        const hiddenStatement = this.nextElementSibling;
-                        if (hiddenStatement) {
-                            hiddenStatement.style.display =
-                                hiddenStatement.style.display === 'none' ? 'block' : 'none';
-                        }
-                    });
+
+                // Process each insight from the lifecycle section
+                const lifecycleInsights = document.querySelectorAll('.lifecycle .insight'); // Restrict to .lifecycle
+                lifecycleInsights.forEach((insight) => {
+                    const snippetKey = insight.getAttribute('data-ref');
+                    const insightContainer = document.querySelector(`.node-container-box[data-snippet-key="${snippetKey}"]`);
+
+                    if (insightContainer) {
+                        // Create a new div to hold the copied content
+                        const insightCopyContainer = document.createElement('div');
+                        insightCopyContainer.classList.add('insight-copy');
+                        insightCopyContainer.innerHTML = insight.innerHTML; // Copy the content of the insight
+                        insightContainer.appendChild(insightCopyContainer);
+
+                        // Style and adjust the container
+                        insightContainer.classList.add("insight-in-container");
+                        insightContainer.style.display = "flex";
+
+                        // Update the persistent map to store the innerHTML of the original insight
+                        insightMap.set(snippetKey, insight.innerHTML);
+                    }
                 });
+
+                console.log("Updated Insight Map: ", insightMap);
             }
             break;
         case 'updateExplorationSummary':
@@ -53,17 +93,6 @@ document.getElementById('save-pdf').addEventListener('click', function () {
     html2pdf().from(element).save('search-copilot.pdf');
 });
 
-/* // Add event listener for watch mode toggle switch
-document.getElementById('watch-mode-toggle').addEventListener('change', (event) => {
-    const isActive = event.target.checked;
-
-    // Send a message to the extension to toggle watch mode
-    vscode.postMessage({
-        command: 'toggleWatchMode',
-        isActive: isActive
-    });
-}); */
-
 // Function to toggle the visibility of the exploration steps
 document.getElementById('toggle-log').addEventListener('click', function () {
     const explorationSteps = document.getElementById('exploration-steps');
@@ -77,12 +106,6 @@ document.getElementById('toggle-log').addEventListener('click', function () {
         explorationSteps.style.display = 'none';
         document.getElementById('toggle-log').innerText = 'See full log';
     }
-});
-
-document.getElementById('continue-agent').addEventListener('click', function () {
-    vscode.postMessage({
-        command: 'continueAgent'
-    });
 });
 
 document.getElementById('pause-agent').addEventListener('click', function () {
@@ -292,19 +315,6 @@ function setupJumpToLine() {
     });
 }
 
-function hoverInsight(event) {
-    const fileUri = event.target.getAttribute("data-file-uri");
-    const lineNumber = event.target.getAttribute("data-line-number");
-
-    if (fileUri && lineNumber) {
-        vscode.postMessage({
-            command: 'openFileAtLine',
-            fileUri: fileUri,
-            lineNumber: parseInt(lineNumber, 10),
-        });
-    }
-}
-
 function setupToggleDetails(id, num) {
     for (let i = 0; i <= num; i++) {
         document.getElementById(id + "-btn-" + i).addEventListener('click', function () {
@@ -348,6 +358,7 @@ function updateStatus(status) {
             if (icon.classList.contains('fa-pause')) {
                 icon.classList.remove('fa-pause');
                 icon.classList.add('fa-play');
+
             } else {
                 icon.classList.remove('fa-play');
                 icon.classList.add('fa-pause');
@@ -484,7 +495,7 @@ function renderGraph(data) {
             })
             .on("click", function (event, d) {
                 if (d.data.isIntermediate && d.data.id !== "fake-origin") {
-                    const rect = d3.select(`#code-box-${generateNodeId(d.data)}`); // Use sanitized ID
+                    const rect = d3.select(`#container-${generateNodeId(d.data)}`); // Use sanitized ID
                     const isVisible = rect.style("display") === "block"
                     rect.style("display", isVisible ? "none" : "block");
                     d3.select(this).text(isVisible ? "+" : "-"); // Toggle sign
@@ -508,7 +519,7 @@ function renderGraph(data) {
                     // Node with fake-origin as parent
                     descriptionHTML = `
                         <div class="node-description">
-                            <span class="inline-variable">${d.data.variable}</span> 
+                            <span class="inline-code">${d.data.variable}</span> 
                             in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1} 
                             is extracted from your selected code for further exploration.
                         </div>
@@ -518,7 +529,7 @@ function renderGraph(data) {
                     const parentInfo = d.parent.data.variable;
                     descriptionHTML = `
                         <div class="node-description">
-                            <span class="inline-variable">${d.data.variable}</span> 
+                            <span class="inline-code">${d.data.variable}</span> 
                             in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}
                             is another reference to ${parentInfo}.
                         </div>
@@ -528,7 +539,7 @@ function renderGraph(data) {
                     const parentInfo = d.parent.data.variable;
                     descriptionHTML = `
                         <div class="node-description">
-                            Found <span class="inline-variable">${d.data.variable}</span>
+                            Found <span class="inline-code">${d.data.variable}</span>
                             in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}, because ${parentInfo} was assigned to it.
                         </div>
                     `;
@@ -536,7 +547,7 @@ function renderGraph(data) {
                     // Default Case
                     descriptionHTML = `
                         <div class="node-description">
-                            Found the definition of <span class="inline-variable">${d.data.variable}</span>
+                            Found the definition of <span class="inline-code">${d.data.variable}</span>
                             in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}.
                         </div>
                     `;
@@ -555,14 +566,14 @@ function renderGraph(data) {
                     snippetLines = d.data.codeSnippet.split("\n").map((line, index) => {
                         if (line.trim() === d.data.codeLine.trim()) {
                             // Highlight the variable within the line
-                            const highlightedVariable = `<span class="inline-variable">${d.data.variable}</span>`;
+                            const highlightedVariable = `<span class="inline-code">${d.data.variable}</span>`;
                             const highlightedLine = line.replace(
                                 new RegExp(`\\b${d.data.variable}\\b`, "g"),
                                 highlightedVariable
                             );
 
                             // Highlight the full line
-                            return `<span class="code-line" style="background-color: #d1ecf1;">${highlightedLine}</span>`;
+                            return `<span class="code-line" style="background-color: #f9f9f9;">${highlightedLine}</span>`;
                         }
                         return line;
                     }).join("\n");
@@ -570,23 +581,25 @@ function renderGraph(data) {
 
                 let htmlContent = `
                     ${descriptionHTML}
-                    <div id="code-box-${generateNodeId(d.data)}" class="tree-node code-box" 
-                         style="border: ${borderStyle}; display: ${displayment};"
-                         data-ref="${d.data.snippetKey}">
-                        <code style="white-space: pre;" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">${snippetLines}</code>
-                        <div class="tree-node-button-container">
-                            <!-- Replay Button -->
-                            <button class="replay-btn" title="Replay" data-node-id="${d.data.id}">
-                                <i class="fas fa-undo-alt"></i> Replay
-                            </button>
-                            <!-- Jump to Line Button -->
-                            <button class="jump-btn" title="Jump to Editor" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">
-                                <i class="fas fa-arrow-right"></i> Go to line
-                            </button>
-                            <!-- Search Button -->
-                            <button class="search-btn" title="Search" data-node-id="${d.data.id}">
-                                <i class="fas fa-search"></i> Search
-                            </button>
+                    <div class="node-container-box" id="container-${generateNodeId(d.data)}" data-snippet-key="${d.data.snippetKey}" style="border: ${borderStyle}; display: ${displayment};">
+                        <div id="code-box-${generateNodeId(d.data)}" class="tree-node code-box" data-ref="${d.data.snippetKey}">
+                            <div class="code-container">
+                                <code style="white-space: pre;" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">${snippetLines}</code>
+                            </div>
+                            <div class="tree-node-button-container">
+                                <!-- Replay Button -->
+                                <button class="replay-btn" title="Replay" data-node-id="${d.data.id}">
+                                    <i class="fas fa-undo-alt"></i> Replay
+                                </button>
+                                <!-- Jump to Line Button -->
+                                <button class="jump-btn" title="Jump to Editor" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">
+                                    <i class="fas fa-arrow-right"></i> Go to line
+                                </button>
+                                <!-- Search Button -->
+                                <button class="search-btn" title="Search" data-node-id="${d.data.id}">
+                                    <i class="fas fa-search"></i> Search
+                                </button>
+                            </div>
                         </div>
                     </div>
                 `;
@@ -656,14 +669,17 @@ function renderGraph(data) {
         let htmlContent = `
             <div class="tree-node">
                 <div class="node-description">Node description</div>
-                <div class="code-box">
-                    <code style="white-space: pre;">${codeSnippet}</code>
-                    <div class="tree-node-button-container">
-                    <!-- Buttons -->
-                    <button class="replay-btn" title="Replay"><i class="fas fa-undo-alt"></i> Replay</button>
-                    <button class="jump-btn" title="Jump to Editor"><i class="fas fa-arrow-right"></i> Go to line</button>
-                    <button class="search-btn" title="Search"><i class="fas fa-search"></i> Search</button>
-                </div>
+                <div class="node-container-box">
+                    <div class="tree-node code-box">
+                        <div class="code-container">
+                            <code style="white-space: pre;">${codeSnippet}</code>
+                        </div>
+                        <div class="tree-node-button-container">
+                            <button class="replay-btn" title="Replay"><i class="fas fa-undo-alt"></i> Replay</button>
+                            <button class="jump-btn" title="Jump to Editor"><i class="fas fa-arrow-right"></i> Go to line</button>
+                            <button class="search-btn" title="Search"><i class="fas fa-search"></i> Search</button>
+                        </div>
+                    </div>
                 </div>
                 <div class="tree-node-finding">
                     <strong>Finding:</strong> ${statement}
@@ -751,14 +767,14 @@ function renderGraph(data) {
                         // highlight the variable in the code line
                         const highlightedLine = ancestor.codeLine.replace(
                             new RegExp(`\\b${ancestor.variable}\\b`, "g"),
-                            `<span style="background-color: #ffeeba;">${ancestor.variable}</span>`
+                            `<span class="inline-variable">${ancestor.variable}</span>`
                         );
-                        const variableHighlight = `<span style="background-color: #ffeeba; ">${ancestor.variable}</span>`;
+
                         return `
                             <div 
                                 class="sticky-header-item"
                                 data-node-id="${generateNodeId(ancestor)}">
-                                ${indent}${ancestor.fileUri.split('/').pop()}:${ancestor.lineNumber + 1}:${variableHighlight} in "${highlightedLine}"
+                                ${indent}${ancestor.fileUri.split('/').pop()}, line ${ancestor.lineNumber + 1}: <span class="inline-code">${highlightedLine}</span>
                             </div>`;
                     })
                     .join("");
@@ -1041,5 +1057,6 @@ function renderGraph(data) {
     // Make the graph responsive
     window.addEventListener("resize", () => {
         drawGraph(); // Redraw the graph on resize
+        reAppendInsights(); // Re-append insights to their containers
     });
 }

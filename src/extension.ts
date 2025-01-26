@@ -1418,7 +1418,6 @@ class Agent {
                             data-file-uri="${snippetData?.fileUri || ''}" 
                             data-line-number="${snippetData?.lineNumber || ''}" 
                             data-ref="${snippetKey}"
-                            onmouseenter="hoverInsight(event)">
                             <h3>${insight.insightName}</h3>
                             <p>${insight.details}
                                 [<span class="citation-ref" data-ref="${snippetKey}">${snippetKey}</span>]
