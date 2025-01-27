@@ -59,14 +59,12 @@ window.addEventListener('message', event => {
 
                         // Style and adjust the container
                         insightContainer.classList.add("insight-in-container");
-                        insightContainer.style.display = "flex";
+                        //insightContainer.style.display = "flex";
 
                         // Update the persistent map to store the innerHTML of the original insight
                         insightMap.set(snippetKey, insight.innerHTML);
                     }
                 });
-
-                console.log("Updated Insight Map: ", insightMap);
             }
             break;
         case 'updateExplorationSummary':
@@ -144,6 +142,17 @@ document.addEventListener("click", function (event) {
             setTimeout(() => targetNodeElement.classList.remove("highlight"), 2000);
         } else {
             console.warn(`Target node with data-ref "${refId}" not found.`);
+        }
+    } else if (event.target.classList.contains("insight")) {
+        const fileUri = event.target.getAttribute("data-file-uri");
+        const lineNumber = event.target.getAttribute("data-line-number");
+
+        if (fileUri && lineNumber) {
+            vscode.postMessage({
+                command: 'openFileAtLine',
+                fileUri: fileUri,
+                lineNumber: parseInt(lineNumber, 10)
+            });
         }
     }
 });
@@ -418,10 +427,10 @@ function renderGraph(data) {
     let currentTimeout = null;
     let currentNodes = [];
     let currentStepIndex = 0;
+    let nodeSize = 20;
 
     function drawGraph() {
         const width = container.offsetWidth;
-        const nodeSize = 20;
 
         // Clear existing content in SVG
         svg.selectAll("*").remove();
@@ -430,11 +439,11 @@ function renderGraph(data) {
 
         // Calculate vertical positions dynamically based on rectangle heights
         let yOffset = margin.top; // Initial y-offset
+        let gapSpace = 20; // Gap between nodes
         root.eachBefore(d => {
             const snippetHeight = getCodeSnippetHeight(d.data.codeSnippet, d.data.statement);
-            const labelHeight = 20; // Approximate label height
             d.yOffset = yOffset; // Store yOffset for the node
-            yOffset += snippetHeight + labelHeight + 20; // Add spacing between nodes
+            yOffset += snippetHeight + gapSpace;
         });
 
         const nodes = root.descendants();
@@ -479,49 +488,73 @@ function renderGraph(data) {
         nodeGroup.append("circle")
             .attr("cx", d => d.depth * nodeSize)
             .attr("r", 10) // Larger circle for better display
-            .attr("fill", "#aaa")
-            .attr("stroke", "#333");
+            .attr("fill", "#aaa") // Initial fill color
+            .attr("stroke", "#333") // Initial stroke color
+            .on("click", (event, d) => {
+                const rect = d3.select(`#container-${generateNodeId(d.data)}`); // Select the node container
+                const isVisible = rect.style("display") === "block" || rect.style("display") === "flex";
 
+                // Toggle visibility of the container
+                if (rect.classed("insight-in-container")) {
+                    rect.style("display", isVisible ? "none" : "flex");
+                } else {
+                    rect.style("display", isVisible ? "none" : "block");
+                }
+
+                // Update circle styles based on visibility
+                const circle = document.querySelector(`#node-${generateNodeId(d.data)} circle`);
+
+                if (circle) {
+                    if (isVisible) {
+                        // When visible, change to a different style
+                        circle.style.fill = "steelblue"; // Change to highlighted fill color
+                        circle.style.color = "white";
+                    } else {
+                        // Default style when not visible
+                        circle.style.fill = "white";
+                        circle.style.color = "steelblue";
+                    }
+                }
+
+            });
+
+        // Add text for nodes
         nodeGroup.append("text")
+            .attr("id", d => `text-${generateNodeId(d.data)}`) // Add an ID for easier selection
             .attr("x", d => d.depth * nodeSize)
             .attr("dy", "0.32em")
             .attr("text-anchor", "middle")
             .attr("fill", "white")
             .style("font-size", "10px")
             .text(d => {
-                if (d.data.snippetKey !== -1) return d.data.snippetKey; // Add snippetKey for labeled nodes
-                if (d.data.isIntermediate && d.data.id !== "fake-origin") return "+";
+                if (d.data.snippetKey !== -1) return `[${d.data.snippetKey}]`; // Add snippetKey for labeled nodes
                 return "";
-            })
-            .on("click", function (event, d) {
-                if (d.data.isIntermediate && d.data.id !== "fake-origin") {
-                    const rect = d3.select(`#container-${generateNodeId(d.data)}`); // Use sanitized ID
-                    const isVisible = rect.style("display") === "block"
-                    rect.style("display", isVisible ? "none" : "block");
-                    d3.select(this).text(isVisible ? "+" : "-"); // Toggle sign
-                }
             });
 
         nodeGroup.append("foreignObject")
             .attr("id", d => `box-${generateNodeId(d.data)}`) // Use sanitized ID for toggling visibility
             .attr("x", d => d.depth * nodeSize + 20)
             .attr("y", -10)
-            .attr("width", width - margin.right - margin.left - 30) // Adjust for container size
-            .attr("height", d => getCodeSnippetHeight(d.data.codeSnippet, d.data.statement)) // Add space for buttons
+            .attr("width", d => {
+                const xPosition = d.depth * nodeSize + 20; // Calculate x position
+                const availableWidth = width - margin.right - margin.left; // Total available width
+                return availableWidth - xPosition; // Adjust width to align right edge
+            })
+            .attr("height", d => getCodeSnippetHeight(d.data.codeSnippet, d.data.statement))
             .html(d => {
                 // Description Text for Each Node
                 let descriptionHTML = "";
                 if (d.data.id === "fake-origin") {
-                    descriptionHTML = `<div class="node-description">Start exploration 
-                    in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1} </div>
+                    descriptionHTML = `<div class="node-description">You selected the code snippet for exploration 
+                    in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}.</div>
                     `;
                 } else if (d.parent && d.parent.data.id === "fake-origin") {
                     // Node with fake-origin as parent
                     descriptionHTML = `
                         <div class="node-description">
-                            <span class="inline-code">${d.data.variable}</span> 
+                            Picked <span class="inline-code">${d.data.variable}</span> 
                             in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1} 
-                            is extracted from your selected code for further exploration.
+                            from your selected code for further exploration.
                         </div>
                     `;
                 } else if (d.data.tool === "reference") {
@@ -539,8 +572,8 @@ function renderGraph(data) {
                     const parentInfo = d.parent.data.variable;
                     descriptionHTML = `
                         <div class="node-description">
-                            Found <span class="inline-code">${d.data.variable}</span>
-                            in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}, because ${parentInfo} was assigned to it.
+                            ${parentInfo} and <span class="inline-code">${d.data.variable}</span>
+                            in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1} exchange values.
                         </div>
                     `;
                 } else {
@@ -554,16 +587,42 @@ function renderGraph(data) {
                 }
 
                 let borderStyle = d.data.isIntermediate ? "1px dashed #aaa" : "1px solid #aaa";
-                let displayment = d.data.isIntermediate ? "none" : "block";
+                let displayment = "none" //d.data.isIntermediate ? "none" : "block";
                 if (d.data.id === "fake-origin") {
                     borderStyle = "1px solid #aaa";
-                    displayment = "block";
+                    //displayment = "block";
                 }
 
                 let snippetLines = d.data.codeSnippet;
                 // Highlight the line containing `codeLine` and the `variable`
                 if (d.data.id !== "fake-origin") {
-                    snippetLines = d.data.codeSnippet.split("\n").map((line, index) => {
+                    let stopInspectionFlag = false;
+
+                    snippetLines = d.data.codeSnippet.split("\n").reduce((processedLines, line) => {
+                        // Trim the line to check for meaningful content
+                        const trimmedLine = line.trim();
+
+                        // Skip meaningless lines at the beginning
+                        if (!stopInspectionFlag) {
+                            if (/[a-zA-Z]/.test(trimmedLine)) {
+                                stopInspectionFlag = true; // Start processing lines with meaningful content
+                            } else {
+                                return processedLines; // Skip the line
+                            }
+                        }
+
+                        // Add the line to processedLines
+                        processedLines.push(line);
+                        return processedLines;
+                    }, []);
+
+                    // Remove empty lines at the end
+                    while (snippetLines.length > 0 && snippetLines[snippetLines.length - 1].trim() === "") {
+                        snippetLines.pop();
+                    }
+
+                    // Highlight the variable and the code line
+                    snippetLines = snippetLines.map((line, index) => {
                         if (line.trim() === d.data.codeLine.trim()) {
                             // Highlight the variable within the line
                             const highlightedVariable = `<span class="inline-code">${d.data.variable}</span>`;

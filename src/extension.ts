@@ -1389,6 +1389,9 @@ class Agent {
             // Handle inline code (`content`)
             text = text.replace(/`([^`]*)`/g, (_, content) => `<span class="inline-code">${content}</span>`);
 
+            // Handle inline code ('content')
+            text = text.replace(/'([^']*)'/g, (_, content) => `<span class="inline-code">${content}</span>`);
+
             // Handle line breaks (\n -> <br>)
             text = text.replace(/\n/g, "<br>");
 
