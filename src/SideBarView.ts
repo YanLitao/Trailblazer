@@ -394,6 +394,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     </div>
                     <p id="still-to-be-found">Still to be found: <span id="exploration-summary"></span></p>
                 </div>
+                <h1>Exploration Steps</h1>
                 <div id="graph-container"></div>
                 <div id="current-task">
                     <div id="current-task-content"></div>

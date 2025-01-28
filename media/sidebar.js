@@ -78,7 +78,8 @@ window.addEventListener('message', event => {
             appendFindingsHtml(message.html);
             break;
         case 'renderGraph':
-            renderGraph(message.data);
+            let treeData = initializeHiddenField(message.data);
+            renderGraph(treeData);
             break;
         case 'updateTitleQuestion':
             document.getElementById('title-question').innerText = message.question;
@@ -121,15 +122,16 @@ document.getElementById('stop-agent').addEventListener('click', function () {
 document.addEventListener("click", function (event) {
     if (event.target.classList.contains("citation-ref")) {
         const refId = event.target.getAttribute("data-ref"); // Get the reference ID from the clicked element
-        const targetNodeElement = document.querySelector(`.tree-node.code-box[data-ref="${refId}"]`); // Find the target element by data-ref
-
-        if (targetNodeElement) {
+        const targetNodeElement = document.querySelector(`.node-container-box[data-snippet-key="${refId}"]`); // Find the target element by data-ref
+        // get the parent element of the target node
+        const parent = targetNodeElement.parentElement;
+        if (parent) {
             // Dynamically get the current height of the sticky header
             const stickyHeader = document.querySelector("#sticky-header");
             const stickyHeaderHeight = stickyHeader ? stickyHeader.offsetHeight : 0;
 
             // Calculate the scroll position, accounting for the sticky header height
-            const targetOffset = targetNodeElement.getBoundingClientRect().top + window.scrollY - stickyHeaderHeight;
+            const targetOffset = parent.getBoundingClientRect().top + window.scrollY - stickyHeaderHeight;
 
             // Scroll to the calculated position
             window.scrollTo({
@@ -137,9 +139,6 @@ document.addEventListener("click", function (event) {
                 behavior: "smooth",
             });
 
-            // Highlight the target element
-            targetNodeElement.classList.add("highlight");
-            setTimeout(() => targetNodeElement.classList.remove("highlight"), 2000);
         } else {
             console.warn(`Target node with data-ref "${refId}" not found.`);
         }
@@ -160,8 +159,8 @@ document.addEventListener("click", function (event) {
 document.addEventListener("mouseover", function (event) {
     if (event.target.classList.contains("citation-ref")) {
         const refId = event.target.getAttribute("data-ref");
-        const targetCodeBox = document.querySelector(`.tree-node.code-box[data-ref="${refId}"] > code`);
-
+        const targetCodeBox = document.querySelector(`.node-container-box[data-snippet-key="${refId}"] .code-container > code`);
+        console.log("targetCodeBox: ", targetCodeBox);
         if (targetCodeBox) {
             // Extract file URI and line number from data attributes
             const fileUri = targetCodeBox.getAttribute("data-file-uri");
@@ -397,7 +396,23 @@ function updateCurrentTaskContent(html, id, num) {
     }
 }
 
+function initializeHiddenField(treeNode) {
+    if (treeNode.id === "fake-origin") {
+        treeNode.hidden = 2; // The root node always starts as fully visible
+    } else if (treeNode.parent && treeNode.parent.id === "fake-origin") {
+        treeNode.hidden = 1; // Other nodes start as partially visible
+    } else {
+        treeNode.hidden = 0; // Hidden by default
+    }
+
+    if (treeNode.children && treeNode.children.length > 0) {
+        treeNode.children.forEach(child => initializeHiddenField(child));
+    }
+    return treeNode;
+}
+
 function renderGraph(data) {
+    console.log("Rendering graph with data: ", data);
     const container = document.getElementById("graph-container");
     container.innerHTML = ""; // Clear previous graph
 
@@ -437,22 +452,29 @@ function renderGraph(data) {
 
         const root = d3.hierarchy(data);
 
-        // Calculate vertical positions dynamically based on rectangle heights
-        let yOffset = margin.top; // Initial y-offset
-        let gapSpace = 20; // Gap between nodes
+        let yOffset = margin.top;
+        const gapSpace = 30;
+
         root.eachBefore(d => {
-            const snippetHeight = getCodeSnippetHeight(d.data.codeSnippet, d.data.statement);
-            d.yOffset = yOffset; // Store yOffset for the node
-            yOffset += snippetHeight + gapSpace;
+            if (d.parent && (d.parent.data.hidden === 0 || d.parent.data.hidden === 1)) {
+                d.data.hidden = 0; // If the parent is hidden or partially visible, hide this node
+            }
+
+            if (d.data.hidden !== 0) {
+                const snippetHeight = getCodeSnippetHeight(d.data.codeSnippet, d.data.statement, d.data.hidden);
+                d.yOffset = yOffset;
+                yOffset += snippetHeight + gapSpace;
+            }
         });
 
-        const nodes = root.descendants();
-        const links = root.links();
-        const height = yOffset + margin.bottom; // Total height of the graph
+        const nodes = root.descendants().filter(d => d.data.hidden !== 0); // Show only non-hidden nodes
+        console.log("Nodes: ", nodes);
+        const links = root.links().filter(link =>
+            link.source.data.hidden !== 0 && link.target.data.hidden !== 0
+        );
 
-        container.style.height = `${height + 30}px`;
-
-        svg.attr("width", width).attr("height", height);
+        svg.attr("width", width);
+        svg.attr("height", yOffset + margin.bottom);
 
         const g = svg.append("g")
             .attr("transform", `translate(${margin.left}, ${margin.top})`); // Apply margin
@@ -466,12 +488,12 @@ function renderGraph(data) {
             .data(links)
             .join("path")
             .attr("class", "link") // Add a class for consistent styling
-            .attr("id", (d, i) => `link-${generateNodeId(d.source.data)}-${generateNodeId(d.target.data)}`) // Unique ID for each link
+            .attr("id", (d, i) => `link-${generateNodeId(d.source.data)}-${generateNodeId(d.target.data)}`)
             .attr("d", d => {
-                const path = d3.path(); // Create a new path object
-                path.moveTo(d.source.depth * nodeSize, d.source.yOffset); // Move to source
-                path.lineTo(d.source.depth * nodeSize, d.target.yOffset); // Vertical line to target's level
-                path.lineTo((d.source.depth + 1) * nodeSize, d.target.yOffset); // Horizontal line to target's depth
+                const path = d3.path();
+                path.moveTo(d.source.depth * nodeSize, d.source.yOffset);
+                path.lineTo(d.source.depth * nodeSize, d.target.yOffset);
+                path.lineTo((d.source.depth + 1) * nodeSize, d.target.yOffset);
                 return path.toString();
             });
 
@@ -487,35 +509,27 @@ function renderGraph(data) {
         // Add circles for nodes
         nodeGroup.append("circle")
             .attr("cx", d => d.depth * nodeSize)
-            .attr("r", 10) // Larger circle for better display
-            .attr("fill", "#aaa") // Initial fill color
-            .attr("stroke", "#333") // Initial stroke color
+            .attr("r", 10)
+            .attr("fill", "#aaa")
+            .attr("stroke", "#333")
             .on("click", (event, d) => {
-                const rect = d3.select(`#container-${generateNodeId(d.data)}`); // Select the node container
-                const isVisible = rect.style("display") === "block" || rect.style("display") === "flex";
-
-                // Toggle visibility of the container
-                if (rect.classed("insight-in-container")) {
-                    rect.style("display", isVisible ? "none" : "flex");
-                } else {
-                    rect.style("display", isVisible ? "none" : "block");
+                // Toggle `hidden` state for the current node
+                if (d.data.hidden === 0) {
+                    d.data.hidden = 1; // Make partially visible
+                } else if (d.data.hidden === 1) {
+                    d.data.hidden = 2; // Fully visible
+                } else if (d.data.hidden === 2) {
+                    d.data.hidden = 1; // Back to partially visible
                 }
 
-                // Update circle styles based on visibility
-                const circle = document.querySelector(`#node-${generateNodeId(d.data)} circle`);
-
-                if (circle) {
-                    if (isVisible) {
-                        // When visible, change to a different style
-                        circle.style.fill = "steelblue"; // Change to highlighted fill color
-                        circle.style.color = "white";
-                    } else {
-                        // Default style when not visible
-                        circle.style.fill = "white";
-                        circle.style.color = "steelblue";
-                    }
+                // If fully visible (`hidden = 2`), propagate to children
+                if (d.data.hidden === 2 && d.children) {
+                    d.children.forEach(child => {
+                        child.data.hidden = 1; // Children become partially visible
+                    });
                 }
 
+                drawGraph(); // Redraw the graph with updated states
             });
 
         // Add text for nodes
@@ -540,7 +554,7 @@ function renderGraph(data) {
                 const availableWidth = width - margin.right - margin.left; // Total available width
                 return availableWidth - xPosition; // Adjust width to align right edge
             })
-            .attr("height", d => getCodeSnippetHeight(d.data.codeSnippet, d.data.statement))
+            .attr("height", d => getCodeSnippetHeight(d.data.codeSnippet, d.data.statement, d.data.hidden))
             .html(d => {
                 // Description Text for Each Node
                 let descriptionHTML = "";
@@ -587,11 +601,7 @@ function renderGraph(data) {
                 }
 
                 let borderStyle = d.data.isIntermediate ? "1px dashed #aaa" : "1px solid #aaa";
-                let displayment = "none" //d.data.isIntermediate ? "none" : "block";
-                if (d.data.id === "fake-origin") {
-                    borderStyle = "1px solid #aaa";
-                    //displayment = "block";
-                }
+                let displayment = (d.data.hidden !== 2) ? "display: none" : "";
 
                 let snippetLines = d.data.codeSnippet;
                 // Highlight the line containing `codeLine` and the `variable`
@@ -640,7 +650,7 @@ function renderGraph(data) {
 
                 let htmlContent = `
                     ${descriptionHTML}
-                    <div class="node-container-box" id="container-${generateNodeId(d.data)}" data-snippet-key="${d.data.snippetKey}" style="border: ${borderStyle}; display: ${displayment};">
+                    <div class="node-container-box" id="container-${generateNodeId(d.data)}" data-snippet-key="${d.data.snippetKey}" style="border: ${borderStyle}; ${displayment};">
                         <div id="code-box-${generateNodeId(d.data)}" class="tree-node code-box" data-ref="${d.data.snippetKey}">
                             <div class="code-container">
                                 <code style="white-space: pre;" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">${snippetLines}</code>
@@ -717,7 +727,12 @@ function renderGraph(data) {
     }
 
     // Function to calculate the height of a code snippet rectangle
-    function getCodeSnippetHeight(codeSnippet, statement) {
+    function getCodeSnippetHeight(codeSnippet, statement, hidden = false) {
+
+        if (hidden == 0) {
+            return 0; // Return 0 height for hidden nodes
+        }
+
         const tempDiv = document.createElement("div");
         tempDiv.style.visibility = "hidden";
         tempDiv.style.position = "absolute";
@@ -728,29 +743,30 @@ function renderGraph(data) {
         let htmlContent = `
             <div class="tree-node">
                 <div class="node-description">Node description</div>
-                <div class="node-container-box">
-                    <div class="tree-node code-box">
-                        <div class="code-container">
-                            <code style="white-space: pre;">${codeSnippet}</code>
-                        </div>
-                        <div class="tree-node-button-container">
-                            <button class="replay-btn" title="Replay"><i class="fas fa-undo-alt"></i> Replay</button>
-                            <button class="jump-btn" title="Jump to Editor"><i class="fas fa-arrow-right"></i> Go to line</button>
-                            <button class="search-btn" title="Search"><i class="fas fa-search"></i> Search</button>
-                        </div>
-                    </div>
-                </div>
-                <div class="tree-node-finding">
-                    <strong>Finding:</strong> ${statement}
-                </div>
             </div>
         `;
-        if (statement !== "") {
+
+        if (hidden == 2) {
             htmlContent += `
+            <div class="node-container-box">
+                <div class="tree-node code-box">
+                    <div class="code-container">
+                        <code style="white-space: pre;">${codeSnippet}</code>
+                    </div>
+                    <div class="tree-node-button-container">
+                        <button class="replay-btn" title="Replay"><i class="fas fa-undo-alt"></i> Replay</button>
+                        <button class="jump-btn" title="Jump to Editor"><i class="fas fa-arrow-right"></i> Go to line</button>
+                        <button class="search-btn" title="Search"><i class="fas fa-search"></i> Search</button>
+                    </div>
+                </div>
+            </div>`;
+            if (statement !== "") {
+                htmlContent += `
                 <div class="tree-node-finding">
                     <strong>Finding:</strong> ${statement}
                 </div>
             `;
+            }
         }
         tempDiv.innerHTML = htmlContent;
 

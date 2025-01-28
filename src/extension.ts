@@ -1423,7 +1423,7 @@ class Agent {
                             data-ref="${snippetKey}"
                             <h3>${insight.insightName}</h3>
                             <p>${insight.details}
-                                [<span class="citation-ref" data-ref="${snippetKey}">${snippetKey}</span>]
+                                [<span class="citation-ref" data-ref="${snippetKey}">See how we found this</span>]
                             </p>
                         </div>`;
                 })
