@@ -662,12 +662,15 @@ code {
 }
 
 #graph-container .node-container-box {
-    display: flex;
-    align-items: stretch;
     border: 1px solid #ddd;
     border-radius: 6px;
     margin-bottom: 10px;
     overflow: hidden;
+}
+
+#graph-container .insight-in-container {
+    display: flex;
+    align-items: stretch;
 }
 
 .tooltip {

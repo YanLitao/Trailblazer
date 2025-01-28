@@ -1244,7 +1244,11 @@ class Agent {
                 this.runTask7(),
                 this.runTask6()
             ]);
-            evaluationOutput = task7Output + task6Output;
+            if (this._final_decision_sufficient) {
+                evaluationOutput = task7Output;
+            } else {
+                evaluationOutput = task7Output + task6Output;
+            }
         }
 
         return evaluationOutput;

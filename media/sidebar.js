@@ -7,6 +7,7 @@ const insightMap = new Map();
 function reAppendInsights() {
     insightMap.forEach((insightHTML, snippetKey) => {
         const insightContainer = document.querySelector(`.node-container-box[data-snippet-key="${snippetKey}"]`);
+        console.log("Snippet key: ", snippetKey, "Insight container: ", insightContainer);
         if (insightContainer) {
             // Check if an insight-copy already exists
             const existingInsightCopy = insightContainer.querySelector('.insight-copy');
@@ -19,7 +20,6 @@ function reAppendInsights() {
 
                 // Style the container as needed
                 insightContainer.classList.add('insight-in-container');
-                insightContainer.style.display = 'flex';
             }
         }
     });
@@ -59,12 +59,16 @@ window.addEventListener('message', event => {
 
                         // Style and adjust the container
                         insightContainer.classList.add("insight-in-container");
-                        //insightContainer.style.display = "flex";
-
-                        // Update the persistent map to store the innerHTML of the original insight
-                        insightMap.set(snippetKey, insight.innerHTML);
                     }
+
+                    // Update the persistent map to store the innerHTML of the original insight
+                    insightMap.set(snippetKey, insight.innerHTML);
                 });
+
+                if (message.answer.includes("Final Answer")) {
+                    document.getElementById('still-to-be-found').style.display = 'none';
+                }
+
             }
             break;
         case 'updateExplorationSummary':
@@ -160,7 +164,6 @@ document.addEventListener("mouseover", function (event) {
     if (event.target.classList.contains("citation-ref")) {
         const refId = event.target.getAttribute("data-ref");
         const targetCodeBox = document.querySelector(`.node-container-box[data-snippet-key="${refId}"] .code-container > code`);
-        console.log("targetCodeBox: ", targetCodeBox);
         if (targetCodeBox) {
             // Extract file URI and line number from data attributes
             const fileUri = targetCodeBox.getAttribute("data-file-uri");
@@ -396,17 +399,19 @@ function updateCurrentTaskContent(html, id, num) {
     }
 }
 
-function initializeHiddenField(treeNode) {
+function initializeHiddenField(treeNode, hidden = 2) {
+    // Set the hidden state based on the node's relationship to the root
     if (treeNode.id === "fake-origin") {
-        treeNode.hidden = 2; // The root node always starts as fully visible
-    } else if (treeNode.parent && treeNode.parent.id === "fake-origin") {
-        treeNode.hidden = 1; // Other nodes start as partially visible
+        treeNode.hidden = 2; // The root node is fully visible
+    } else if (hidden === 2) {
+        treeNode.hidden = 1; // Immediate children of the root are partially visible
     } else {
-        treeNode.hidden = 0; // Hidden by default
+        treeNode.hidden = 0; // Other nodes are hidden by default
     }
 
+    // Recursively initialize children
     if (treeNode.children && treeNode.children.length > 0) {
-        treeNode.children.forEach(child => initializeHiddenField(child));
+        treeNode.children.forEach(child => initializeHiddenField(child, treeNode.hidden));
     }
     return treeNode;
 }
@@ -456,10 +461,10 @@ function renderGraph(data) {
         const gapSpace = 30;
 
         root.eachBefore(d => {
+            console.log("before: ", d.data);
             if (d.parent && (d.parent.data.hidden === 0 || d.parent.data.hidden === 1)) {
                 d.data.hidden = 0; // If the parent is hidden or partially visible, hide this node
             }
-
             if (d.data.hidden !== 0) {
                 const snippetHeight = getCodeSnippetHeight(d.data.codeSnippet, d.data.statement, d.data.hidden);
                 d.yOffset = yOffset;
@@ -711,6 +716,7 @@ function renderGraph(data) {
         });
 
         nodeGroup.selectAll(".search-btn").on("click", function (event) {
+            document.getElementById('still-to-be-found').style.display = 'block';
             const nodeId = event.target.getAttribute("data-node-id");
             // Find the clicked node by its ID
             const clickedNode = nodes.find((node) => node.data.id === nodeId);
@@ -724,6 +730,8 @@ function renderGraph(data) {
                 variable: variable
             });
         });
+
+        reAppendInsights();
     }
 
     // Function to calculate the height of a code snippet rectangle
@@ -771,9 +779,12 @@ function renderGraph(data) {
         tempDiv.innerHTML = htmlContent;
 
         document.body.appendChild(tempDiv);
-        const height = tempDiv.getBoundingClientRect().height; // Measure total height
+        let height = tempDiv.getBoundingClientRect().height; // Measure total height
         document.body.removeChild(tempDiv); // Clean up
 
+        if (height < 50) {
+            return 50; // Minimum height
+        }
         return height;
     }
 
