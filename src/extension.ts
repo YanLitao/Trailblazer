@@ -1246,6 +1246,7 @@ class Agent {
             ]);
             if (this._final_decision_sufficient) {
                 evaluationOutput = task7Output;
+                this._sidebarViewProvider.addAnswer(evaluationOutput);
             } else {
                 evaluationOutput = task7Output + task6Output;
             }

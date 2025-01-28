@@ -1,5 +1,6 @@
 const vscode = acquireVsCodeApi(); // This gives us access to the VSCode API
 
+let graphData;
 // Persistent storage for insights
 const insightMap = new Map();
 
@@ -7,20 +8,23 @@ const insightMap = new Map();
 function reAppendInsights() {
     insightMap.forEach((insightHTML, snippetKey) => {
         const insightContainer = document.querySelector(`.node-container-box[data-snippet-key="${snippetKey}"]`);
-        console.log("Snippet key: ", snippetKey, "Insight container: ", insightContainer);
+
         if (insightContainer) {
             // Check if an insight-copy already exists
             const existingInsightCopy = insightContainer.querySelector('.insight-copy');
-            if (!existingInsightCopy) {
-                // Create a new div for the insight copy
-                const clonedInsightContainer = document.createElement('div');
-                clonedInsightContainer.classList.add('insight-copy');
-                clonedInsightContainer.innerHTML = insightHTML; // Set the innerHTML from the map
-                insightContainer.appendChild(clonedInsightContainer);
 
-                // Style the container as needed
-                insightContainer.classList.add('insight-in-container');
+            if (existingInsightCopy) {
+                existingInsightCopy.remove(); // Remove the existing insight copy
             }
+            // Create a new div for the insight copy
+            const clonedInsightContainer = document.createElement('div');
+            clonedInsightContainer.classList.add('insight-copy');
+            clonedInsightContainer.innerHTML = insightHTML; // Set the innerHTML from the map
+
+            insightContainer.appendChild(clonedInsightContainer);
+
+            // Style the container as needed
+            insightContainer.classList.add('insight-in-container');
         }
     });
 }
@@ -82,8 +86,8 @@ window.addEventListener('message', event => {
             appendFindingsHtml(message.html);
             break;
         case 'renderGraph':
-            let treeData = initializeHiddenField(message.data);
-            renderGraph(treeData);
+            graphData = initializeHiddenField(message.data);
+            renderGraph(graphData);
             break;
         case 'updateTitleQuestion':
             document.getElementById('title-question').innerText = message.question;
@@ -123,28 +127,66 @@ document.getElementById('stop-agent').addEventListener('click', function () {
     });
 });
 
+function findNodeBySnippetKey(node, snippetKey) {
+    if (node.snippetKey === snippetKey) {
+        return node;
+    }
+    if (node.children && node.children.length > 0) {
+        for (const child of node.children) {
+            const foundNode = findNodeBySnippetKey(child, snippetKey);
+            if (foundNode) {
+                return foundNode;
+            }
+        }
+    }
+    return null; // Node not found
+}
+
+function updateNodeAndAncestors(treeNode, targetSnippetKey) {
+    // Base case: If the current node matches the snippetKey, set hidden = 2
+    if (treeNode.snippetKey === targetSnippetKey) {
+        treeNode.hidden = 2;
+        return true; // Indicate that this node or its descendant matches
+    }
+
+    // Recursively check children
+    let isAncestor = false;
+    if (treeNode.children && treeNode.children.length > 0) {
+        treeNode.children.forEach(child => {
+            const childResult = updateNodeAndAncestors(child, targetSnippetKey);
+            if (childResult) {
+                isAncestor = true;
+            }
+        });
+    }
+
+    // If any child matched, this node is an ancestor, so update it
+    if (isAncestor) {
+        treeNode.hidden = 2;
+    }
+
+    return isAncestor; // Indicate whether this node or its descendants matched
+}
+
 document.addEventListener("click", function (event) {
     if (event.target.classList.contains("citation-ref")) {
-        const refId = event.target.getAttribute("data-ref"); // Get the reference ID from the clicked element
-        const targetNodeElement = document.querySelector(`.node-container-box[data-snippet-key="${refId}"]`); // Find the target element by data-ref
-        // get the parent element of the target node
-        const parent = targetNodeElement.parentElement;
-        if (parent) {
-            // Dynamically get the current height of the sticky header
-            const stickyHeader = document.querySelector("#sticky-header");
-            const stickyHeaderHeight = stickyHeader ? stickyHeader.offsetHeight : 0;
+        const refId = parseInt(event.target.getAttribute("data-ref"), 10); // Get the snippetKey from the clicked element
 
-            // Calculate the scroll position, accounting for the sticky header height
-            const targetOffset = parent.getBoundingClientRect().top + window.scrollY - stickyHeaderHeight;
+        // Update the target node and its ancestors
+        const updated = updateNodeAndAncestors(graphData, refId);
 
-            // Scroll to the calculated position
-            window.scrollTo({
-                top: targetOffset,
-                behavior: "smooth",
-            });
+        if (!updated) {
+            console.warn(`Node with snippetKey "${refId}" not found in graphData.`);
+            return;
+        }
 
-        } else {
-            console.warn(`Target node with data-ref "${refId}" not found.`);
+        // Redraw the graph to reflect the changes
+        renderGraph(graphData);
+
+        // Scroll to the updated node
+        const updatedNode = document.getElementById(`node-${generateNodeId(findNodeBySnippetKey(graphData, refId))}`);
+        if (updatedNode) {
+            updatedNode.scrollIntoView({ behavior: "smooth" });
         }
     } else if (event.target.classList.contains("insight")) {
         const fileUri = event.target.getAttribute("data-file-uri");
@@ -162,58 +204,61 @@ document.addEventListener("click", function (event) {
 
 document.addEventListener("mouseover", function (event) {
     if (event.target.classList.contains("citation-ref")) {
-        const refId = event.target.getAttribute("data-ref");
-        const targetCodeBox = document.querySelector(`.node-container-box[data-snippet-key="${refId}"] .code-container > code`);
-        if (targetCodeBox) {
-            // Extract file URI and line number from data attributes
-            const fileUri = targetCodeBox.getAttribute("data-file-uri");
-            const lineNumber = targetCodeBox.getAttribute("data-line-number");
+        const refId = parseInt(event.target.getAttribute("data-ref"), 10); // Get the snippetKey
+        const node = findNodeBySnippetKey(graphData, refId); // Find the node in graphData
 
-            // Create tooltip element
-            const tooltip = document.createElement("div");
-            tooltip.classList.add("tooltip");
-
-            // Add a header with file and line information
-            const fileName = fileUri ? fileUri.split("/").pop() : "Unknown file";
-            const header = `<div class="tooltip-header">
-                                ${fileName}, line ${lineNumber}:
-                            </div>`;
-
-            // Add the code content
-            const codeContent = `<div class="tooltip-content">${targetCodeBox.innerHTML}</div>`;
-
-            // Combine header and code content
-            tooltip.innerHTML = header + codeContent;
-
-            // Style and append the tooltip
-            document.body.appendChild(tooltip);
-
-            // Calculate position
-            const rect = event.target.getBoundingClientRect();
-            const tooltipRect = tooltip.getBoundingClientRect();
-            const spaceAbove = rect.top;
-            const spaceBelow = window.innerHeight - rect.bottom;
-
-            if (spaceBelow >= tooltipRect.height || spaceBelow > spaceAbove) {
-                // Position below the citation-ref
-                tooltip.style.top = `${rect.bottom + window.scrollY + 5}px`;
-                tooltip.style.left = `${rect.left + window.scrollX}px`;
-            } else {
-                // Position above the citation-ref
-                tooltip.style.top = `${rect.top + window.scrollY - tooltipRect.height - 5}px`;
-                tooltip.style.left = `${rect.left + window.scrollX}px`;
-            }
-
-            // Show the tooltip
-            tooltip.style.position = "absolute";
-            tooltip.style.zIndex = "1000";
-
-            // Add event to remove tooltip on mouseout
-            event.target.addEventListener("mouseout", function hideTooltip() {
-                tooltip.remove();
-                event.target.removeEventListener("mouseout", hideTooltip);
-            });
+        if (!node) {
+            console.warn(`Node with snippetKey "${refId}" not found in graphData.`);
+            return;
         }
+
+        // Extract file URI, line number, and code snippet
+        const { fileUri, lineNumber, codeSnippet } = node;
+
+        // Create tooltip element
+        const tooltip = document.createElement("div");
+        tooltip.classList.add("tooltip");
+
+        // Add a header with file and line information
+        const fileName = fileUri ? fileUri.split("/").pop() : "Unknown file";
+        const header = `<div class="tooltip-header">
+                            ${fileName}, line ${lineNumber}:
+                        </div>`;
+
+        // Add the code content
+        const codeContent = `<div class="tooltip-content">${codeSnippet}</div>`;
+
+        // Combine header and code content
+        tooltip.innerHTML = header + codeContent;
+
+        // Style and append the tooltip
+        document.body.appendChild(tooltip);
+
+        // Calculate position
+        const rect = event.target.getBoundingClientRect();
+        const tooltipRect = tooltip.getBoundingClientRect();
+        const spaceAbove = rect.top;
+        const spaceBelow = window.innerHeight - rect.bottom;
+
+        if (spaceBelow >= tooltipRect.height || spaceBelow > spaceAbove) {
+            // Position below the citation-ref
+            tooltip.style.top = `${rect.bottom + window.scrollY + 5}px`;
+            tooltip.style.left = `${rect.left + window.scrollX}px`;
+        } else {
+            // Position above the citation-ref
+            tooltip.style.top = `${rect.top + window.scrollY - tooltipRect.height - 5}px`;
+            tooltip.style.left = `${rect.left + window.scrollX}px`;
+        }
+
+        // Show the tooltip
+        tooltip.style.position = "absolute";
+        tooltip.style.zIndex = "1000";
+
+        // Add event to remove tooltip on mouseout
+        event.target.addEventListener("mouseout", function hideTooltip() {
+            tooltip.remove();
+            event.target.removeEventListener("mouseout", hideTooltip);
+        });
     }
 });
 
@@ -416,8 +461,12 @@ function initializeHiddenField(treeNode, hidden = 2) {
     return treeNode;
 }
 
+function generateNodeId(data) {
+    const fileName = data.fileUri.split('/').pop(); // Get the file name
+    return `${fileName}_${data.lineNumber}_${data.variable}`.replace(/[^\w-]/g, "_");
+}
+
 function renderGraph(data) {
-    console.log("Rendering graph with data: ", data);
     const container = document.getElementById("graph-container");
     container.innerHTML = ""; // Clear previous graph
 
@@ -461,7 +510,6 @@ function renderGraph(data) {
         const gapSpace = 30;
 
         root.eachBefore(d => {
-            console.log("before: ", d.data);
             if (d.parent && (d.parent.data.hidden === 0 || d.parent.data.hidden === 1)) {
                 d.data.hidden = 0; // If the parent is hidden or partially visible, hide this node
             }
@@ -473,7 +521,6 @@ function renderGraph(data) {
         });
 
         const nodes = root.descendants().filter(d => d.data.hidden !== 0); // Show only non-hidden nodes
-        console.log("Nodes: ", nodes);
         const links = root.links().filter(link =>
             link.source.data.hidden !== 0 && link.target.data.hidden !== 0
         );
@@ -537,7 +584,7 @@ function renderGraph(data) {
                 drawGraph(); // Redraw the graph with updated states
             });
 
-        // Add text for nodes
+        /* // Add text for nodes
         nodeGroup.append("text")
             .attr("id", d => `text-${generateNodeId(d.data)}`) // Add an ID for easier selection
             .attr("x", d => d.depth * nodeSize)
@@ -548,7 +595,7 @@ function renderGraph(data) {
             .text(d => {
                 if (d.data.snippetKey !== -1) return `[${d.data.snippetKey}]`; // Add snippetKey for labeled nodes
                 return "";
-            });
+            }); */
 
         nodeGroup.append("foreignObject")
             .attr("id", d => `box-${generateNodeId(d.data)}`) // Use sanitized ID for toggling visibility
@@ -786,11 +833,6 @@ function renderGraph(data) {
             return 50; // Minimum height
         }
         return height;
-    }
-
-    function generateNodeId(data) {
-        const fileName = data.fileUri.split('/').pop(); // Get the file name
-        return `${fileName}_${data.lineNumber}_${data.variable}`.replace(/[^\w-]/g, "_");
     }
 
     function addStickyScroll() {

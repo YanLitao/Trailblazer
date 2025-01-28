@@ -920,6 +920,13 @@ export class SidebarView implements vscode.WebviewViewProvider {
         }).join('');
     }
 
+    public async addAnswer(answer: string) {
+        this._view?.webview.postMessage({
+            command: 'updateAnswer',
+            answer: answer
+        });
+    }
+
     /**
      * Highlights a variable in the given code snippet.
      * Escapes the code snippet for HTML safety and wraps the variable with a span for highlighting.
