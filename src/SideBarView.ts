@@ -164,7 +164,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
             editor.selection = new vscode.Selection(position, position);
 
             // Highlight the line
-            await this.highlightLineInEditor(editor, lineNumber, 2000);
+            await this.highlightLineInEditor(editor, lineNumber, 3000);
         } catch (error) {
             console.error(`Error opening file at line ${lineNumber}: `, error);
         }
@@ -381,20 +381,32 @@ export class SidebarView implements vscode.WebviewViewProvider {
             <body>
                 <div id="header">
                     <p>Searching for answer to "<span id="title-question">${this._question}</span>"</p>
+                    <p>Selected code:</p>
+                    <div class="code-box">
+                        <pre class="line-numbers language-ts"><code class="language-ts">${stripLineIndentation(this._selectedCode)}</code></pre>
+                    </div>
                     <p id="agent-status">
                         Status: <span id="agent-status-text" class="idle-status">Idle</span>
                     </p>
                     <div id="actions" style="display: flex; justify-content: space-around; padding: 10px;">
                         <button id="pause-agent" class="action-btn"><i class="fa-solid fa-pause"></i></button>
                         <button id="stop-agent" class="action-btn"><i class="fa-solid fa-stop"></i></button>
-                        <button id="toggle-log" class="action-btn"><i class="fa-solid fa-list"></i></button>
                         <button id="save-pdf" class="action-btn"><i class="fa-solid fa-file-pdf"></i></button>
                     </div>
                     <div id="preliminary-answer-text">
                     </div>
                     <p id="still-to-be-found">Still to be found: <span id="exploration-summary"></span></p>
                 </div>
-                <h1>Exploration Steps</h1>
+                <h1>Exploration Steps 
+                    <span class="info-icon" id="info-icon">i</span>
+                </h1>
+                <div id="info-box" class="info-box">
+                    This visualization shows how your AI agent explores the codebase using VSCode tools of 
+                    <strong>"Go to Definition"</strong> and <strong>"Find References"</strong>, along with AST analysis. 
+                    The agent only decides the next steps and summarizes findings to build an answer.  
+                    <br><br>
+                    This is <strong>not</strong> a call graph or dependency graph—it's a guided code exploration using standard developer tools.
+                </div>
                 <div id="graph-container"></div>
                 <div id="current-task">
                     <div id="current-task-content"></div>
@@ -430,7 +442,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
     }
 
     // Function to add Task 1 results to the sidebar with surrounding code
-    public async addTask1Results(task1Output: any) {
+    /* public async addTask1Results(task1Output: any) {
         if (this._view) {
             const webview = this._view.webview;
             const uniqueId = `task1-sub-questions-${this._stepCounter}`;
@@ -640,7 +652,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
             webview.postMessage({ command: 'appendHtml', html: task2Html, id: uniqueId, num: i });
             this._stepCounter++;
         }
-    }
+    } */
 
     // Function to add Task 3 results (final decision and explanation) with surrounding code
     public async addTask3Results(final_decision_sufficient: boolean, task3Output: any, importantCodeSnippets: any, importantCodePaths: any) {

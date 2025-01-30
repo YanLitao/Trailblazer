@@ -1395,7 +1395,7 @@ class Agent {
             text = text.replace(/`([^`]*)`/g, (_, content) => `<span class="inline-code">${content}</span>`);
 
             // Handle inline code ('content')
-            text = text.replace(/'([^']*)'/g, (_, content) => `<span class="inline-code">${content}</span>`);
+            text = text.replace(/(?<!\w)'([^']*?)'(?!\w)/g, (_, content) => `<span class="inline-code">${content}</span>`);
 
             // Handle line breaks (\n -> <br>)
             text = text.replace(/\n/g, "<br>");
@@ -1444,7 +1444,7 @@ class Agent {
         const lifecycleAndInsightsContainer = `
             <div id="details-container" style="display: ${task7Output.final_decision_sufficient ? "block" : "none"};">
                 <div class="lifecycle">
-                    <h2>Lifecycle</h2>
+                    <h2>Tour</h2>
                     ${processLifecycle(Lifecycle)}
                 </div>
                 ${processPracticalInsights(Practical_Insights)}
@@ -1505,28 +1505,29 @@ class Agent {
         switch (taskNumber) {
             case 1:
                 taskInstructions = `
-                    Task 1: Refine the user's question and select valuable variables to explore to answer the question using VSCode tools.
-                    And you can choose the tool from the following list by providing the corresponding integer value:
+                    Task 1: Refine the user's question by incorporating relevant surrounding code while ensuring conciseness. Include only the necessary parts of the surrounding code that directly contribute to understanding and answering the question.
+
+                    Next, identify valuable variables to explore using VSCode tools and select an appropriate tool from the following list by providing the corresponding integer value:
                     - 0: Go to Definition
                     - 1: Find References
                     
-                    From the code_context, each item in the sub_problems array contains a code line with an array of variables in this line to explore.
-                    Evaluate each variable in the variables array to determine whether it is valuable to explore to answer the question, and provide a reason for choosing the variable and tool.
-                    The output format should strictly follow the JSON schema provided, where the tool should be represented as an integer.
-                    Do not change the code_line.
+                    Each item in the sub_problems array corresponds to a code line with an array of variables available for exploration.
+                    Evaluate each variable in the variables array and determine whether it is valuable to explore to answer the refined question. Justify the selection with a reason.
                     
-                    Output format for each variable if valuable 
+                    The output format must strictly adhere to the JSON schema provided. Ensure that the tool is represented as an integer and do not alter the code_line.
+
+                    Output format for each valuable variable:
                     sub_problems: [{
-                        sub_question: "string" , // what is the sub-question can be answered by exploring the invoke_variable in the code line to answer the refined question
-                        tool: "integer",
+                        sub_question: "string", // The specific sub-question that can be answered by exploring the invoke_variable in the code line.
+                        tool: "integer", // Selected tool (0 or 1) for exploration.
                         code_context: {
-                            file_uri: "string", // directly reuse the content file_uri from code_context, do not change
-                            invoke_variable: "string" , // must be one of the variables in the variables array
-                            code_line: "string", // directly reuse the content from code_context, do not change
-                            line_number: "integer", // directly reuse the content from code_context, do not change
-                            full_statement: "string" // directly reuse the content from code_context, do not change
+                            file_uri: "string", // Reuse file_uri from code_context without modification.
+                            invoke_variable: "string", // Must be one of the variables in the variables array.
+                            code_line: "string", // Reuse the code line from code_context without modification.
+                            line_number: "integer", // Reuse line_number from code_context without modification.
+                            full_statement: "string" // Reuse full_statement from code_context without modification.
                         },
-                        reason: "string" // For each sub-question, provide a clear and specific “reason” explaining the goal of exploring this sub-question. Describe exactly what we aim to uncover, such as particular methods, patterns, or code structures relevant to the exploration. Be as precise as possible in defining what we are looking for and why it is essential to the investigation.
+                        reason: "string" // Provide a clear and precise reason for exploring this sub-question. Describe what specific insights we seek, such as method behavior, data dependencies, or structural relationships, and why this exploration is crucial for answering the refined question.
                     }, ...]
                     
                 `;
@@ -1733,7 +1734,7 @@ class Agent {
 
                 Objective:
                 1. Assess if the current findings and code exploration sufficiently answer the refined question.
-                2. Generate a structured, evidence-based answer that includes lifecycle insights, practical tips, and clarity for developers.
+                2. Generate a structured, evidence-based answer that includes key insights, practical tips, and clarity for developers.
 
                 Input:
                 1. refined_question: The question to answer (e.g., "What does this function do?", "Why is this parameter needed?", "How does this variable handle X?").
@@ -1756,48 +1757,83 @@ class Agent {
 
                 1. Decide final_decision_sufficient:
                 Evaluate if the current findings and data flow tree are enough to fully answer the refined question:
-                - **Depth**: Are the explored code snippets detailed enough to address the question's scope (e.g., logic, behavior, dependencies)?
-                - **Coverage**: Does the exploration include all relevant parts of the codebase (e.g., key functions, variables, structures) needed to answer the question?
-                - **Clarity**: Is the data flow traceable, and are the findings coherent enough to form a beginner-friendly answer?
+                - Depth: Are the explored code snippets detailed enough to address the question's scope (e.g., logic, behavior, dependencies)?
+                - Coverage: Does the exploration include all relevant parts of the codebase (e.g., key functions, variables, structures) needed to answer the question?
+                - Clarity: Is the data flow traceable, and are the findings coherent enough to form a beginner-friendly answer?
 
                 Set:
-                - **final_decision_sufficient**: true if all aspects are covered.
-                - **final_decision_sufficient**: false if further exploration is needed, specifying:
+                - final_decision_sufficient: true if all aspects are covered.
+                - final_decision_sufficient: false if further exploration is needed, specifying:
                     - Missing areas (e.g., unexamined dependencies, unexplored control flows, or unclear logic).
 
                 2. Generate Answer:
                 Provide a structured, detailed answer object, whether or not findings are sufficient. The structure should include:
-                - **Overview:** A concise summary of the code element's purpose and relevance to the question.
-                - **Lifecycle:** An array of objects, each representing a lifecycle stage, behavior, or key relationship:
-                   - **insightName:** Name of the lifecycle stage or behavior (e.g., "Initialization," "Mounting").
-                   - **details:** A short explanation of the stage or behavior.
-                   - **reference:** A single snippetKey reference ([snippetKey: number]) that supports the explanation.
-                - **Practical_Insights:** A string summarizing best practices, tips, or common pitfalls relevant to the question.
+                - Overview: A concise summary of the code element's purpose and relevance to the question.
+                - Key Insights: An array of objects representing crucial execution steps, dependencies, or structural behaviors:
+                   - insightName: Name of the key insight (e.g., "Initialization," "Data Flow," "Parameter Influence").
+                   - details: A short explanation of the insight.
+                   - reference: A single snippetKey reference ([snippetKey: number]) that supports the explanation. Do not reference snippetKey: -1, as it represents the root node.
+                - Practical_Insights: A string summarizing best practices, tips, or common pitfalls relevant to the question.
 
-                **Formatting and Reference Guidelines:**
-                - **References to Code Snippets:** Each item in the Lifecycle section must include one and only one reference using [snippetKey: number].
-                - **Bold Emphasis:** Highlight critical methods, variables, or concepts with **bold** text.
-                - **Inline Code:** Use backticks (\`) for inline code elements.
+                Guidelines for Generating Good "Key Insights":
+                - Each insight should capture an important aspect of how the code works.
+                - Focus on execution flow, structural relationships, or logical steps.
+                - Name the insight concisely while making it clear what aspect of the code it describes.
+                - Each insight should be specific, meaningful, and useful for understanding the question.
+
+                Common Types of Key Insights Based on Code Elements:
+                1. Functions (What does this function do?)
+                   - "Input Handling" - How the function processes incoming parameters.
+                   - "Computation Logic" - How the function transforms data.
+                   - "State Update" - If the function modifies state variables.
+                   - "Output Generation" - What the function returns.
+                   - "Error Handling" - How errors are caught or managed.
+                   - "Side Effects" - Any changes outside the function (e.g., modifying global state).
+
+                2. Variables (How is this variable used?)
+                   - "Initialization" - Where and how the variable is first assigned.
+                   - "Modification" - What parts of the code change its value.
+                   - "Usage" - Where and how it is referenced in computations or logic.
+                   - "Scope and Lifetime" - How long the variable exists in the program.
+                   - "Dependencies" - Other variables/functions that affect its value.
+
+                3. Parameters (Why is this parameter needed?)
+                   - "Influence on Execution" - How the parameter affects function behavior.
+                   - "Default Behavior" - What happens if the parameter is missing.
+                   - "Conditional Logic" - Where the parameter influences branches (if/switch).
+                   - "Dependency Injection" - If the parameter provides external dependencies.
+
+                4. Objects and Classes (What does this class or object do?)
+                   - "Initialization" - How the object is created.
+                   - "Properties and Methods" - Key attributes and their behaviors.
+                   - "Interactions" - What other components this interacts with.
+                   - "State Management" - How internal state is handled.
+
+                5. Configuration Settings (How does this setting affect behavior?)
+                   - "Impact on Execution" - What this setting changes in the program.
+                   - "Default and Custom Values" - What happens if it is set or left blank.
+                   - "Dependency on Other Configurations" - If it interacts with other settings.
+                   - "Performance Impact" - Whether this setting affects performance.
+                   - "Security Considerations" - If the setting has security implications.
+
+                Reference Guidelines:
+                - Each insight should have a single code snippet reference ([snippetKey: number]).
+                - Use bold formatting (**importantMethod**) for function names and variables.
+                - Use inline code formatting (\`someVariable\`) for small code snippets.
 
                 Output Format:
                 {
                     "final_decision_sufficient": boolean,
                     "answer": {
-                        "Overview": string, // High-level summary of the question and findings.
-                        "Lifecycle": Array<{
-                            insightName: string, // Name of the lifecycle stage or behavior.
-                            details: string, // Explanation of the stage's role or function.
-                            reference: string // Single code snippet reference in the form [snippetKey: number].
+                        "Overview": string,
+                        "Key_Insights": Array<{
+                            insightName: string,
+                            details: string,
+                            reference: string
                         }>,
-                        "Practical_Insights": string // Summary of best practices, tips, or pitfalls.
+                        "Practical_Insights": string
                     }
                 }
-
-                Checklist for Sufficiency:
-                1. Are all relevant aspects of the refined question addressed (e.g., logic, dependencies, behavior)?
-                2. Is the explanation clear, detailed, and well-supported by code snippets?
-                3. Are key relationships, lifecycle stages, and logic paths traceable and easy to follow?
-                4. Is the final answer concise, actionable, and suitable for both novice and experienced developers?
                 `;
                 break;
             default:

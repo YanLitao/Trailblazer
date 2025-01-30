@@ -6,16 +6,14 @@ const insightMap = new Map();
 
 // Re-append insights after graph redraw
 function reAppendInsights() {
+
+    document.querySelectorAll('.insight-copy').forEach((insight) => {
+        insight.remove(); // Remove the existing insight copy
+    });
+
     insightMap.forEach((insightHTML, snippetKey) => {
         const insightContainer = document.querySelector(`.node-container-box[data-snippet-key="${snippetKey}"]`);
-
         if (insightContainer) {
-            // Check if an insight-copy already exists
-            const existingInsightCopy = insightContainer.querySelector('.insight-copy');
-
-            if (existingInsightCopy) {
-                existingInsightCopy.remove(); // Remove the existing insight copy
-            }
             // Create a new div for the insight copy
             const clonedInsightContainer = document.createElement('div');
             clonedInsightContainer.classList.add('insight-copy');
@@ -52,25 +50,16 @@ window.addEventListener('message', event => {
                 const lifecycleInsights = document.querySelectorAll('.lifecycle .insight'); // Restrict to .lifecycle
                 lifecycleInsights.forEach((insight) => {
                     const snippetKey = insight.getAttribute('data-ref');
-                    const insightContainer = document.querySelector(`.node-container-box[data-snippet-key="${snippetKey}"]`);
-
-                    if (insightContainer) {
-                        // Create a new div to hold the copied content
-                        const insightCopyContainer = document.createElement('div');
-                        insightCopyContainer.classList.add('insight-copy');
-                        insightCopyContainer.innerHTML = insight.innerHTML; // Copy the content of the insight
-                        insightContainer.appendChild(insightCopyContainer);
-
-                        // Style and adjust the container
-                        insightContainer.classList.add("insight-in-container");
-                    }
 
                     // Update the persistent map to store the innerHTML of the original insight
                     insightMap.set(snippetKey, insight.innerHTML);
                 });
 
+                reAppendInsights();
+
                 if (message.answer.includes("Final Answer")) {
                     document.getElementById('still-to-be-found').style.display = 'none';
+                    document.getElementById('actions').style.display = 'none';
                 }
 
             }
@@ -100,31 +89,62 @@ document.getElementById('save-pdf').addEventListener('click', function () {
     html2pdf().from(element).save('search-copilot.pdf');
 });
 
-// Function to toggle the visibility of the exploration steps
-document.getElementById('toggle-log').addEventListener('click', function () {
-    const explorationSteps = document.getElementById('exploration-steps');
-
-    if (explorationSteps.style.display === 'none' || explorationSteps.style.display === '') {
-        // Show the exploration steps
-        explorationSteps.style.display = 'block';
-        document.getElementById('toggle-log').innerText = 'Hide full log';
-    } else {
-        // Hide the exploration steps
-        explorationSteps.style.display = 'none';
-        document.getElementById('toggle-log').innerText = 'See full log';
-    }
-});
-
 document.getElementById('pause-agent').addEventListener('click', function () {
-    vscode.postMessage({
-        command: 'pauseAgent'
-    });
+    const pauseButton = this; // Get the button element
+    const icon = pauseButton.querySelector("i"); // Get the icon inside the button
+
+    if (icon.classList.contains("fa-pause")) {
+        // Change to Play Button
+        icon.classList.remove("fa-pause");
+        icon.classList.add("fa-play");
+
+        // Send message to pause the agent
+        vscode.postMessage({
+            command: 'pauseAgent'
+        });
+
+    } else {
+        // Change back to Pause Button
+        icon.classList.remove("fa-play");
+        icon.classList.add("fa-pause");
+
+        // Send message to resume the agent
+        vscode.postMessage({
+            command: 'continueAgent'
+        });
+    }
 });
 
 document.getElementById('stop-agent').addEventListener('click', function () {
     vscode.postMessage({
         command: 'stopAgent'
     });
+});
+
+const infoIcon = document.getElementById('info-icon');
+const infoContainer = document.getElementById('info-box');
+
+infoIcon.addEventListener("mouseover", function () {
+    // Get the bounding box of the info-icon
+    const iconRect = infoIcon.getBoundingClientRect();
+
+    // Position the info-box just below the info-icon
+    infoContainer.style.top = `${iconRect.bottom + 5}px`; // 5px margin below the icon
+    infoContainer.style.left = `${iconRect.left}px`;
+
+    // Show the info-box
+    infoContainer.style.display = "block";
+});
+
+infoIcon.addEventListener("mouseout", function (event) {
+    // Check if the mouse is moving to the info-box itself
+    if (!infoContainer.contains(event.relatedTarget)) {
+        infoContainer.style.display = "none";
+    }
+});
+
+infoContainer.addEventListener("mouseleave", function () {
+    infoContainer.style.display = "none";
 });
 
 function findNodeBySnippetKey(node, snippetKey) {
@@ -584,18 +604,20 @@ function renderGraph(data) {
                 drawGraph(); // Redraw the graph with updated states
             });
 
-        /* // Add text for nodes
+        // Add text inside circles to indicate visibility state
         nodeGroup.append("text")
-            .attr("id", d => `text-${generateNodeId(d.data)}`) // Add an ID for easier selection
+            .attr("id", d => `toggle-symbol-${generateNodeId(d.data)}`) // Add an ID for easier selection
             .attr("x", d => d.depth * nodeSize)
             .attr("dy", "0.32em")
             .attr("text-anchor", "middle")
-            .attr("fill", "white")
-            .style("font-size", "10px")
+            .attr("fill", "black")
+            .style("font-size", "14px")
+            .style("font-weight", "bold")
             .text(d => {
-                if (d.data.snippetKey !== -1) return `[${d.data.snippetKey}]`; // Add snippetKey for labeled nodes
-                return "";
-            }); */
+                if (d.data.hidden === 1) return "+"; // Expand indicator
+                if (d.data.hidden === 2) return "-"; // Collapse indicator
+                return ""; // No text if hidden = 0
+            });
 
         nodeGroup.append("foreignObject")
             .attr("id", d => `box-${generateNodeId(d.data)}`) // Use sanitized ID for toggling visibility
@@ -611,16 +633,15 @@ function renderGraph(data) {
                 // Description Text for Each Node
                 let descriptionHTML = "";
                 if (d.data.id === "fake-origin") {
-                    descriptionHTML = `<div class="node-description">You selected the code snippet for exploration 
-                    in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}.</div>
+                    descriptionHTML = `<div class="node-description">Selected the code snippet: ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}.</div>
                     `;
                 } else if (d.parent && d.parent.data.id === "fake-origin") {
                     // Node with fake-origin as parent
                     descriptionHTML = `
                         <div class="node-description">
-                            Picked <span class="inline-code">${d.data.variable}</span> 
+                            I explored <span class="inline-code">${d.data.variable}</span> 
                             in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1} 
-                            from your selected code for further exploration.
+                            from your selected code snippet.
                         </div>
                     `;
                 } else if (d.data.tool === "reference") {
@@ -628,25 +649,24 @@ function renderGraph(data) {
                     const parentInfo = d.parent.data.variable;
                     descriptionHTML = `
                         <div class="node-description">
-                            <span class="inline-code">${d.data.variable}</span> 
+                            I found <span class="inline-code">${d.data.variable}</span> 
                             in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}
                             is another reference to ${parentInfo}.
                         </div>
                     `;
                 } else if (d.data.tool === "assignment") {
-                    // Assignment Node
                     const parentInfo = d.parent.data.variable;
                     descriptionHTML = `
                         <div class="node-description">
-                            ${parentInfo} and <span class="inline-code">${d.data.variable}</span>
-                            in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1} exchange values.
+                            I found the derivation of <span class="inline-code">${d.data.variable}</span>
+                            in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}, related to ${parentInfo}.
                         </div>
                     `;
                 } else {
                     // Default Case
                     descriptionHTML = `
                         <div class="node-description">
-                            Found the definition of <span class="inline-code">${d.data.variable}</span>
+                            I found the definition of <span class="inline-code">${d.data.variable}</span>
                             in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}.
                         </div>
                     `;
@@ -764,6 +784,7 @@ function renderGraph(data) {
 
         nodeGroup.selectAll(".search-btn").on("click", function (event) {
             document.getElementById('still-to-be-found').style.display = 'block';
+            document.getElementById('actions').style.display = 'block';
             const nodeId = event.target.getAttribute("data-node-id");
             // Find the clicked node by its ID
             const clickedNode = nodes.find((node) => node.data.id === nodeId);
@@ -1188,3 +1209,4 @@ function renderGraph(data) {
         reAppendInsights(); // Re-append insights to their containers
     });
 }
+
