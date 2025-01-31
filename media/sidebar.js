@@ -6,9 +6,9 @@ const insightMap = new Map();
 
 // Re-append insights after graph redraw
 function reAppendInsights() {
-
+    // Remove existing insight copies
     document.querySelectorAll('.insight-copy').forEach((insight) => {
-        insight.remove(); // Remove the existing insight copy
+        insight.remove();
     });
 
     insightMap.forEach((insightHTML, snippetKey) => {
@@ -19,6 +19,10 @@ function reAppendInsights() {
             clonedInsightContainer.classList.add('insight-copy');
             clonedInsightContainer.innerHTML = insightHTML; // Set the innerHTML from the map
 
+            // Remove all .citation-ref spans inside this cloned container
+            clonedInsightContainer.querySelectorAll('.citation-ref').forEach((ref) => ref.remove());
+
+            // Append the cleaned insight container
             insightContainer.appendChild(clonedInsightContainer);
 
             // Style the container as needed

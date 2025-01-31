@@ -450,7 +450,7 @@ current-task {
 
 /* Styling for citation references within the answer */
 .citation-ref {
-    color: #6c757d;
+    color: #007bff;
     /* Darker blue */
     font-weight: normal;
     /* Not bold */
@@ -459,7 +459,7 @@ current-task {
 }
 
 .citation-ref:hover {
-    color: black;
+    color: #0056b3;
     /* Slightly darker blue on hover */
     text-decoration: underline;
 }

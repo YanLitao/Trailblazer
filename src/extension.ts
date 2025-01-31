@@ -1415,7 +1415,7 @@ class Agent {
                     insight.details = processMarkdown(insight.details);
                     // Extract snippetKey from reference
                     const snippetKeyMatch = insight.reference.match(/snippetKey:\s*(-?\d+)/);
-                    const snippetKey = snippetKeyMatch ? parseInt(snippetKeyMatch[1], 10) : null;
+                    const snippetKey = snippetKeyMatch ? parseInt(snippetKeyMatch[1], 10) : parseInt(insight.reference, 10);
 
                     // Find snippet data using the recursive traversal function
                     const snippetData = snippetKey !== null ? this.findSnippetBySnippetKey(snippetKey) : null;
