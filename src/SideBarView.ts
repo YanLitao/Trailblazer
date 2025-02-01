@@ -312,6 +312,8 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 } finally {
                     // Clean up the line highlight when the input box is dismissed
                     lineDecoration.dispose();
+                    vscode.commands.executeCommand('extension.continueAgent');
+
                 }
             }
         } catch (error) {
@@ -655,7 +657,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
     } */
 
     // Function to add Task 3 results (final decision and explanation) with surrounding code
-    public async addTask3Results(final_decision_sufficient: boolean, task3Output: any, importantCodeSnippets: any, importantCodePaths: any) {
+    public async addTask3Results(final_decision_sufficient: boolean, task3Output: any) {
         if (this._view) {
             /* const webview = this._view.webview;
             const explorationUniqueId = `exploration-task3-results-${this._stepCounter}`; // Unique ID for exploration steps

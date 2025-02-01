@@ -192,107 +192,43 @@ export class ExplorationGraph {
     }
 
     /**
-     * Finds the shortest paths from a given node to all origin nodes.
-     * Paths are represented as arrays of node IDs.
+     * Merges the children of an existing node with a newly encountered duplicate node.
      */
-    findShortestPathFromNode(startNodeId: string, maxPaths: number = 1): { node: Node; edge?: Edge }[][] {
-        if (!this.nodes.has(startNodeId)) {
-            console.warn(`Node with ID ${startNodeId} not found.`);
-            return [];
-        }
+    private mergeChildren(existingNode: TreeNode, newNode: TreeNode) {
+        const existingChildrenMap = new Map(existingNode.children.map(child => [child.id, child]));
 
-        const originNodeIds = Array.from(this.origins);
-        const isFakeOrigin = (nodeId: string) => nodeId === "fake-origin"; // Helper to check fake origin
-
-        // Map to track the shortest paths to each origin
-        const shortestPathsMap: Map<string, { node: Node; edge?: Edge }[]> = new Map();
-
-        // Perform BFS in reverse
-        const queue: { path: { node: Node; edge?: Edge }[]; visited: Set<string> }[] = [
-            { path: [{ node: this.nodes.get(startNodeId)! }], visited: new Set([startNodeId]) },
-        ];
-
-        while (queue.length > 0) {
-            const { path, visited } = queue.shift()!;
-            const currentNodeId = path[path.length - 1].node.id;
-
-            // If the current node is an origin, check if it’s the shortest path
-            if (originNodeIds.includes(currentNodeId)) {
-                if (!shortestPathsMap.has(currentNodeId)) {
-                    shortestPathsMap.set(currentNodeId, [...path]);
-                }
-                continue; // Do not explore further from this origin
-            }
-
-            // Avoid prioritizing paths through the fake origin unless explicitly needed
-            if (isFakeOrigin(currentNodeId) && path.length > 1) {
-                continue;
-            }
-
-            // Explore backward edges
-            const backwardEdges = Array.from(this.edges).filter((edge) => edge.to === currentNodeId);
-
-            for (const edge of backwardEdges) {
-                const fromNode = this.getNode(edge.from);
-                if (!fromNode) continue;
-
-                // Avoid revisiting nodes
-                if (!visited.has(fromNode.id)) {
-                    queue.push({
-                        path: [...path, { node: fromNode, edge }],
-                        visited: new Set([...visited, fromNode.id]),
-                    });
-                }
+        for (const newChild of newNode.children) {
+            if (existingChildrenMap.has(newChild.id)) {
+                // Merge recursively if child already exists
+                this.mergeChildren(existingChildrenMap.get(newChild.id)!, newChild);
+            } else {
+                // Add new child if it doesn't exist
+                existingNode.children.push(newChild);
             }
         }
-
-        // Collect the shortest paths for up to `maxPaths` origins
-        const shortestPaths: { node: Node; edge?: Edge }[][] = Array.from(shortestPathsMap.values())
-            .filter(path => path.length >= 1)
-            .slice(0, maxPaths)
-            .map(path => path.reverse()); // Reverse each path so origin is first and startNode is last
-
-        return shortestPaths;
     }
 
-    findShortestPathFromNodeToFakeOrigin(startNodeId: string): { node: Node; edge?: Edge }[] {
-        if (!this.nodes.has(startNodeId)) {
-            console.warn(`Node with ID ${startNodeId} not found.`);
-            return [];
+    /**
+     * Removes duplicate nodes in the tree and merges their children to avoid data loss.
+     */
+    private removeDuplicatesAndMerge(node: TreeNode, ancestors: Set<string> = new Set(), nodeMap: Map<string, TreeNode> = new Map()): TreeNode | null {
+        if (nodeMap.has(node.id)) {
+            // Merge children into the existing node
+            this.mergeChildren(nodeMap.get(node.id)!, node);
+            return null; // Skip adding duplicate node in the parent's children list
+        } else {
+            nodeMap.set(node.id, node);
         }
 
-        // BFS initialization
-        const queue: { path: { node: Node; edge?: Edge }[]; visited: Set<string> }[] = [
-            { path: [{ node: this.nodes.get(startNodeId)! }], visited: new Set([startNodeId]) },
-        ];
+        // Track ancestors to prevent cycles
+        const newAncestors = new Set([...ancestors, node.id]);
 
-        while (queue.length > 0) {
-            const { path, visited } = queue.shift()!;
-            const currentNodeId = path[path.length - 1].node.id;
+        // Process children recursively, keeping only non-null nodes
+        node.children = node.children
+            .map(child => this.removeDuplicatesAndMerge(child, newAncestors, nodeMap))
+            .filter(child => child !== null) as TreeNode[];
 
-            // Stop if the current node is the fake origin
-            if (currentNodeId === this.fakeOriginId) {
-                return path.reverse(); // Reverse the path for consistency
-            }
-
-            // Explore backward edges
-            const backwardEdges = Array.from(this.edges).filter((edge) => edge.to === currentNodeId);
-
-            for (const edge of backwardEdges) {
-                const fromNode = this.getNode(edge.from);
-                if (!fromNode) continue;
-
-                // Avoid revisiting nodes
-                if (!visited.has(fromNode.id)) {
-                    queue.push({
-                        path: [...path, { node: fromNode, edge }],
-                        visited: new Set([...visited, fromNode.id]),
-                    });
-                }
-            }
-        }
-
-        return []; // Return an empty array if no path is found
+        return node;
     }
 
     /**
@@ -402,7 +338,7 @@ export class ExplorationGraph {
             }
         });
 
-        this.tree = root;
+        this.tree = this.removeDuplicatesAndMerge(root)!;
 
         return root;
     }
@@ -489,6 +425,8 @@ export class ExplorationGraph {
             }
         });
 
+        this.tree = this.removeDuplicatesAndMerge(this.tree)!;
+
         return this.tree;
     }
 
@@ -564,5 +502,7 @@ export class ExplorationGraph {
 
         return []; // No path found
     }
+
+
 
 }

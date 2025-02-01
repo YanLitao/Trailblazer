@@ -84,6 +84,7 @@ window.addEventListener('message', event => {
             break;
         case 'updateTitleQuestion':
             document.getElementById('title-question').innerText = message.question;
+            followUpQuestionInput();
             break;
     }
 });
@@ -124,6 +125,17 @@ document.getElementById('stop-agent').addEventListener('click', function () {
         command: 'stopAgent'
     });
 });
+
+function followUpQuestionInput() {
+    document.getElementById('still-to-be-found').style.display = 'block';
+    document.getElementById('actions').style.display = 'block';
+    document.getElementById('final-answer-header').innerHTML = 'Preliminary Answer';
+    updateStatus('Searching');
+    const pauseButton = document.getElementById('pause-agent');
+    const icon = pauseButton.querySelector('i');
+    icon.classList.remove('fa-play');
+    icon.classList.add('fa-pause');
+}
 
 const infoIcon = document.getElementById('info-icon');
 const infoContainer = document.getElementById('info-box');
@@ -787,8 +799,6 @@ function renderGraph(data) {
         });
 
         nodeGroup.selectAll(".search-btn").on("click", function (event) {
-            document.getElementById('still-to-be-found').style.display = 'block';
-            document.getElementById('actions').style.display = 'block';
             const nodeId = event.target.getAttribute("data-node-id");
             // Find the clicked node by its ID
             const clickedNode = nodes.find((node) => node.data.id === nodeId);

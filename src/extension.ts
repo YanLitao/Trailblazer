@@ -3,11 +3,9 @@ import { z } from "zod";
 import { ChatOpenAI } from "@langchain/openai";
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
-import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-import { StringOutputParser } from "@langchain/core/output_parsers";
 import { SidebarView } from './SideBarView';
 import { test, getLineText, getSurroundingCode, getLineNumber, getFileNameFromUri, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, analyze, findCompleteStatementText } from './codeContextUtils';
-import { ExplorationGraph, Node, Edge, TreeNode } from './explorationGraph';
+import { ExplorationGraph, Node, TreeNode } from './explorationGraph';
 
 // API key for OpenAI
 const API_KEY = process.env.OPENAI_TOKEN;
@@ -220,7 +218,6 @@ class Agent {
     private isStopped: boolean = false;    // Track if the agent is stopped
     private _importantCodeSnippets = new Map<number, { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }>();
     private _fileExtensionsToExclude = ['.test.ts', '.spec.ts', '.test.tsx', '.spec.tsx', '.test.js', '.spec.js', '.test.jsx', '.spec.jsx', '.d.ts'];
-    private _importantCodePaths: Map<string, Array<{ nodes: Node[]; edges: (Edge | null)[] }>> = new Map();
     private _previousParsedNodes: { [key: number]: { nodeID: string; statement: string } } = {};
     private _tree: TreeNode = {
         id: "root",
@@ -1192,26 +1189,6 @@ class Agent {
                     statement: result.finding ?? result.explanation
                 };
             }
-
-            // Find the path for this variable only if not already stored
-            if (!this._importantCodePaths.has(pathId)) {
-
-                const paths = this._explorationGraph.findShortestPathFromNode(nodeId);
-                console.log("Paths for ", pathId, ": ", paths, " with node ID: ", nodeId);
-                if (paths.length > 0) {
-                    this._importantCodePaths.set(pathId, paths.map(path => {
-                        const nodes: Node[] = [];
-                        const edges: (Edge | null)[] = [];
-
-                        for (const entry of path) {
-                            nodes.push(entry.node);
-                            edges.push(entry.edge || null);
-                        }
-
-                        return { nodes, edges };
-                    }));
-                }
-            }
         });
 
         if (nodeIds !== this._previousParsedNodes && Object.keys(nodeIds).length > 0) {
@@ -1413,9 +1390,15 @@ class Agent {
             return lifecycle
                 .map((insight) => {
                     insight.details = processMarkdown(insight.details);
+
                     // Extract snippetKey from reference
                     const snippetKeyMatch = insight.reference.match(/snippetKey:\s*(-?\d+)/);
-                    const snippetKey = snippetKeyMatch ? parseInt(snippetKeyMatch[1], 10) : parseInt(insight.reference, 10);
+                    let snippetKey = snippetKeyMatch ? parseInt(snippetKeyMatch[1], 10) : parseInt(insight.reference, 10);
+
+                    // If snippetKey is -1, get the snippetKey of the first child of the root
+                    if (snippetKey === -1 && this._tree.children.length > 0) {
+                        snippetKey = this._tree.children[0].snippetKey;
+                    }
 
                     // Find snippet data using the recursive traversal function
                     const snippetData = snippetKey !== null ? this.findSnippetBySnippetKey(snippetKey) : null;
@@ -1425,7 +1408,7 @@ class Agent {
                         <div class="insight" 
                             data-file-uri="${snippetData?.fileUri || ''}" 
                             data-line-number="${snippetData?.lineNumber || ''}" 
-                            data-ref="${snippetKey}"
+                            data-ref="${snippetKey}">
                             <h3>${insight.insightName}</h3>
                             <p>${insight.details}
                                 [<span class="citation-ref" data-ref="${snippetKey}">See how we found this</span>]
@@ -1461,7 +1444,7 @@ class Agent {
         // Wrap the entire answer in a container div
         const processedAnswer = `
             <div class="final-answer">
-                <h1 style="font-weight: bold;">${task7Output.final_decision_sufficient ? "Final Answer" : "Preliminary Answer"}:</h1>
+                <h1 id="final-answer-header" style="font-weight: bold;">${task7Output.final_decision_sufficient ? "Final Answer" : "Preliminary Answer"}:</h1>
                 ${processOverview(Overview)}
                 ${toggleButton}
                 ${lifecycleAndInsightsContainer}
@@ -1491,9 +1474,9 @@ class Agent {
     private async _updateStepResults(refinedOutput: any) {
         // Update sidebar and graph visualization with refinedOutput and important code snippets
         if (this._updateFindings) {
-            this._sidebarViewProvider.addTask3Results(this._final_decision_sufficient, refinedOutput, this._importantCodeSnippets, this._importantCodePaths);
+            this._sidebarViewProvider.addTask3Results(this._final_decision_sufficient, refinedOutput);
         } else {
-            this._sidebarViewProvider.addTask3Results(this._final_decision_sufficient, refinedOutput, null, null);
+            this._sidebarViewProvider.addTask3Results(this._final_decision_sufficient, refinedOutput);
         }
         this._updateFindings = false;
         //this.updateGraphVisualization();
