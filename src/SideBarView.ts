@@ -382,14 +382,16 @@ export class SidebarView implements vscode.WebviewViewProvider {
             </head>
             <body>
                 <div id="header">
-                    <p>Searching for answer to "<span id="title-question">${this._question}</span>"</p>
-                    <p>Selected code:</p>
-                    <div class="code-box">
-                        <pre class="line-numbers language-ts"><code class="language-ts">${stripLineIndentation(this._selectedCode)}</code></pre>
+                    <div class="header-divs">Searching for answer to "<span id="title-question">${this._question}</span>"</div>
+                    <div class="code-box header-divs">
+                        Selected code:
+                        <br>
+                        <code>${stripLineIndentation(this._selectedCode)}</code>
                     </div>
-                    <p id="agent-status">
+                    <div id="agent-status" class="header-divs">
                         Status: <span id="agent-status-text" class="idle-status">Idle</span>
-                    </p>
+                    </div>
+                    <div id="searching-content" class="header-divs"></div>
                     <div id="actions" style="display: flex; justify-content: space-around; padding: 10px;">
                         <button id="pause-agent" class="action-btn"><i class="fa-solid fa-pause"></i></button>
                         <button id="stop-agent" class="action-btn"><i class="fa-solid fa-stop"></i></button>
@@ -397,7 +399,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     </div>
                     <div id="preliminary-answer-text">
                     </div>
-                    <p id="still-to-be-found">Still to be found: <span id="exploration-summary"></span></p>
+                    <div id="still-to-be-found" class="header-divs">Still to be found: <span id="exploration-summary"></span></div>
                 </div>
                 <h1>Exploration Steps 
                     <span class="info-icon" id="info-icon">i</span>
@@ -435,6 +437,13 @@ export class SidebarView implements vscode.WebviewViewProvider {
             </body>
             </html>
         `;
+    }
+
+    public updateSearchingContent(content: string) {
+        this._view?.webview.postMessage({
+            command: 'updateSearchingContent',
+            content: content
+        });
     }
 
     public updatetitleQuestion(newQuestion: string) {

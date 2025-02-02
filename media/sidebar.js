@@ -1,5 +1,5 @@
 const vscode = acquireVsCodeApi(); // This gives us access to the VSCode API
-
+let messageQueue = [];
 let graphData;
 // Persistent storage for insights
 const insightMap = new Map();
@@ -27,6 +27,8 @@ function reAppendInsights() {
 
             // Style the container as needed
             insightContainer.classList.add('insight-in-container');
+            const parent = insightContainer.parentElement;
+            clonedInsightContainer.style.height = `${parent.offsetHeight}px`;
         }
     });
 }
@@ -56,7 +58,10 @@ window.addEventListener('message', event => {
                     const snippetKey = insight.getAttribute('data-ref');
 
                     // Update the persistent map to store the innerHTML of the original insight
-                    insightMap.set(snippetKey, insight.innerHTML);
+                    if (snippetKey && snippetKey !== -1) {
+                        insightHTML = insight.innerHTML.replace(/\[<span class="citation-ref"[^>]*>.*?<\/span>\]/g, "");
+                        insightMap.set(snippetKey, insightHTML);
+                    }
                 });
 
                 reAppendInsights();
@@ -71,6 +76,7 @@ window.addEventListener('message', event => {
         case 'updateExplorationSummary':
             if (message.summary.includes("Final Answer: ")) {
                 document.getElementById('still-to-be-found').innerHTML = message.summary;
+                document.getElementById('searching-content').style.display = 'none';
             } else {
                 document.getElementById('exploration-summary').innerText = message.summary;
             }
@@ -86,8 +92,34 @@ window.addEventListener('message', event => {
             document.getElementById('title-question').innerText = message.question;
             followUpQuestionInput();
             break;
+        case 'updateSearchingContent':
+            updateSearchingContent(message.content);
+            break;
     }
 });
+
+function updateSearchingContent(content) {
+    const searchingContentDiv = document.getElementById('searching-content');
+    const maxMessages = 1;
+    // Create new message element
+    const newMessage = document.createElement('div');
+    newMessage.className = 'search-message fade-in';
+    newMessage.textContent = content;
+
+    // Add the new message to the queue
+    searchingContentDiv.appendChild(newMessage);
+    messageQueue.push(newMessage);
+
+    setTimeout(() => {
+        newMessage.classList.add('fade-out');
+    }, 10000);
+
+    // Ensure we only keep the last 3 messages
+    if (messageQueue.length > maxMessages) {
+        const oldMessage = messageQueue.shift();
+        setTimeout(() => oldMessage.remove(), 500); // Remove after fade-out
+    }
+}
 
 document.getElementById('save-pdf').addEventListener('click', function () {
     var element = document.body;
@@ -130,6 +162,7 @@ function followUpQuestionInput() {
     document.getElementById('still-to-be-found').style.display = 'block';
     document.getElementById('actions').style.display = 'block';
     document.getElementById('final-answer-header').innerHTML = 'Preliminary Answer';
+    document.getElementById('searching-content').style.display = 'block';
     updateStatus('Searching');
     const pauseButton = document.getElementById('pause-agent');
     const icon = pauseButton.querySelector('i');
@@ -335,7 +368,6 @@ function toggleAdditionalInvocations(elementId) {
 function appendHtml(html, id, num) {
     const explorationSteps = document.getElementById('exploration-steps');
     explorationSteps.insertAdjacentHTML('beforeend', html);
-    Prism.highlightAll(); // Highlight the newly added code using Prism.js
     setupJumpToLine(); // Set up the jump-to-line functionality
     if (num >= 0) {
         setupToggleDetails(id, num); // Set up the toggle details functionality
@@ -473,7 +505,6 @@ function updateStatus(status) {
 
 function updateCurrentTaskContent(html, id, num) {
     document.getElementById('current-task-content').innerHTML = html;
-    Prism.highlightAll(); // Highlight the newly added code using Prism.js
     setupJumpToLine(); // Set up the jump-to-line functionality
     if (num >= 0) {
         setupToggleDetails(id, num); // Set up the toggle details functionality
@@ -861,7 +892,7 @@ function renderGraph(data) {
         tempDiv.innerHTML = htmlContent;
 
         document.body.appendChild(tempDiv);
-        let height = tempDiv.getBoundingClientRect().height; // Measure total height
+        let height = tempDiv.getBoundingClientRect().height + 20; // Measure total height
         document.body.removeChild(tempDiv); // Clean up
 
         if (height < 50) {

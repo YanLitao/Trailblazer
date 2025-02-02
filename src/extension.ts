@@ -367,7 +367,7 @@ class Agent {
     }
 
     async runTask1(uri: vscode.Uri, startLine: number, endLine: number) {
-        console.warn("Running Task 1");
+        this._sidebarViewProvider.updateSearchingContent("Refining your question...");
         const fileUriString = uri.toString();
         const surroundingCode = await getLineTextFromRange(uri, startLine, endLine);
 
@@ -486,6 +486,8 @@ class Agent {
         task1Output = JSON.parse(response);
         this._refined_question += task1Output.refined_question;
 
+        this._sidebarViewProvider.updateSearchingContent("Refined your question into: " + task1Output.refined_question);
+
         if (totalVariables <= this._numberOfVariablesThreshold) {
             task1Output.sub_problems = sub_problems;
         }
@@ -531,13 +533,7 @@ class Agent {
     }
 
     async runTask2(subProblems: any[]) {
-        console.warn("Running Task 2, processing ", subProblems.length, " sub-problems: ", subProblems);
-
-        /* const task2Input: any = {
-            task: 2,
-            refined_question: this._refined_question,
-            questions_and_results: [] // Only includes sub-problems that need further filtering by the agent
-        }; */
+        this._sidebarViewProvider.updateSearchingContent(`Exploring ${subProblems.length} sub-problems...`);
 
         const task2Results: any[] = []; // Stores final results to display in the sidebar
         const newExploredLines: Array<{ file_uri: string, line_number: number, code_line: string, full_statement: string, variables: Set<string> }> = [];
@@ -950,7 +946,7 @@ class Agent {
 
     async runTask3() {
         console.warn("Running Task 3, processing ", this._newExploredCodeLines.length, " new code lines.");
-
+        this._sidebarViewProvider.updateSearchingContent(`Deciding next exploration variables from ${this._newExploredCodeLines.length} new code lines...`);
         let task3Output: {
             sub_problems: {
                 sub_question: string;
@@ -1071,7 +1067,7 @@ class Agent {
             task4Output.sub_problems = nextExploreVariables;
         } else {
             console.warn("Running task 4, evaluating ", variableCount, " variables.");
-
+            this._sidebarViewProvider.updateSearchingContent(`Deciding next exploration variables from ${variableCount} variables ...`);
             const inputJson = {
                 task: 4,
                 refined_question: this._refined_question ?? "",
@@ -1091,13 +1087,14 @@ class Agent {
 
             task4Output = await this.processTask3andTask4Output(agentOutput);
         }
+        this._sidebarViewProvider.updateSearchingContent(`Added ${task4Output.sub_problems.length} variables to explore next.`);
         console.log("Task 4 output: ", task4Output);
         return task4Output;
     }
 
     async runTask5(task2Results: Array<{ file_uri: string; line_number: number; code_line: string; full_statement: string; variables: Set<string> }>) {
         console.warn("Running task 5, processing ", task2Results.length, " results.");
-
+        this._sidebarViewProvider.updateSearchingContent(`Evaluating the importance of ${task2Results.length} results gained in this exploration...`);
         const filteredResults = task2Results.filter(
             result =>
                 !Array.from(this._importantCodeSnippets.values()).some(
@@ -1279,7 +1276,7 @@ class Agent {
 
     async runTask6(): Promise<string> {
         console.warn("Running Task 6, processing ", this._findingsSummary.length, " findings.");
-
+        this._sidebarViewProvider.updateSearchingContent(`Summarizing ${this._findingsSummary.length} findings...`);
         if (this._findingsSummary.length === 0 || !this._updateFindings) {
             return "";
         }
@@ -1323,7 +1320,7 @@ class Agent {
             const statementHtml = finding.outOfDate
                 ? `<span class="additional-finding">[1 additional finding]</span>
                    <span class="hidden-statement" style="display: none;">${snippetKeys} ${finding.statement}</span>`
-                : `${snippetKeys} ${finding.statement}`;
+                : `${finding.statement}${snippetKeys}`;
 
             concatenatedHtml += `
                 <li class="${finding.isUpdated ? "highlight-new finding-summary" : "finding-summary"}">
@@ -1398,6 +1395,7 @@ class Agent {
                     // If snippetKey is -1, get the snippetKey of the first child of the root
                     if (snippetKey === -1 && this._tree.children.length > 0) {
                         snippetKey = this._tree.children[0].snippetKey;
+                        console.log("Snippet key set to first child of the root:", this._tree, snippetKey, this._tree.children);
                     }
 
                     // Find snippet data using the recursive traversal function
@@ -1456,7 +1454,7 @@ class Agent {
 
     async runTask7() {
         console.warn("Running Task 7.");
-
+        this._sidebarViewProvider.updateSearchingContent("Deciding whether the exploration is sufficient...");
         const inputJson = {
             task: 7,
             refined_question: this._refined_question ?? this._question,
@@ -1467,7 +1465,7 @@ class Agent {
         const task7Output = JSON.parse(response);
 
         this._final_decision_sufficient = task7Output.final_decision_sufficient;
-
+        this._sidebarViewProvider.updateSearchingContent(`Exploration is ${this._final_decision_sufficient ? "sufficient" : "insufficient"}.`);
         return this.processFinalAnswer(task7Output);
     }
 

@@ -1,5 +1,7 @@
 body {
-    font-family: "Lato", Arial, sans-serif;
+    font-family: sans-serif;
+    font-weight: 300;
+    line-height: 1.2;
     margin: 0;
     padding: 0;
     background-color: #f5f5f5;
@@ -33,6 +35,10 @@ h4 {
     background-color: #ffffff;
     border-bottom: 1px solid #ddd;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+#header .header-divs {
+    margin-top: 10px;
 }
 
 /* Container for the Final Answer */
@@ -131,6 +137,25 @@ html {
 
 #title-question {
     font-style: italic;
+}
+
+#searching-content {
+    overflow: hidden;
+    color: #555555;
+}
+
+.search-message {
+    opacity: 0;
+    transition: opacity 0.5s ease-in-out;
+}
+
+.fade-in {
+    opacity: 1 !important;
+}
+
+.fade-out {
+    opacity: 0 !important;
+    transition: opacity 0.5s ease-in-out;
 }
 
 /* Switch container styling */
@@ -744,6 +769,10 @@ code {
     padding: 10px;
     border: 1px solid #ddd;
     overflow-y: auto;
+}
+
+.insight-copy h3 {
+    margin: 0;
 }
 
 /* Match the height of insight-copy to code-box */
