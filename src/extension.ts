@@ -14,48 +14,73 @@ if (!API_KEY) {
     console.error("OpenAI API Key is missing. Please set the OPENAI_TOKEN environment variable.");
 }
 
+let sidebarViewProvider: SidebarView | undefined;
+let agent: Agent | undefined;
+let sidebarDisposable: vscode.Disposable | undefined;
+
 export function activate(context: vscode.ExtensionContext) {
     test();
-    // Initialize the SidebarView and Agent
-    const sidebarViewProvider = new SidebarView(context);
-    const agent = new Agent(sidebarViewProvider);
 
-    // Register the webview provider for the sidebar
-    context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider(
-            SidebarView.viewType, // Match with the "id" defined in package.json for the view
-            sidebarViewProvider
-        )
+    // Initialize and register the SidebarView **once**
+    sidebarViewProvider = new SidebarView(context);
+    sidebarDisposable = vscode.window.registerWebviewViewProvider(
+        SidebarView.viewType,
+        sidebarViewProvider
     );
+    context.subscriptions.push(sidebarDisposable);
 
     // Register the command to ask a question about code
     context.subscriptions.push(
-        vscode.commands.registerCommand('search-copilot.askQuestion', () => {
-            askQuestionAboutCode(context, sidebarViewProvider, agent);
+        vscode.commands.registerCommand('search-copilot.askQuestion', async () => {
+            // Dispose the agent, but keep the sidebar view
+            disposeAgentOnly();
+
+            // Reuse existing sidebarViewProvider instead of creating a new one
+            if (!sidebarViewProvider) {
+                console.error("SidebarViewProvider is missing! It should not be reinitialized.");
+                return;
+            }
+
+            // Initialize a new agent
+            agent = new Agent(sidebarViewProvider);
+
+            // Run the main function after reinitialization
+            await askQuestionAboutCode(context, sidebarViewProvider, agent);
         })
     );
 
-    // Register commands for pause, continue, and stop
+    // Register commands for pause, continue, stop, and follow-up
     context.subscriptions.push(
         vscode.commands.registerCommand('extension.pauseAgent', () => {
-            agent.pause();
+            agent?.pause();
             vscode.window.showInformationMessage('Agent paused.');
         }),
         vscode.commands.registerCommand('extension.continueAgent', () => {
-            agent.continue();
+            agent?.continue();
             vscode.window.showInformationMessage('Agent continued.');
         }),
         vscode.commands.registerCommand('extension.stopAgent', () => {
-            agent.stop();
+            agent?.stop();
             vscode.window.showInformationMessage('Agent stopped.');
         }),
         vscode.commands.registerCommand('extension.followUpQuestion', (userInput, fileUri, lineNumber, variable) => {
-            agent.followUpQuestion(userInput, fileUri, lineNumber, variable);
+            agent?.followUpQuestion(userInput, fileUri, lineNumber, variable);
         })
     );
 
-    // Log a message to confirm activation
-    console.log('Search Copilot extension is now active!');
+    console.log('Search Copilot extension is now active, waiting for user input.');
+}
+
+// Dispose only the agent, keeping the sidebarViewProvider intact
+function disposeAgentOnly() {
+    console.log("Disposing Agent...");
+
+    if (agent) {
+        agent.dispose();
+        agent = undefined;
+    }
+
+    console.log("Agent disposed, SidebarViewProvider is still active.");
 }
 
 export async function getQuestion(code: string) {
@@ -280,15 +305,76 @@ class Agent {
 
     continue() {
         this.isPaused = false;
+        this.isStopped = false;
     }
 
     stop() {
         this.isPaused = false;
         this.isStopped = true;
+        this.terminateAgent();
+        this.dispose();
+    }
+
+    dispose() {
+        console.log("Disposing Agent...");
+
+        // Step 1: Stop agent activity
+        this.isPaused = false;
+        this.isStopped = true;
+
+        // Step 2: Ensure any ongoing tasks are aborted
+        if (this._openai) {
+            try {
+                this._openai = null as any; // Remove reference to API client
+            } catch (error) {
+                console.error("Error disposing OpenAI API instance:", error);
+            }
+        }
+
+        // Step 3: Clear exploration data
+        this._exploredVariables = [];
+        this._exploredFiles = [];
+        this._exploredSubQuestions = [];
+        this._exploredCodeLines = [];
+        this._newExploredCodeLines = [];
+        this._previousParsedNodes = {};
+        this._tree = {
+            id: "root",
+            snippetKey: 0,
+            fileUri: "",
+            lineNumber: 0,
+            variable: "",
+            codeLine: "",
+            codeSnippet: "",
+            isIntermediate: false,
+            statement: "",
+            tool: "assignment",
+            children: []
+        };
+
+        // Step 4: Reset findings and exploration graph
+        this._explorationGraph = new ExplorationGraph();
+        this._findingsSummary = [];
+        this._lastFindingSummary = [];
+        this._updateFindings = false;
+        this._final_decision_sufficient = false;
+
+        // Step 5: Remove references to SidebarViewProvider
+        if (this._sidebarViewProvider) {
+            this._sidebarViewProvider = null as any; // Clear reference
+        }
+
+        console.log("Agent disposed successfully.");
+    }
+
+    async terminateAgent() {
+        let task7Output = await this.runTask7();
+        this._sidebarViewProvider.addAnswer(task7Output);
     }
 
     followUpQuestion(userInput: string, fileUri: string, lineNumber: number, variable: string) {
         this.isPaused = false;
+        this.isStopped = false;
         this._final_decision_sufficient = false;
         this._question += " " + userInput;
         if (this._sidebarViewProvider) {
@@ -299,9 +385,11 @@ class Agent {
     }
 
     async runWorkflow(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
+        this.isPaused = false;
+        this.isStopped = false;
+        this._final_decision_sufficient = false;
         this._question = question;
-
-        const MAX_STEPS = 30;
+        const MAX_STEPS = 10;
         let refinedOutput;
 
         // Fetch the file content and add it to _exploredFiles if not already present
@@ -321,7 +409,7 @@ class Agent {
 
         // Task 1: Refine the question and identify sub-problems
         refinedOutput = await this.runTask1(uri, startLine, endLine);
-
+        console.log("agent status: ", this.isPaused, this.isStopped, this._final_decision_sufficient);
         // Loop to explore sub-problems
         while (!this._final_decision_sufficient && this._stepCounter < MAX_STEPS && !this.isStopped) {
             const startStep = new Date().getTime();
@@ -363,6 +451,7 @@ class Agent {
 
         if (this._stepCounter >= MAX_STEPS) {
             console.log("Reached maximum exploration steps.");
+            this.terminateAgent();
         }
     }
 
@@ -394,11 +483,11 @@ class Agent {
 
         let sentenceStartLineNum = startLine;
         // Split the surrounding code into lines
-        const codeSentences = surroundingCode.split(";");
+        const codeSentences = surroundingCode.split("\n");
         codeSentences.forEach(async (sentence, index) => {
-            const extractedVariables = await analyze(uri, sentenceStartLineNum);
-            const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, sentenceStartLineNum);
-            const codeLines = sentence.split("\n");
+            const extractedVariables = await analyze(uri, sentenceStartLineNum + index);
+            const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, sentenceStartLineNum + index);
+            const codeLines = sentence;
             const variables = extractedVariables.map((variableInfo: any) => variableInfo.variable);
 
             extractedVariables.forEach(async (variableInfo: any) => {
@@ -451,19 +540,18 @@ class Agent {
                 }
             });
 
-            codeLines.forEach(async (codeLine, index) => {
-                const lineNum = sentenceStartLineNum + index;
-                // get the variables with the same line number
-                const variables = extractedVariables.filter((variableInfo: any) => variableInfo.lineNumber === lineNum).map((variableInfo: any) => variableInfo.variable);
-                codeContext.push({
-                    file_uri: fileUriString,
-                    line_number: lineNum,
-                    code_line: codeLine,
-                    variables: new Set(variables)
-                });
+
+            const lineNum = sentenceStartLineNum + index;
+            // get the variables with the same line number
+            // const variables = extractedVariables.filter((variableInfo: any) => variableInfo.lineNumber === lineNum).map((variableInfo: any) => variableInfo.variable);
+            codeContext.push({
+                file_uri: fileUriString,
+                line_number: lineNum,
+                code_line: codeLines,
+                variables: new Set(variables)
             });
             this._addOrUpdateExploredCodeLines(fileUriString, startLineNum, endLineNum, statementText, variables);
-            sentenceStartLineNum += codeLines.length;
+            //sentenceStartLineNum += codeLines.length;
             totalVariables += extractedVariables.length;
         });
 
@@ -1897,5 +1985,3 @@ class Agent {
     }
  */
 }
-
-export function deactivate() { }

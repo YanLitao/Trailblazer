@@ -1,11 +1,6 @@
 import * as vscode from 'vscode';
-import { getSurroundingCode, stripLineIndentation, alignCodeLeft } from './codeContextUtils';
+import { getSurroundingCode, stripLineIndentation } from './codeContextUtils';
 import { Node, Edge, TreeNode } from './explorationGraph';
-
-const allowedTools = {
-    0: "Go to Definition",
-    1: "Find References"
-};
 
 export class SidebarView implements vscode.WebviewViewProvider {
     public static readonly viewType = 'search-copilot.sidebarView';
@@ -49,8 +44,8 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 const { fileUri, lineNumber, variable } = message;
                 this.createZoneWidget(fileUri, lineNumber, true, variable);
             } else if (message.command === 'replaySnippet') {
-                const { fileUri, lineNumber, variable, tool, finding, incomingMessage, outgoingMessage } = message;
-                this.createZoneWidget(fileUri, lineNumber, false, variable, tool, finding, incomingMessage, outgoingMessage);
+                const { fileUri, lineNumber, variable, finding, incomingMessage, outgoingMessage } = message;
+                this.createZoneWidget(fileUri, lineNumber, false, variable, finding, incomingMessage, outgoingMessage);
             } else if (message.command === 'stopAgent') {
                 this.agentIsDone();
                 vscode.commands.executeCommand('extension.stopAgent');
@@ -175,7 +170,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
         lineNumber: number,
         questionFlag: boolean = false,
         variable: string = "",
-        tool: string = "",
         finding: string = "",
         incomingMessage: string = "",
         outgoingMessage: string = ""
@@ -327,6 +321,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
         this._selectedCode = selectedCode;
         this._initialFileUri = fileUri;
         this._initialLineNumber = lineNumber;
+
         if (this._view) {
             this._view.webview.html = this._getHtmlForWebview(this._view.webview);
         }
@@ -397,8 +392,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                         <button id="stop-agent" class="action-btn"><i class="fa-solid fa-stop"></i></button>
                         <button id="save-pdf" class="action-btn"><i class="fa-solid fa-file-pdf"></i></button>
                     </div>
-                    <div id="preliminary-answer-text">
-                    </div>
+                    <div id="answer-div"></div>
                     <div id="still-to-be-found" class="header-divs">Still to be found: <span id="exploration-summary"></span></div>
                 </div>
                 <h1>Exploration Steps 
@@ -452,220 +446,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
         }
     }
 
-    // Function to add Task 1 results to the sidebar with surrounding code
-    /* public async addTask1Results(task1Output: any) {
-        if (this._view) {
-            const webview = this._view.webview;
-            const uniqueId = `task1-sub-questions-${this._stepCounter}`;
-            const currentTaskUniqueId = `current-task1-results-${this._stepCounter}`;
-            let task1Html = `
-            <div class="task">
-                <div class="task-header">
-                    <div class="step-circle">${this._stepCounter}</div>
-                    <h3>Refined question: ${task1Output.refined_question}</h3>
-                </div>
-                <div class="task-content">
-            `;
-
-            let currentTaskHtml = `<div class="task-content">`;
-
-            if (task1Output.sub_problems.length > 0) {
-                const firstSubProblem = task1Output.sub_problems[0];
-                const codeContext = firstSubProblem.code_context;
-                const fileName = this.getFileNameFromUri(codeContext.file_uri);
-                const { contextText } = await getSurroundingCode(vscode.Uri.parse(codeContext.file_uri), codeContext.line_number, codeContext.line_number);
-
-                // Build currentTaskHtml for the first sub-question in Task 3 style
-                currentTaskHtml += `
-                    <div class="sub-question">
-                        <p><strong>Currently exploring:</strong> ${firstSubProblem.sub_question}</p>
-                        <p class="code-info">
-                            Exploring <strong>${codeContext.invoke_variable}</strong> in <strong>${fileName}, 
-                            <a href="#" class="line-link" data-file-uri="${codeContext.file_uri}" data-line="${codeContext.line_number}">
-                                Line ${codeContext.line_number + 1}
-                            </a></strong>:
-                        </p>
-                        <div class="code-box">
-                            <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(contextText)}</code></pre>
-                        </div>
-                        <p class="code-info"><strong>Purpose:</strong> ${firstSubProblem.reason}</p>
-                    </div>
-                `;
-
-                // If there are more sub-questions, add a "show more" section for additional ones
-                if (task1Output.sub_problems.length > 1) {
-                    const remainingCount = task1Output.sub_problems.length - 1;
-                    currentTaskHtml += `
-                        <p class="show-more-invocations" id="${currentTaskUniqueId}-show-more" onClick="toggleAdditionalInvocations('${currentTaskUniqueId}-show-more')">
-                            ... also exploring <strong>${remainingCount}</strong> other places ...
-                        </p>
-                        <div id="${currentTaskUniqueId}-additional-invocations" style="display: none;">
-                    `;
-
-                    for (let i = 1; i < task1Output.sub_problems.length; i++) {
-                        const subProblem = task1Output.sub_problems[i];
-                        const otherCodeContext = subProblem.code_context;
-                        const otherFileName = this.getFileNameFromUri(otherCodeContext.file_uri);
-                        const { contextText: otherContextText } = await getSurroundingCode(vscode.Uri.parse(otherCodeContext.file_uri), otherCodeContext.line_number, otherCodeContext.line_number);
-
-                        currentTaskHtml += `
-                            <div class="sub-question additional-invocation">
-                                <p><strong>Exploring:</strong> ${subProblem.sub_question}</p>
-                                <p class="code-info">
-                                    Exploring <strong>${otherCodeContext.invoke_variable}</strong> in <strong>${otherFileName}, 
-                                    <a href="#" class="line-link" data-file-uri="${otherCodeContext.file_uri}" data-line="${otherCodeContext.line_number}">
-                                        Line ${otherCodeContext.line_number + 1}
-                                    </a></strong>:
-                                </p>
-                                <div class="code-box">
-                                    <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(otherContextText)}</code></pre>
-                                </div>
-                                <p class="code-info"><strong>Purpose:</strong> ${subProblem.reason}</p>
-                            </div>
-                        `;
-                    }
-                    currentTaskHtml += `</div>`; // Close additional-invocations div
-                }
-                currentTaskHtml += `</div>`; // Close task-content div
-
-                // Build task1Html for the full list of sub-questions in original Task 1 style
-                task1Html += `
-                    <p>Exploring <strong>${task1Output.sub_problems.length}</strong> sub-questions:</p>
-                    <div class="sub-questions">
-                `;
-                for (let i = 0; i < task1Output.sub_problems.length; i++) {
-                    const subProblem = task1Output.sub_problems[i];
-                    const codeContext = subProblem.code_context;
-                    const fileName = this.getFileNameFromUri(codeContext.file_uri);
-
-                    task1Html += `
-                        <div class="sub-question">
-                            <p><strong>Sub-question:</strong> ${subProblem.sub_question}</p>
-                            <p class="code-info">
-                                Tool: <strong>${allowedTools[subProblem.tool as keyof typeof allowedTools]}</strong>, exploring <strong>${codeContext.invoke_variable}</strong> in <strong>${fileName}, 
-                                <a href="#" class="line-link" data-file-uri="${codeContext.file_uri}" data-line="${codeContext.line_number}">
-                                    line ${codeContext.line_number + 1}
-                                </a></strong>:
-                            </p>
-                            <div class="code-box">
-                                <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(codeContext.full_statement)}</code></pre>
-                            </div>
-                        </div>
-                    `;
-                }
-                task1Html += `</div></div></div>`; // Close task-content and task divs
-
-                // Post the HTML updates for Task 1
-                webview.postMessage({ command: 'appendHtml', html: task1Html, id: uniqueId });
-                // Post the HTML for the current task in Task 3 format
-                webview.postMessage({ command: 'updateCurrentTaskContent', html: currentTaskHtml, id: currentTaskUniqueId });
-            } else {
-                // If no sub-questions found, post a message
-                task1Html += `<div class="task-content"><p>No sub-questions found.</p></div></div>`;
-                webview.postMessage({ command: 'appendHtml', html: task1Html, id: uniqueId });
-            }
-
-            // Increment the step counter
-            this._stepCounter++;
-        }
-    }
-
-    public async addTask2Results(task2Output: any) {
-        if (this._view) {
-            const webview = this._view.webview;
-            const uniqueId = `task2-results-${this._stepCounter}`; // Generate unique ID for Task 2
-            var i = -1;
-
-            let task2Html = `
-            <div class="task">
-                <div class="task-header">
-                    <div class="step-circle">${this._stepCounter}</div> <!-- Circle with step count -->
-                    <h3>Explored ${task2Output.questions_and_results.length} sub-questions.</h3>
-                </div>
-            `;
-            if (task2Output.questions_and_results.length > 0) {
-                task2Html += `
-                <div class="task-content">
-                `;
-                for (const result of task2Output.questions_and_results) {
-                    i++;
-                    task2Html += `<div class="sub-question `;
-                    if (result.code_context) {
-                        task2Html += ` uncertain`;
-                    }
-                    let variable = "";
-                    let line = 0;
-                    let invokeFileName = "";
-                    let codeLine = "";
-
-                    if ("code_context" in result) {
-                        variable = result.code_context.invoke_variable;
-                        line = result.code_context.line_number;
-                        invokeFileName = this.getFileNameFromUri(result.code_context.file_uri);
-                        codeLine = result.code_context.code_line;
-                    }
-
-                    task2Html += `">
-                        <div class="sub-question-header">
-                            <button id="${uniqueId}-btn-${i}" class="toggle-button" data-target="${uniqueId}-sub-question-${i}">
-                                <span class="triangle-right"></span>
-                            </button>
-                            <p class="code-info">Explored <strong>${variable}</strong> in ${invokeFileName}: line 
-                                <a href="#" class="line-link" data-file-uri="${invokeFileName}" data-line="${line}">${line}</a>, 
-                                using <strong>${allowedTools[result.tool as keyof typeof allowedTools]}</strong>:
-                            </p>
-                        </div>
-                        <div id="${uniqueId}-sub-question-${i}" class="task-details" style="display: none">
-                            <p class="before-hide"><strong>Sub-question:</strong> ${result.sub_question}</p>
-                            <div class="code-box">
-                                <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(codeLine)}</code></pre>
-                            </div>
-                            <p class="code-info">Found <strong>${result.filtered_results.length}</strong> results:</p>
-                            <div class="filtered-results">
-                    `;
-
-                    for (const filteredResult of result.filtered_results) {
-                        const fileName = this.getFileNameFromUri(filteredResult.file_uri);
-                        const { contextText } = await getSurroundingCode(vscode.Uri.parse(filteredResult.file_uri), filteredResult.line_number, filteredResult.line_number);
-                        const alignedCode = alignCodeLeft(contextText);
-
-                        task2Html += `
-                        <div class="result">
-                            <p class="code-info">
-                                In <strong>${fileName}, 
-                                <a href="#" class="line-link" data-file-uri="${filteredResult.file_uri}" data-line="${filteredResult.line_number}">
-                                    Line ${filteredResult.line_number + 1}
-                                </a></strong>:
-                            </p>
-                            <div class="code-box">
-                                <pre class="line-numbers language-ts" data-line="${filteredResult.line_number}"><code class="language-ts">${this.escapeHtml(alignedCode)}</code></pre>
-                            </div>
-                        </div>
-                        `;
-                    }
-
-                    task2Html += `</div></div></div>`;
-
-                }
-
-                task2Html += `</div></div>`;
-
-            } else {
-                task2Html += `
-                    <div class="task-content">
-                        <p class="warning-text">
-                            <span class="warning-icon">&#9888;</span>
-                            No sub-questions explored.
-                        </p>
-                    </div>
-                </div>`;
-            }
-            webview.postMessage({ command: 'appendHtml', html: task2Html, id: uniqueId, num: i });
-            this._stepCounter++;
-        }
-    } */
-
-    // Function to add Task 3 results (final decision and explanation) with surrounding code
     public async addTask3Results(final_decision_sufficient: boolean, task3Output: any) {
         if (this._view) {
             /* const webview = this._view.webview;
@@ -685,64 +465,8 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 : (task3Output.next_step_summary || "");
 
             let findingsHtml = "";
-            /* if (importantCodeSnippets && importantCodePaths) {
-                findingsHtml = await this.addTask5And6Results(importantCodeSnippets, importantCodePaths);
-            } */
-
-            /* // Generate HTML for exploration steps
-            let explorationStepsHtml = `
-            <div class="task">
-                <div class="task-header">
-                    <div class="step-circle">${this._stepCounter}</div>
-                    <h3>Explored code is ${final_decision_sufficient ? 'sufficient' : 'insufficient'} to answer the question.</h3>
-                </div>
-                <div class="task-content">
-            `;
-
-            // If sufficient, display the final answer
-            if (final_decision_sufficient) {
-                explorationStepsHtml += `<p><strong>Answer: </strong>${task3Output.answer}</p>`;
-            } else if (task3Output.sub_problems.length > 0) {
-                explorationStepsHtml += `<p>Propose <strong>${task3Output.sub_problems.length}</strong> sub-questions:</p>`;
-                for (const subProblem of task3Output.sub_problems) {
-                    i++;
-                    const codeContext = subProblem.code_context;
-                    const fileName = this.getFileNameFromUri(codeContext.file_uri);
-                    const { contextText } = await getSurroundingCode(vscode.Uri.parse(codeContext.file_uri), codeContext.line_number, codeContext.line_number);
-
-                    explorationStepsHtml += `
-                        <div class="sub-question">
-                            <div class="sub-question-header">
-                                <button id="${explorationUniqueId}-btn-${i}" class="toggle-button" data-target="${explorationUniqueId}-sub-question-${i}">
-                                    <span class="triangle-right"></span>
-                                </button>
-                                <p class="before-hide"><strong>Sub-question:</strong> ${subProblem.sub_question}</p>
-                            </div>
-                            <div id="${explorationUniqueId}-sub-question-${i}" class="task-details" style="display: none">
-                                <p class="code-info">
-                                    Going to use <strong>${allowedTools[subProblem.tool as keyof typeof allowedTools]}</strong> to explore <strong>${codeContext.invoke_variable}</strong> in <strong>${fileName}, 
-                                    <a href="#" class="line-link" data-file-uri="${codeContext.file_uri}" data-line="${codeContext.line_number}">
-                                        Line ${codeContext.line_number + 1}
-                                    </a></strong>:
-                                </p>
-                                <div class="code-box">
-                                    <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(contextText)}</code></pre>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                }
-                explorationStepsHtml += `</div></div>`; // Close all divs
-            } else {
-                explorationStepsHtml += `<p>No sub-questions proposed.</p></div></div>`;
-            }*/
 
             let currentTaskHtml = "";
-
-            // Post the HTML to the exploration steps
-            //webview.postMessage({ command: 'appendHtml', html: explorationStepsHtml, id: explorationUniqueId, num: i });
-
-            // Generate HTML for current task content (show only the first invocation place)
 
             if (task3Output.sub_problems.length > 0) {
                 currentTaskHtml = `<div class="task-content">`;
@@ -822,149 +546,11 @@ export class SidebarView implements vscode.WebviewViewProvider {
         }
     }
 
-    public async addTask5And6Results(importantCodeSnippets: Map<string, any>, importantCodePaths: Map<string, Array<{ nodes: Node[], edges: Edge[] }>>) {
-        const visibleLimit = 30; // Show this many results initially
-        const results = [...importantCodeSnippets.entries()].map(([index, result]) => ({ index, ...result }));
-        const initialVisibleResults = results.slice(0, visibleLimit);
-        const additionalResults = results.slice(visibleLimit);
-
-        // HTML content for visible code boxes with index
-        let findingsHtml = ``;
-
-        // Display initial visible results directly with indices
-        initialVisibleResults.forEach((result) => {
-            const resultNodeId = result.file_uri + ':' + result.line_number;
-
-            // Split the full statement into lines
-            const lines = result.full_statement.split('\n');
-            const codeLineIndex = lines.findIndex((line: string) => line.includes(result.code_line));
-
-            // Calculate the range to display (3 lines above and 3 lines below the code_line)
-            const startLine = Math.max(codeLineIndex - 3, 0);
-            const endLine = Math.min(codeLineIndex + 3, lines.length - 1);
-
-            // Extract the subset of lines and join them into a truncated statement
-            const truncatedStatement = lines.slice(startLine, endLine + 1).join('\n');
-
-            // Retrieve paths for the current node and generate HTML for each path
-            const pathsHtml = this.constructPathsHtml(importantCodePaths.get(resultNodeId) || []);
-
-            // Create HTML with a wrapper div that will contain the clickable area
-            findingsHtml += `
-                <div class="code-box">
-                    <div class="code-wrapper" data-node-id="${resultNodeId}">
-                        <span class="code-index" data-ref="${result.index}">[${result.index}]</span>
-                        <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(truncatedStatement)}</code></pre>
-                        <a href="#" class="line-link" data-file-uri="${result.file_uri}" data-line="${result.line_number}">
-                            open in editor.
-                        </a>
-                        <div class="parent-node-info" style="display: none;">
-                            <p>Paths:</p>
-                            ${pathsHtml}
-                        </div>
-                    </div>
-                </div>
-            `;
-        });
-
-        // Prepare "show more" button and hidden additional results if there are more than visibleLimit
-        const remainingCount = additionalResults.length;
-        if (remainingCount > 0) {
-            findingsHtml += `
-                <p class="show-more-results" id="findings-show-more" onclick="toggleAdditionalInvocations('findings-show-more')">
-                    ... also showing <strong>${remainingCount}</strong> other relevant snippets ...
-                </p>
-                <div id="findings-additional-invocations" style="display: none;">
-            `;
-
-            // Add hidden additional results with indices
-            additionalResults.forEach((result) => {
-                const escapedCodeLine = this.escapeHtml(result.code_line);
-                findingsHtml += `
-                    <div class="code-box">
-                        <span class="code-index">${result.index}</span>
-                        <pre class="line-numbers language-ts"><code class="language-ts">${escapedCodeLine}</code></pre>
-                    </div>
-                `;
-            });
-            findingsHtml += `</div>`; // Close additional-results div
-        }
-
-        return findingsHtml;
-    }
-
-    // Helper function to construct the HTML for paths
-    private constructPathsHtml(paths: Array<{ nodes: Node[], edges: (Edge | null)[] }>): string {
-
-        return paths.map((path, pathIndex) => {
-            const pathHtml = path.nodes.map((node, nodeIndex) => {
-                const edge = path.edges[nodeIndex]; // Pair the current node with its corresponding edge
-                let tool = "";
-                if (edge?.tool) {
-                    if (edge.tool == "definition") {
-                        tool = "Go to definition";
-                    } else if (edge.tool == "reference") {
-                        tool = "Find references";
-                    } else {
-                        tool = "Get the assignment";
-                    }
-                }
-                const invokingVariable = edge?.variable || "";
-                const toolInfo = edge
-                    ? `I used "<strong>${tool}</strong>" on "<strong>${invokingVariable}</strong>" here:`
-                    : "That brought me to this snippet."; // If no edge or tool is available, leave it empty
-
-                // Highlight the invokingVariable in the node's codeSnippet
-                const highlightedCodeSnippet = invokingVariable
-                    ? this.highlightVariableInSnippet(node.codeSnippet, invokingVariable)
-                    : this.escapeHtml(node.codeSnippet);
-
-                return `
-                    <div class="code-box">
-                        <div class="info-row">
-                            <span class="styled-index">${nodeIndex + 1}</span> <!-- 1-based indexing -->
-                            <span class="tool-info">${toolInfo}</span>
-                        </div>
-                        <div class="code-wrapper" data-node-id="${node.fileUri}:${node.lineNumber}">
-                            <pre class="line-numbers language-ts"><code class="language-ts">${highlightedCodeSnippet}</code></pre>
-                            <a href="#" class="line-link" data-file-uri="${node.fileUri}" data-line="${node.lineNumber}">
-                                open in editor.
-                            </a>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-
-            return `
-                <div class="path-box" aria-label="Path ${pathIndex + 1}">
-                    ${pathHtml}
-                </div>
-            `;
-        }).join('');
-    }
-
     public async addAnswer(answer: string) {
         this._view?.webview.postMessage({
             command: 'updateAnswer',
             answer: answer
         });
-    }
-
-    /**
-     * Highlights a variable in the given code snippet.
-     * Escapes the code snippet for HTML safety and wraps the variable with a span for highlighting.
-     */
-    private highlightVariableInSnippet(codeSnippet: string, variable: string): string {
-        const escapedSnippet = this.escapeHtml(codeSnippet);
-        const variableRegex = new RegExp(`\\b${this.escapeForRegex(variable)}\\b`, 'g'); // Match whole word
-        return escapedSnippet.replace(variableRegex, `<span class="highlighted-variable">${variable}</span>`);
-    }
-
-    /**
-     * Escapes a string for safe use in a regular expression.
-     */
-    private escapeForRegex(str: string): string {
-        return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
     // Helper function to extract the file name from the URI

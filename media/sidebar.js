@@ -13,7 +13,7 @@ function reAppendInsights() {
 
     insightMap.forEach((insightHTML, snippetKey) => {
         const insightContainer = document.querySelector(`.node-container-box[data-snippet-key="${snippetKey}"]`);
-        if (insightContainer) {
+        if (insightContainer && !insightContainer.id.includes("fakeOrigin")) {
             // Create a new div for the insight copy
             const clonedInsightContainer = document.createElement('div');
             clonedInsightContainer.classList.add('insight-copy');
@@ -47,7 +47,7 @@ window.addEventListener('message', event => {
             updateCurrentTaskContent(message.html, message.id, message.num);
             break;
         case 'updateAnswer':
-            const answerDiv = document.getElementById('preliminary-answer-text');
+            const answerDiv = document.getElementById('answer-div');
 
             if (message.answer) {
                 answerDiv.innerHTML = message.answer;
@@ -574,7 +574,7 @@ function renderGraph(data) {
         const root = d3.hierarchy(data);
 
         let yOffset = margin.top;
-        const gapSpace = 30;
+        const gapSpace = 10;
 
         root.eachBefore(d => {
             if (d.parent && (d.parent.data.hidden === 0 || d.parent.data.hidden === 1)) {
@@ -1237,7 +1237,6 @@ function renderGraph(data) {
             fileUri: node.data.fileUri,
             lineNumber: node.data.lineNumber,
             variable: node.data.variable,
-            tool: node.data.tool,
             finding: node.data.statement,
             incomingMessage: incomingMessage,
             outgoingMessage: outgoingMessage
