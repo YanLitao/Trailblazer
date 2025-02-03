@@ -1513,7 +1513,7 @@ class Agent {
         const lifecycleAndInsightsContainer = `
             <div id="details-container" style="display: ${task7Output.final_decision_sufficient ? "block" : "none"};">
                 <div class="lifecycle">
-                    <h2>Tour</h2>
+                    <h2>Highlights</h2>
                     ${processLifecycle(Lifecycle)}
                 </div>
                 ${processPracticalInsights(Practical_Insights)}

@@ -69,6 +69,7 @@ window.addEventListener('message', event => {
                 if (message.answer.includes("Final Answer")) {
                     document.getElementById('still-to-be-found').style.display = 'none';
                     document.getElementById('actions').style.display = 'none';
+                    document.getElementById('current-task').display = 'none';
                 }
 
             }
@@ -112,7 +113,7 @@ function updateSearchingContent(content) {
 
     setTimeout(() => {
         newMessage.classList.add('fade-out');
-    }, 10000);
+    }, 15000);
 
     // Ensure we only keep the last 3 messages
     if (messageQueue.length > maxMessages) {
@@ -163,6 +164,7 @@ function followUpQuestionInput() {
     document.getElementById('actions').style.display = 'block';
     document.getElementById('final-answer-header').innerHTML = 'Preliminary Answer';
     document.getElementById('searching-content').style.display = 'block';
+    document.getElementById('current-task').style.display = 'block';
     updateStatus('Searching');
     const pauseButton = document.getElementById('pause-agent');
     const icon = pauseButton.querySelector('i');
