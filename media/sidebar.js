@@ -187,30 +187,27 @@ function followUpQuestionInput() {
 }
 
 const infoIcon = document.getElementById('info-icon');
-const infoContainer = document.getElementById('info-box');
+const infoBox = document.getElementById('info-box');
 
-infoIcon.addEventListener("mouseover", function () {
-    // Get the bounding box of the info-icon
-    const iconRect = infoIcon.getBoundingClientRect();
-
-    // Position the info-box just below the info-icon
-    infoContainer.style.top = `${iconRect.bottom + 5}px`; // 5px margin below the icon
-    infoContainer.style.left = `${iconRect.left}px`;
-
-    // Show the info-box
-    infoContainer.style.display = "block";
+// Show info-box when hovering over the icon
+infoIcon.addEventListener("mouseenter", function () {
+    infoBox.style.display = "block";
 });
 
-infoIcon.addEventListener("mouseout", function (event) {
-    // Check if the mouse is moving to the info-box itself
-    if (!infoContainer.contains(event.relatedTarget)) {
-        infoContainer.style.display = "none";
+// Keep the info-box visible when the mouse is inside it
+infoBox.addEventListener("mouseenter", function () {
+    infoBox.style.display = "block";
+});
+
+// Hide info-box only when the mouse leaves both the icon and the box
+function hideInfoBox(event) {
+    if (!infoIcon.contains(event.relatedTarget) && !infoBox.contains(event.relatedTarget)) {
+        infoBox.style.display = "none";
     }
-});
+}
 
-infoContainer.addEventListener("mouseleave", function () {
-    infoContainer.style.display = "none";
-});
+infoIcon.addEventListener("mouseleave", hideInfoBox);
+infoBox.addEventListener("mouseleave", hideInfoBox);
 
 function findNodeBySnippetKey(node, snippetKey) {
     if (node.snippetKey === snippetKey) {
@@ -260,28 +257,13 @@ function updateNodeAndAncestors(treeNode, targetSnippetKey) {
 }
 
 document.addEventListener("click", function (event) {
-    if (event.target.classList.contains("citation-ref")) {
-        const refId = parseInt(event.target.getAttribute("data-ref"), 10); // Get the snippetKey from the clicked element
+    let insightElement = event.target.closest(".insight");
+    let citationRefElement = event.target.closest(".citation-ref");
 
-        // Update the target node and its ancestors
-        const updated = updateNodeAndAncestors(graphData, refId);
-
-        if (!updated) {
-            console.warn(`Node with snippetKey "${refId}" not found in graphData.`);
-            return;
-        }
-
-        // Redraw the graph to reflect the changes
-        renderGraph(graphData);
-
-        // Scroll to the updated node
-        const updatedNode = document.getElementById(`node-${generateNodeId(findNodeBySnippetKey(graphData, refId))}`);
-        if (updatedNode) {
-            updatedNode.scrollIntoView({ behavior: "smooth" });
-        }
-    } else if (event.target.classList.contains("insight")) {
-        const fileUri = event.target.getAttribute("data-file-uri");
-        const lineNumber = event.target.getAttribute("data-line-number");
+    // If the clicked element is within an `.insight`, trigger the file open event
+    if (insightElement) {
+        const fileUri = insightElement.getAttribute("data-file-uri");
+        const lineNumber = insightElement.getAttribute("data-line-number");
 
         if (fileUri && lineNumber) {
             vscode.postMessage({
@@ -289,6 +271,43 @@ document.addEventListener("click", function (event) {
                 fileUri: fileUri,
                 lineNumber: parseInt(lineNumber, 10)
             });
+        }
+    }
+
+    // If the clicked element is a `.citation-ref`, trigger the graph update AND file open event
+    if (citationRefElement) {
+        const refId = parseInt(citationRefElement.getAttribute("data-ref"), 10);
+
+        // Update the target node and its ancestors in the graph
+        const updated = updateNodeAndAncestors(graphData, refId);
+
+        if (!updated) {
+            console.warn(`Node with snippetKey "${refId}" not found in graphData.`);
+            return;
+        }
+
+        // Redraw the graph
+        renderGraph(graphData);
+
+        // Scroll to the updated node
+        const updatedNode = document.getElementById(`node-${generateNodeId(findNodeBySnippetKey(graphData, refId))}`);
+        if (updatedNode) {
+            updatedNode.scrollIntoView({ behavior: "smooth" });
+        }
+
+        // Also trigger file open if possible (using the closest `.insight` container)
+        let closestInsight = citationRefElement.closest(".insight");
+        if (closestInsight) {
+            const fileUri = closestInsight.getAttribute("data-file-uri");
+            const lineNumber = closestInsight.getAttribute("data-line-number");
+
+            if (fileUri && lineNumber) {
+                vscode.postMessage({
+                    command: 'openFileAtLine',
+                    fileUri: fileUri,
+                    lineNumber: parseInt(lineNumber, 10)
+                });
+            }
         }
     }
 });
