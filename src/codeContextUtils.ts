@@ -360,6 +360,27 @@ function removeComments(text: string): string {
     return text.replace(/\/\/.*|\/\*[\s\S]*?\*\//g, '');
 }
 
+export function processMarkdown(text: string): string {
+    // Handle headers
+    text = text.replace(/^###\s*(.*)$/gm, (_, content) => `<h3>${content.trim()}</h3>`);
+    text = text.replace(/^##\s*(.*)$/gm, (_, content) => `<h2>${content.trim()}</h2>`);
+    text = text.replace(/^#\s*(.*)$/gm, (_, content) => `<h1>${content.trim()}</h1>`);
+
+    // Handle bold (**content**)
+    text = text.replace(/\*\*(.*?)\*\*/g, (_, content) => `<b>${content}</b>`);
+
+    // Handle inline code (`content`)
+    text = text.replace(/`([^`]*)`/g, (_, content) => `<span class="inline-code">${content}</span>`);
+
+    // Handle inline code ('content')
+    text = text.replace(/(?<!\w)'([^']*?)'(?!\w)/g, (_, content) => `<span class="inline-code">${content}</span>`);
+
+    // Handle line breaks (\n -> <br>)
+    text = text.replace(/\n/g, "<br>");
+
+    return text;
+};
+
 function findFunctionDeclaration(node: ts.Node, isFunction: number): boolean {
     if (isFunction == 1 && ts.isFunctionDeclaration(node)) {
         return true;

@@ -503,6 +503,14 @@ export class ExplorationGraph {
         return []; // No path found
     }
 
-
+    getNumberOfNodesInTree(): number {
+        let count = 0;
+        const countNodes = (node: TreeNode) => {
+            count++;
+            node.children.forEach(countNodes);
+        };
+        countNodes(this.tree);
+        return count;
+    }
 
 }

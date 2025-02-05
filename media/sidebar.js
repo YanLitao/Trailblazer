@@ -58,7 +58,7 @@ window.addEventListener('message', event => {
                     const snippetKey = insight.getAttribute('data-ref');
 
                     // Update the persistent map to store the innerHTML of the original insight
-                    if (snippetKey && snippetKey !== -1) {
+                    if (snippetKey) {
                         insightHTML = insight.innerHTML.replace(/\[<span class="citation-ref"[^>]*>.*?<\/span>\]/g, "");
                         insightMap.set(snippetKey, insightHTML);
                     }
@@ -68,7 +68,9 @@ window.addEventListener('message', event => {
 
                 if (message.answer.includes("Final Answer")) {
                     document.getElementById('still-to-be-found').style.display = 'none';
-                    document.getElementById('actions').style.display = 'none';
+                    document.querySelectorAll('.removable').forEach((element) => {
+                        element.style.display = 'none';
+                    });
                     document.getElementById('current-task').display = 'none';
                 }
 
@@ -101,7 +103,9 @@ window.addEventListener('message', event => {
 
 function updateSearchingContent(content) {
     const searchingContentDiv = document.getElementById('searching-content');
-    const maxMessages = 1;
+    const maxMessages = 1; // Change this if you want more messages
+    const fadeOutTime = 15000; // Time before fading out (15s)
+
     // Create new message element
     const newMessage = document.createElement('div');
     newMessage.className = 'search-message fade-in';
@@ -111,14 +115,22 @@ function updateSearchingContent(content) {
     searchingContentDiv.appendChild(newMessage);
     messageQueue.push(newMessage);
 
+    // Only fade out if there's more than one message AFTER an old message is removed
     setTimeout(() => {
-        newMessage.classList.add('fade-out');
-    }, 15000);
+        if (messageQueue.length > 1) {
+            newMessage.classList.add('fade-out');
+            setTimeout(() => {
+                newMessage.remove();
+                messageQueue.shift(); // Ensure it's removed from queue only after it's gone
+            }, 500); // Allow fade-out animation to complete
+        }
+    }, fadeOutTime);
 
-    // Ensure we only keep the last 3 messages
+    // Ensure we only keep the last `maxMessages`
     if (messageQueue.length > maxMessages) {
         const oldMessage = messageQueue.shift();
-        setTimeout(() => oldMessage.remove(), 500); // Remove after fade-out
+        oldMessage.classList.add('fade-out');
+        setTimeout(() => oldMessage.remove(), 500);
     }
 }
 
@@ -161,7 +173,9 @@ document.getElementById('stop-agent').addEventListener('click', function () {
 
 function followUpQuestionInput() {
     document.getElementById('still-to-be-found').style.display = 'block';
-    document.getElementById('actions').style.display = 'block';
+    document.querySelectorAll('.removable').forEach((element) => {
+        element.style.display = 'block';
+    });
     document.getElementById('final-answer-header').innerHTML = 'Preliminary Answer';
     document.getElementById('searching-content').style.display = 'block';
     document.getElementById('current-task').style.display = 'block';
@@ -217,11 +231,12 @@ function updateNodeAndAncestors(treeNode, targetSnippetKey) {
     // Base case: If the current node matches the snippetKey, set hidden = 2
     if (treeNode.snippetKey === targetSnippetKey) {
         treeNode.hidden = 2;
-        return true; // Indicate that this node or its descendant matches
+        return true; // Indicate that this node is an ancestor or itself
     }
 
-    // Recursively check children
     let isAncestor = false;
+
+    // Recursively check children
     if (treeNode.children && treeNode.children.length > 0) {
         treeNode.children.forEach(child => {
             const childResult = updateNodeAndAncestors(child, targetSnippetKey);
@@ -229,12 +244,17 @@ function updateNodeAndAncestors(treeNode, targetSnippetKey) {
                 isAncestor = true;
             }
         });
+
+        // After recursion: Set hidden = 1 for direct children of an ancestor node
+        treeNode.children.forEach(child => {
+            if (isAncestor && child.hidden !== 2) {
+                child.hidden = 1; // Mark direct children of an ancestor
+            }
+        });
     }
 
     // If any child matched, this node is an ancestor, so update it
-    if (isAncestor) {
-        treeNode.hidden = 2;
-    }
+    treeNode.hidden = isAncestor ? 2 : 0;
 
     return isAncestor; // Indicate whether this node or its descendants matched
 }
@@ -583,7 +603,7 @@ function renderGraph(data) {
                 d.data.hidden = 0; // If the parent is hidden or partially visible, hide this node
             }
             if (d.data.hidden !== 0) {
-                const snippetHeight = getCodeSnippetHeight(d.data.codeSnippet, d.data.statement, d.data.hidden);
+                const snippetHeight = getCodeSnippetHeight(d.data.snippetKey, d.data.codeSnippet, d.data.statement, d.data.hidden);
                 d.yOffset = yOffset;
                 yOffset += snippetHeight + gapSpace;
             }
@@ -677,7 +697,7 @@ function renderGraph(data) {
                 const availableWidth = width - margin.right - margin.left; // Total available width
                 return availableWidth - xPosition; // Adjust width to align right edge
             })
-            .attr("height", d => getCodeSnippetHeight(d.data.codeSnippet, d.data.statement, d.data.hidden))
+            .attr("height", d => getCodeSnippetHeight(d.data.snippetKey, d.data.codeSnippet, d.data.statement, d.data.hidden))
             .html(d => {
                 // Description Text for Each Node
                 let descriptionHTML = "";
@@ -850,8 +870,8 @@ function renderGraph(data) {
     }
 
     // Function to calculate the height of a code snippet rectangle
-    function getCodeSnippetHeight(codeSnippet, statement, hidden = false) {
-
+    function getCodeSnippetHeight(snippetKey, codeSnippet, statement, hidden = false) {
+        const maxHeight = 130; // Maximum height for a code snippet
         if (hidden == 0) {
             return 0; // Return 0 height for hidden nodes
         }
@@ -897,8 +917,16 @@ function renderGraph(data) {
         let height = tempDiv.getBoundingClientRect().height + 20; // Measure total height
         document.body.removeChild(tempDiv); // Clean up
 
+        if (snippetKey in insightMap) {
+            height = maxHeight;
+        }
+
         if (height < 50) {
             return 50; // Minimum height
+        }
+
+        if (height > maxHeight) {
+            return maxHeight + 20; // Maximum height
         }
         return height;
     }

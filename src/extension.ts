@@ -4,7 +4,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
 import { SidebarView } from './SideBarView';
-import { test, getLineText, getSurroundingCode, getLineNumber, getFileNameFromUri, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, preProcessCodeLine, analyze, findCompleteStatementText } from './codeContextUtils';
+import { test, getLineText, getSurroundingCode, getLineNumber, getFileNameFromUri, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, processMarkdown, analyze, findCompleteStatementText } from './codeContextUtils';
 import { ExplorationGraph, Node, TreeNode } from './explorationGraph';
 
 // API key for OpenAI
@@ -269,7 +269,7 @@ class Agent {
             model: "gpt-4o",
             apiKey: API_KEY,
             maxTokens: 16384,
-            temperature: 1.0,
+            temperature: 0,
             topP: 1,
         });
 
@@ -277,7 +277,7 @@ class Agent {
             model: "gpt-4o-mini",
             apiKey: API_KEY,
             maxTokens: 16384,
-            temperature: 1.0,
+            temperature: 0,
             topP: 1,
         });
 
@@ -285,7 +285,7 @@ class Agent {
             model: "o1-mini",
             apiKey: API_KEY,
             maxTokens: 128000,
-            temperature: 1.0,
+            temperature: 0,
             topP: 1,
         });
 
@@ -312,7 +312,6 @@ class Agent {
         this.isPaused = false;
         this.isStopped = true;
         this.terminateAgent();
-        this.dispose();
     }
 
     dispose() {
@@ -409,7 +408,6 @@ class Agent {
 
         // Task 1: Refine the question and identify sub-problems
         refinedOutput = await this.runTask1(uri, startLine, endLine);
-        console.log("agent status: ", this.isPaused, this.isStopped, this._final_decision_sufficient);
         // Loop to explore sub-problems
         while (!this._final_decision_sufficient && this._stepCounter < MAX_STEPS && !this.isStopped) {
             const startStep = new Date().getTime();
@@ -1405,10 +1403,11 @@ class Agent {
 
         updatedFindings.forEach(finding => {
             const snippetKeys = `[${finding.snippetKey.map((key: number) => `<span class="citation-ref" data-ref="${key}">${key}</span>`).join(", ")}]`;
+            let parsedStatement = processMarkdown(finding.statement);
             const statementHtml = finding.outOfDate
                 ? `<span class="additional-finding">[1 additional finding]</span>
-                   <span class="hidden-statement" style="display: none;">${snippetKeys} ${finding.statement}</span>`
-                : `${finding.statement}${snippetKeys}`;
+                   <span class="hidden-statement" style="display: none;">${parsedStatement}${snippetKeys}</span>`
+                : `${parsedStatement}${snippetKeys}`;
 
             concatenatedHtml += `
                 <li class="${finding.isUpdated ? "highlight-new finding-summary" : "finding-summary"}">
@@ -1440,30 +1439,13 @@ class Agent {
         return traverseTree(this._tree);
     }
 
+
+
     private processFinalAnswer(task7Output: any): string {
         const { Overview, Lifecycle, Practical_Insights } = task7Output.answer;
 
         // Helper functions for markdown processing
-        const processMarkdown = (text: string): string => {
-            // Handle headers
-            text = text.replace(/^###\s*(.*)$/gm, (_, content) => `<h3>${content.trim()}</h3>`);
-            text = text.replace(/^##\s*(.*)$/gm, (_, content) => `<h2>${content.trim()}</h2>`);
-            text = text.replace(/^#\s*(.*)$/gm, (_, content) => `<h1>${content.trim()}</h1>`);
 
-            // Handle bold (**content**)
-            text = text.replace(/\*\*(.*?)\*\*/g, (_, content) => `<b>${content}</b>`);
-
-            // Handle inline code (`content`)
-            text = text.replace(/`([^`]*)`/g, (_, content) => `<span class="inline-code">${content}</span>`);
-
-            // Handle inline code ('content')
-            text = text.replace(/(?<!\w)'([^']*?)'(?!\w)/g, (_, content) => `<span class="inline-code">${content}</span>`);
-
-            // Handle line breaks (\n -> <br>)
-            text = text.replace(/\n/g, "<br>");
-
-            return text;
-        };
 
         // Process the "Overview" section
         const processOverview = (overview: string): string => {
@@ -1479,12 +1461,6 @@ class Agent {
                     // Extract snippetKey from reference
                     const snippetKeyMatch = insight.reference.match(/snippetKey:\s*(-?\d+)/);
                     let snippetKey = snippetKeyMatch ? parseInt(snippetKeyMatch[1], 10) : parseInt(insight.reference, 10);
-
-                    // If snippetKey is -1, get the snippetKey of the first child of the root
-                    if (snippetKey === -1 && this._tree.children.length > 0) {
-                        snippetKey = this._tree.children[0].snippetKey;
-                        console.log("Snippet key set to first child of the root:", this._tree, snippetKey, this._tree.children);
-                    }
 
                     // Find snippet data using the recursive traversal function
                     const snippetData = snippetKey !== null ? this.findSnippetBySnippetKey(snippetKey) : null;
@@ -1542,7 +1518,7 @@ class Agent {
 
     async runTask7() {
         console.warn("Running Task 7.");
-        this._sidebarViewProvider.updateSearchingContent("Deciding whether the exploration is sufficient...");
+        this._sidebarViewProvider.updateSearchingContent(`Deciding whether the exploration is sufficient based on a tree with ${this._explorationGraph.getNumberOfNodesInTree()}...`);
         const inputJson = {
             task: 7,
             refined_question: this._refined_question ?? this._question,

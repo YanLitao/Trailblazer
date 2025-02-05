@@ -384,14 +384,14 @@ export class SidebarView implements vscode.WebviewViewProvider {
                         <code>${stripLineIndentation(this._selectedCode)}</code>
                     </div>
                     <div id="agent-status" class="header-divs">
-                        Status: <span id="agent-status-text" class="idle-status">Idle</span>
+                        <div id="actions">
+                            <div id="status">Status: <span id="agent-status-text" class="idle-status">Idle</span></div>
+                            <button id="pause-agent" class="action-btn removable"><i class="fa-solid fa-pause"></i></button>
+                            <button id="stop-agent" class="action-btn removable"><i class="fa-solid fa-stop"></i></button>
+                            <button id="save-pdf" class="action-btn"><i class="fa-solid fa-file-pdf"></i></button>
+                        </div>
                     </div>
                     <div id="searching-content" class="header-divs"></div>
-                    <div id="actions" style="display: flex; justify-content: space-around; padding: 10px;">
-                        <button id="pause-agent" class="action-btn"><i class="fa-solid fa-pause"></i></button>
-                        <button id="stop-agent" class="action-btn"><i class="fa-solid fa-stop"></i></button>
-                        <button id="save-pdf" class="action-btn"><i class="fa-solid fa-file-pdf"></i></button>
-                    </div>
                     <div id="answer-div"></div>
                     <div id="still-to-be-found" class="header-divs">Still to be found: <span id="exploration-summary"></span></div>
                 </div>
