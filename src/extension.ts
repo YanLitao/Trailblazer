@@ -112,9 +112,8 @@ async function askQuestionAboutCode(context: vscode.ExtensionContext, sidebarVie
     } else if (query === "") {
         query = "What does this code do?";
     }
-
     // Update the sidebar with the user question and selected code
-    sidebarViewProvider.updateWebviewContent(query, selectedText, getFileNameFromUri(editor.document.uri.toString()), startLine);
+    sidebarViewProvider.updateWebviewContent(query, selectedText, editor.document.uri.toString(), startLine);
 
     // Show the sidebar automatically once the question is received
     vscode.commands.executeCommand('workbench.view.extension.search-copilot-sidebar').then(() => {

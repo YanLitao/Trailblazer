@@ -382,6 +382,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
                         Selected code:
                         <br>
                         <code>${stripLineIndentation(this._selectedCode)}</code>
+                        <button class="jump-btn" title="Jump to Editor" data-file-uri="${this._initialFileUri}" data-line-number="${this._initialLineNumber}">
+                            <i class="fas fa-arrow-right"></i> Go to line
+                        </button>
                     </div>
                     <div id="agent-status" class="header-divs">
                         <div id="actions">

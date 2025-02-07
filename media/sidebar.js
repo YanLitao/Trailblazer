@@ -101,6 +101,18 @@ window.addEventListener('message', event => {
     }
 });
 
+document.querySelectorAll(".jump-btn").forEach((element) => {
+    element.addEventListener("click", function () {
+        const fileUri = element.getAttribute("data-file-uri");
+        const lineNumber = element.getAttribute("data-line-number");
+        vscode.postMessage({
+            command: 'openFileAtLine',
+            fileUri: fileUri,
+            lineNumber: parseInt(lineNumber, 10)
+        });
+    });
+});
+
 function updateSearchingContent(content) {
     const searchingContentDiv = document.getElementById('searching-content');
     const maxMessages = 1; // Change this if you want more messages
@@ -332,7 +344,7 @@ document.addEventListener("mouseover", function (event) {
         // Add a header with file and line information
         const fileName = fileUri ? fileUri.split("/").pop() : "Unknown file";
         const header = `<div class="tooltip-header">
-                            ${fileName}, line ${lineNumber}:
+                            ${fileName}, line ${lineNumber + 1}:
                         </div>`;
 
         // Add the code content
