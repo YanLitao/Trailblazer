@@ -231,6 +231,7 @@ class Agent {
     private _question: string = "";
     private _refined_question: string | null = null;
     private _numberOfVariablesThreshold: number = 15; // If the collection of variables is less than this threshold, explore them directly without using LLMs to choose the next steps
+    private _batchSize: number = 10; // Number of variables to process in a single batch
     private _sidebarViewProvider: SidebarView;
     private _exploredVariables: any[] = [];
     private _exploredFiles: { file_uri: string, file_content: string }[] = []; // Simplified _exploredFiles
@@ -1081,16 +1082,43 @@ class Agent {
                 task3Output.sub_problems = nextExploreVariables;
 
             } else {
-                const inputJson = {
-                    task: 3,
-                    refined_question: this._refined_question ?? "",
-                    variables_wait_for_exploring: newVariables
+                const batchSize = this._batchSize;
+                const batches = [];
+
+                // Split newVariables into chunks of batchSize
+                for (let i = 0; i < newVariables.length; i += batchSize) {
+                    batches.push(newVariables.slice(i, i + batchSize));
+                }
+
+                // Function to process each batch
+                const processBatch = async (batch: any[]) => {
+                    const inputJson = {
+                        task: 3,
+                        refined_question: this._refined_question ?? "",
+                        variables_wait_for_exploring: batch
+                    };
+                    const response = await this._callAgentAPI(inputJson, 3, task3Schema);
+                    return JSON.parse(response);
                 };
 
-                const response = await this._callAgentAPI(inputJson, 3, task3Schema);
-                const agentOutput = JSON.parse(response);
+                // Dispatch API calls concurrently
+                const responses = await Promise.all(batches.map(processBatch));
 
-                task3Output = await this.processTask3andTask4Output(agentOutput);
+                // Merge results
+                let combinedEvaluations: any[] = [];
+                let nextStepSummaries: string[] = [];
+
+                for (const res of responses) {
+                    if (res.evaluations) combinedEvaluations.push(...res.evaluations);
+                    if (res.next_step_summary) nextStepSummaries.push(res.next_step_summary);
+                }
+
+                const mergedOutput = {
+                    evaluations: combinedEvaluations,
+                    next_step_summary: nextStepSummaries.join(" ")
+                };
+
+                task3Output = await this.processTask3andTask4Output(mergedOutput);
             }
 
             // If Task 3 output is insufficient, run Task 4
@@ -1153,24 +1181,50 @@ class Agent {
         } else {
             console.warn("Running task 4, evaluating ", variableCount, " variables.");
             this._sidebarViewProvider.updateSearchingContent(`Deciding next exploration variables from ${variableCount} variables ...`);
-            const inputJson = {
-                task: 4,
-                refined_question: this._refined_question ?? "",
-                variables_wait_for_exploring: newVariables,
-            };
 
-            const response = await this._callAgentAPI(inputJson, 4, task4Schema);
+            const batchSize = this._batchSize;
+            const batches = [];
 
-            // Validate JSON format
-            let agentOutput;
-            try {
-                agentOutput = JSON.parse(response);
-            } catch (e) {
-                console.error("Failed to parse JSON response for task 4:", e, response);
-                return [];
+            // Split newVariables into chunks of batchSize
+            for (let i = 0; i < newVariables.length; i += batchSize) {
+                batches.push(newVariables.slice(i, i + batchSize));
             }
 
-            task4Output = await this.processTask3andTask4Output(agentOutput);
+            // Function to process each batch
+            const processBatch = async (batch: any[]) => {
+                const inputJson = {
+                    task: 4,
+                    refined_question: this._refined_question ?? "",
+                    variables_wait_for_exploring: batch,
+                };
+
+                try {
+                    const response = await this._callAgentAPI(inputJson, 4, task4Schema);
+                    return JSON.parse(response);
+                } catch (e) {
+                    console.error("Failed to parse JSON response for task 4:", e);
+                    return { evaluations: [], next_step_summary: "" };
+                }
+            };
+
+            // Dispatch API calls concurrently
+            const responses = await Promise.all(batches.map(processBatch));
+
+            // Merge results
+            let combinedEvaluations: any[] = [];
+            let nextStepSummaries: string[] = [];
+
+            for (const res of responses) {
+                if (res.evaluations) combinedEvaluations.push(...res.evaluations);
+                if (res.next_step_summary) nextStepSummaries.push(res.next_step_summary);
+            }
+
+            const mergedOutput = {
+                evaluations: combinedEvaluations,
+                next_step_summary: nextStepSummaries.join(" ")
+            };
+
+            task4Output = await this.processTask3andTask4Output(mergedOutput);
         }
         this._sidebarViewProvider.updateSearchingContent(`Added ${task4Output.sub_problems.length} variables to explore next.`);
         console.log("Task 4 output: ", task4Output);
@@ -1180,6 +1234,7 @@ class Agent {
     async runTask5(task2Results: Array<{ file_uri: string; line_number: number; code_line: string; full_statement: string; variables: Set<string> }>) {
         console.warn("Running task 5, processing ", task2Results.length, " results.");
         this._sidebarViewProvider.updateSearchingContent(`Evaluating the importance of ${task2Results.length} results gained in this exploration...`);
+
         const filteredResults = task2Results.filter(
             result =>
                 !Array.from(this._importantCodeSnippets.values()).some(
@@ -1187,23 +1242,55 @@ class Agent {
                 )
         );
 
-        const inputJson = {
-            task: 5,
-            refined_question: this._refined_question ?? "",
-            results: filteredResults.map(result => ({
-                file_uri: result.file_uri,
-                line_number: result.line_number,
-                code_line: result.code_line,
-                full_statement: result.full_statement,
-                variables: Array.from(result.variables),
-                explanation: "",
-                relevance_score: 0,
-                findings: ""
-            }))
+        const batchSize = 10;
+        const batches = [];
+
+        // Split filteredResults into chunks of batchSize
+        for (let i = 0; i < filteredResults.length; i += batchSize) {
+            batches.push(filteredResults.slice(i, i + batchSize));
+        }
+
+        // Function to process each batch
+        const processBatch = async (batch: any[]) => {
+            const inputJson = {
+                task: 5,
+                refined_question: this._refined_question ?? "",
+                results: batch.map(result => ({
+                    file_uri: result.file_uri,
+                    line_number: result.line_number,
+                    code_line: result.code_line,
+                    full_statement: result.full_statement,
+                    variables: Array.from(result.variables),
+                    explanation: "",
+                    relevance_score: 0,
+                    findings: ""
+                }))
+            };
+
+            try {
+                const response = await this._callAgentAPI(inputJson, 5, task5Schema);
+                return JSON.parse(response);
+            } catch (e) {
+                console.error("Failed to parse JSON response for task 5:", e);
+                return { ranked_results: [] };
+            }
         };
 
-        const response = await this._callAgentAPI(inputJson, 5, task5Schema);
-        const task5Output = JSON.parse(response);
+        // Dispatch API calls concurrently
+        const responses = await Promise.all(batches.map(processBatch));
+
+        // Merge results
+        let combinedRankedResults: any[] = [];
+
+        for (const res of responses) {
+            if (res.ranked_results) combinedRankedResults.push(...res.ranked_results);
+        }
+
+        // Store final output in task5Output
+        const task5Output = {
+            ranked_results: combinedRankedResults
+        };
+
         // nodeIds: {snippetKey: {nodeID: string, statement: string} ...} is an object that stores the node IDs and statement with the snippetKey as the key in this._importantCodeSnippets
         let nodeIds: {
             [key: number]: {
@@ -1559,28 +1646,6 @@ class Agent {
                     Evaluate each variable in the variables array and determine whether it is valuable to explore to answer the refined question. Justify the selection with a reason.
                     
                     The output format must strictly adhere to the JSON schema provided. Ensure that the tool is represented as an integer and do not alter the code_line.
-
-                    Output format for each valuable variable:
-                    sub_problems: [{
-                        sub_question: "string", // The specific sub-question that can be answered by exploring the invoke_variable in the code line.
-                        tool: "integer", // Selected tool (0 or 1) for exploration.
-                        code_context: {
-                            file_uri: "string", // Reuse file_uri from code_context without modification.
-                            invoke_variable: "string", // Must be one of the variables in the variables array.
-                            code_line: "string", // Reuse the code line from code_context without modification.
-                            line_number: "integer", // Reuse line_number from code_context without modification.
-                            full_statement: "string" // Reuse full_statement from code_context without modification.
-                        },
-                        reason: "string" // Provide a clear and precise reason for exploring this sub-question. Describe what specific insights we seek, such as method behavior, data dependencies, or structural relationships, and why this exploration is crucial for answering the refined question.
-                    }, ...]
-                    
-                `;
-                break;
-            case 2:
-                taskInstructions = `
-                    Task 2: Filter and rank the exploration results for each sub-question.
-                    Pick the most relevant results (up to num_results) for each sub-question based on their usefulness in answering the refined question.
-                    Ensure that the output follows the provided JSON schema for questions_and_results, which should include file uri, line number, code, explanation, and from_result.
                 `;
                 break;
             case 3:
@@ -1610,25 +1675,6 @@ class Agent {
                             - 0: Go to Definition
                             - 1: Find References
                         - Provide a reason for choosing the variable and tool.
-
-                    4. Output Format:
-
-                    {
-                        "evaluations": [ // Evaluations of explored code lines
-                            {
-                                "file_uri": "string", // File URI of the code line
-                                "line_number": number, // Line number of the code line
-                                "valuable": true or false, // Whether the code line is valuable for further exploration
-                                "next_step": {
-                                    "variable": "string", // Variable to explore next, pick from the input explored code lines
-                                    "tool": 0 or 1, // Tool to explore the variable
-                                    "reason": "string" // Reason for choosing the variable and tool
-                                } or null // Null if the line is not valuable for further exploration
-                            },
-                            ...
-                        ],
-                        "next_step_summary": "string" // Summary of the final answer or proposed next steps
-                    }
                 `;
                 break;
             case 4:
@@ -1657,25 +1703,6 @@ class Agent {
                             - 0: Go to Definition
                             - 1: Find References
                         - Provide a reason for choosing the variable and tool.
-    
-                    4. Output Format:
-    
-                    {
-                        "evaluations": [ // Evaluations of variables wait for exploring
-                            {
-                                "file_uri": "string", // File URI of the code line
-                                "line_number": number, // Line number of the code line
-                                "valuable": true or false, // Whether the code line is valuable for further exploration
-                                "next_step": {
-                                    "variable": "string", // Variable to explore next
-                                    "tool": 0 or 1, // Tool to explore the variable
-                                    "reason": "string" // Reason for choosing the variable and tool
-                                } or null // Null if the line is not valuable for further exploration
-                            },
-                            ...
-                        ],
-                        "next_step_summary": "string" // Summary of the final answer or proposed next steps
-                    }
                 `;
                 break;
             case 5:
@@ -1696,37 +1723,6 @@ class Agent {
 
                     Important:
                     - Do not modify the values of "file_uri", "code_line", "line_number", "full_statement", or "variables" for each result.
-
-                    Input example:
-                    {
-                        "results": [
-                            {
-                                "file_uri": "Original file URI",
-                                "line_number": 123, // Line number
-                                "code_line": "Original code line",
-                                "full_statement": "Original full statement",
-                                "variables": ["variable1", "variable2"] // List of variables in this result
-                            },
-                            ...
-                        ]
-                    }
-
-                    Output format:
-                    {
-                        "ranked_results": [
-                            {
-                                "file_uri": "Original file URI",
-                                "line_number": 123, // Line number
-                                "code_line": "Original code line",
-                                "full_statement": "Original full statement",
-                                "relevance_score": 0 or 1,
-                                "explanation": "Explanation of why this result is helpful",
-                                "finding": "One-sentence summary of the result in the specified structure",
-                                "variable": "One selected variable from the 'variables' array"
-                            },
-                            ...
-                        ]
-                    }
                 `;
                 break;
             case 6:
@@ -1759,17 +1755,6 @@ class Agent {
                     - 'lg' sets width to 72px.
                     - Consolidated Output:
                     - 'sm', 'md', 'lg' set width to 24, 48, 72px.
-                
-                Output Format:
-                {
-                    "filtered_findings": [
-                        {
-                            "snippetKey": ["array of snippet keys"],
-                            "statement": "Implementation-specific finding",
-                            "outOfDate": boolean
-                        }
-                    ]
-                }
                 `;
                 break;
             case 7:
@@ -1864,20 +1849,6 @@ class Agent {
                 - Each insight should have a single code snippet reference ([snippetKey: number]).
                 - Use bold formatting (**importantMethod**) for function names and variables.
                 - Use inline code formatting (\`someVariable\`) for small code snippets.
-
-                Output Format:
-                {
-                    "final_decision_sufficient": boolean,
-                    "answer": {
-                        "Overview": string,
-                        "Key_Insights": Array<{
-                            insightName: string,
-                            details: string,
-                            reference: string
-                        }>,
-                        "Practical_Insights": string
-                    }
-                }
                 `;
                 break;
             default:

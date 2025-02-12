@@ -468,6 +468,8 @@ export async function findCompleteStatementText(
         isFunction = 4; // class
     } else if (trimmedLine.includes("(")) {
         isFunction = 3; // function call
+    } else {
+        return { statementText: lineText, startLineNum: lineNumber, endLineNum: lineNumber };
     }
 
     const completeLineNode = await findNode(fileUri, lineNumber, isFunction);
@@ -899,10 +901,40 @@ export async function analyze(
         isFunction = 4; // class
     } else if (trimmedLine.includes("(")) {
         isFunction = 3; // function call
+    } else {
+        return normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber);
     }
 
     const results = await extractVariables(fileUri, lineNumber, inputVariable, isFunction);
     return results;
+}
+
+function normalProcess(
+    line: string,
+    inputVariable: string,
+    fileUri: string,
+    lineNumber: number
+): { fileUri: string; lineNumber: number; variable: string }[] {
+
+    const keywords = new Set([
+        "abstract", "as", "any", "async", "await", "boolean", "break", "case", "catch", "class", "const", "continue",
+        "debugger", "declare", "default", "delete", "do", "else", "enum", "export", "extends", "false", "final",
+        "finally", "for", "from", "function", "get", "goto", "if", "implements", "import", "in", "infer", "instanceof",
+        "interface", "is", "keyof", "let", "module", "namespace", "never", "new", "null", "number", "object", "of",
+        "package", "private", "protected", "public", "readonly", "require", "return", "set", "static", "string",
+        "super", "switch", "symbol", "this", "throw", "true", "try", "type", "typeof", "undefined", "unique", "unknown",
+        "var", "void", "while", "with", "yield"
+    ]);
+
+    // Extract potential identifiers
+    const matches = line.match(/\b[A-Za-z_][A-Za-z0-9_]*\b/g);
+
+    // Filter and map to the required format
+    return matches
+        ? matches
+            .filter(identifier => !keywords.has(identifier) && identifier !== inputVariable)
+            .map(variable => ({ fileUri, lineNumber, variable }))
+        : [];
 }
 
 export async function test() {
