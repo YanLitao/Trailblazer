@@ -652,6 +652,7 @@ code {
 #graph-container .node text {
     font: 12px sans-serif;
     fill: #333;
+    cursor: pointer;
 }
 
 #graph-container .link {

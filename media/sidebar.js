@@ -37,14 +37,9 @@ function reAppendInsights() {
 window.addEventListener('message', event => {
     const message = event.data;
     switch (message.command) {
-        case 'appendHtml':
-            appendHtml(message.html, message.id, message.num);
-            break;
         case 'updateStatus':
+            console.log("Received status update: ", message.status);
             updateStatus(message.status);
-            break;
-        case 'updateCurrentTaskContent':
-            updateCurrentTaskContent(message.html, message.id, message.num);
             break;
         case 'updateAnswer':
             const answerDiv = document.getElementById('answer-div');
@@ -67,25 +62,11 @@ window.addEventListener('message', event => {
                 reAppendInsights();
 
                 if (message.answer.includes("Final Answer")) {
-                    document.getElementById('still-to-be-found').style.display = 'none';
                     document.querySelectorAll('.removable').forEach((element) => {
                         element.style.display = 'none';
                     });
-                    document.getElementById('current-task').display = 'none';
                 }
-
             }
-            break;
-        case 'updateExplorationSummary':
-            if (message.summary.includes("Final Answer: ")) {
-                document.getElementById('still-to-be-found').innerHTML = message.summary;
-                document.getElementById('searching-content').style.display = 'none';
-            } else {
-                document.getElementById('exploration-summary').innerText = message.summary;
-            }
-            break;
-        case 'appendFindings':
-            appendFindingsHtml(message.html);
             break;
         case 'renderGraph':
             graphData = initializeHiddenField(message.data);
@@ -184,13 +165,11 @@ document.getElementById('stop-agent').addEventListener('click', function () {
 });
 
 function followUpQuestionInput() {
-    document.getElementById('still-to-be-found').style.display = 'block';
     document.querySelectorAll('.removable').forEach((element) => {
         element.style.display = 'block';
     });
     document.getElementById('final-answer-header').innerHTML = 'Preliminary Answer';
     document.getElementById('searching-content').style.display = 'block';
-    document.getElementById('current-task').style.display = 'block';
     updateStatus('Searching');
     const pauseButton = document.getElementById('pause-agent');
     const icon = pauseButton.querySelector('i');
@@ -384,6 +363,13 @@ document.addEventListener("mouseover", function (event) {
     }
 });
 
+function toggleHiddenStatement(element) {
+    const hiddenStatement = element.nextElementSibling; // Find the next sibling <span>
+    if (hiddenStatement) {
+        hiddenStatement.style.display = hiddenStatement.style.display === "none" ? "inline" : "none";
+    }
+}
+
 // control showing the preliminary answer
 function toggleDetails() {
     const container = document.getElementById("details-container");
@@ -417,16 +403,7 @@ function toggleAdditionalInvocations(elementId) {
     }
 }
 
-// Function to append HTML content dynamically
-function appendHtml(html, id, num) {
-    const explorationSteps = document.getElementById('exploration-steps');
-    explorationSteps.insertAdjacentHTML('beforeend', html);
-    setupJumpToLine(); // Set up the jump-to-line functionality
-    if (num >= 0) {
-        setupToggleDetails(id, num); // Set up the toggle details functionality
-    }
 
-}
 
 function appendFindingsHtml(html) {
     // Append the HTML content to findings
@@ -556,13 +533,7 @@ function updateStatus(status) {
     }
 }
 
-function updateCurrentTaskContent(html, id, num) {
-    document.getElementById('current-task-content').innerHTML = html;
-    setupJumpToLine(); // Set up the jump-to-line functionality
-    if (num >= 0) {
-        setupToggleDetails(id, num); // Set up the toggle details functionality
-    }
-}
+
 
 function initializeHiddenField(treeNode, hidden = 2) {
     // Set the hidden state based on the node's relationship to the root
@@ -617,6 +588,24 @@ function renderGraph(data) {
     let currentNodes = [];
     let currentStepIndex = 0;
     let nodeSize = 20;
+
+    function toggleNode(d) {
+        // Toggle `hidden` state for the current node
+        if (d.data.hidden === 0) {
+            d.data.hidden = 1; // Make partially visible
+        } else if (d.data.hidden === 1) {
+            d.data.hidden = 2; // Fully visible
+        } else if (d.data.hidden === 2) {
+            d.data.hidden = 1; // Back to partially visible
+        }
+        // If fully visible (`hidden = 2`), propagate to children
+        if (d.data.hidden === 2 && d.children) {
+            d.children.forEach(child => {
+                child.data.hidden = 1; // Children become partially visible
+            });
+        }
+        drawGraph(); // Redraw the graph with updated states
+    }
 
     function drawGraph() {
         const width = container.offsetWidth;
@@ -684,24 +673,8 @@ function renderGraph(data) {
             .attr("r", 10)
             .attr("fill", "#aaa")
             .attr("stroke", "#333")
-            .on("click", (event, d) => {
-                // Toggle `hidden` state for the current node
-                if (d.data.hidden === 0) {
-                    d.data.hidden = 1; // Make partially visible
-                } else if (d.data.hidden === 1) {
-                    d.data.hidden = 2; // Fully visible
-                } else if (d.data.hidden === 2) {
-                    d.data.hidden = 1; // Back to partially visible
-                }
-
-                // If fully visible (`hidden = 2`), propagate to children
-                if (d.data.hidden === 2 && d.children) {
-                    d.children.forEach(child => {
-                        child.data.hidden = 1; // Children become partially visible
-                    });
-                }
-
-                drawGraph(); // Redraw the graph with updated states
+            .on("click", function (event, d) {
+                toggleNode(d); // Call the same function used for circles
             });
 
         // Add text inside circles to indicate visibility state
@@ -717,6 +690,9 @@ function renderGraph(data) {
                 if (d.data.hidden === 1) return "+"; // Expand indicator
                 if (d.data.hidden === 2) return "-"; // Collapse indicator
                 return ""; // No text if hidden = 0
+            })
+            .on("click", function (event, d) {
+                toggleNode(d); // Call the same function used for circles
             });
 
         nodeGroup.append("foreignObject")

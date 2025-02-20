@@ -1113,9 +1113,16 @@ class Agent {
                     if (res.next_step_summary) nextStepSummaries.push(res.next_step_summary);
                 }
 
+                // Keep only the first 3 summaries and collapse the rest
+                let summarizedNextStep = nextStepSummaries.slice(0, 3).join("\n");
+                if (nextStepSummaries.length > 3) {
+                    summarizedNextStep += "...";
+                }
+
+                // Store final output
                 const mergedOutput = {
                     evaluations: combinedEvaluations,
-                    next_step_summary: nextStepSummaries.join(" ")
+                    next_step_summary: summarizedNextStep
                 };
 
                 task3Output = await this.processTask3andTask4Output(mergedOutput);
@@ -1219,9 +1226,16 @@ class Agent {
                 if (res.next_step_summary) nextStepSummaries.push(res.next_step_summary);
             }
 
+            // Keep only the first 3 summaries and collapse the rest
+            let summarizedNextStep = nextStepSummaries.slice(0, 3).join("\n");
+            if (nextStepSummaries.length > 3) {
+                summarizedNextStep += "...";
+            }
+
+            // Store final output
             const mergedOutput = {
                 evaluations: combinedEvaluations,
-                next_step_summary: nextStepSummaries.join(" ")
+                next_step_summary: summarizedNextStep
             };
 
             task4Output = await this.processTask3andTask4Output(mergedOutput);
@@ -1485,13 +1499,13 @@ class Agent {
         const updatedFindings = this.updateFindingsSummary(task6Output.filtered_findings);
 
         // Generate the HTML for the findings
-        let concatenatedHtml = "Finding: <ul>";
+        let concatenatedHtml = "Findings: <ul>";
 
         updatedFindings.forEach(finding => {
             const snippetKeys = `[${finding.snippetKey.map((key: number) => `<span class="citation-ref" data-ref="${key}">${key}</span>`).join(", ")}]`;
             let parsedStatement = processMarkdown(finding.statement);
             const statementHtml = finding.outOfDate
-                ? `<span class="additional-finding">[1 additional finding]</span>
+                ? `<span class="additional-finding" onclick="toggleHiddenStatement(this)">[1 additional finding]</span>
                    <span class="hidden-statement" style="display: none;">${parsedStatement}${snippetKeys}</span>`
                 : `${parsedStatement}${snippetKeys}`;
 
@@ -1622,9 +1636,9 @@ class Agent {
     private async _updateStepResults(refinedOutput: any) {
         // Update sidebar and graph visualization with refinedOutput and important code snippets
         if (this._updateFindings) {
-            this._sidebarViewProvider.addTask3Results(this._final_decision_sufficient, refinedOutput);
+            this._sidebarViewProvider.showAnswer(refinedOutput.answer);
         } else {
-            this._sidebarViewProvider.addTask3Results(this._final_decision_sufficient, refinedOutput);
+            this._sidebarViewProvider.showAnswer(refinedOutput.answer);
         }
         this._updateFindings = false;
         //this.updateGraphVisualization();

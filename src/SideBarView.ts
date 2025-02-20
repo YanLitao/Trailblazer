@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { getSurroundingCode, stripLineIndentation } from './codeContextUtils';
-import { Node, Edge, TreeNode } from './explorationGraph';
+import { stripLineIndentation } from './codeContextUtils';
+import { TreeNode } from './explorationGraph';
 
 export class SidebarView implements vscode.WebviewViewProvider {
     public static readonly viewType = 'search-copilot.sidebarView';
@@ -10,10 +10,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
     private _stepCounter: number = 1;
     private _initialFileUri: string = '';
     private _initialLineNumber: number = 0;
-    private _displayQueue: Array<{ answer: string, nextStepSummary: string, findingsHtml: string, taskContentHtml: string, locations: Array<{ fileUri?: string, lineNumber?: number }> }> = [];
-    private _isDisplaying: boolean = false;
-    private _stayingTime: number = 5; // seconds
-    private _watchMode: boolean = false;
 
     constructor(
         private readonly _context: vscode.ExtensionContext
@@ -55,58 +51,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 vscode.commands.executeCommand('extension.continueAgent');
             }
         });
-    }
-
-    // Enqueue new content
-    public enqueueTaskResultUpdate(answer: string, nextStepSummary: string, findingsHtml: string, taskContentHtml: string, locations: Array<{ fileUri?: string, lineNumber?: number }> = []) {
-        this._displayQueue.push({ answer, nextStepSummary, findingsHtml, taskContentHtml, locations });
-        this.processQueue(); // Start processing the queue if not already in progress
-    }
-
-    // Process queue to display each item for at least 30 seconds
-    private async processQueue() {
-        if (this._isDisplaying || this._displayQueue.length === 0) {
-            return; // Exit if already displaying or queue is empty
-        }
-
-        this._isDisplaying = true;
-
-        // Dequeue and display the next item
-        const { answer, nextStepSummary, findingsHtml, taskContentHtml, locations } = this._displayQueue.shift()!;
-        // Send message to update preliminary answer and current task content
-        this._view?.webview.postMessage({
-            command: 'updateAnswer',
-            answer: answer
-        });
-
-        this._view?.webview.postMessage({
-            command: 'updateExplorationSummary',
-            summary: nextStepSummary
-        });
-
-        this._view?.webview.postMessage({
-            command: 'updateCurrentTaskContent',
-            html: taskContentHtml
-        });
-
-        this._view?.webview.postMessage({
-            command: 'appendFindings',
-            html: findingsHtml
-        });
-
-        // Check if watch mode is active and extract the file URI and line number
-        if (this._watchMode) {
-            for (const location of locations) {
-                if (location.fileUri && location.lineNumber !== undefined) {
-                    await this.openFileAtLine(vscode.Uri.parse(location.fileUri), location.lineNumber);
-                }
-            }
-        }
-
-        await new Promise(resolve => setTimeout(resolve, this._stayingTime * 1000));
-
-        this._isDisplaying = false;
-        this.processQueue(); // Process the next item in the queue
     }
 
     /**
@@ -336,6 +280,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
 
     // Example usage: Set agent status to "Searching"
     public agentIsRunning() {
+        console.log("Agent is running");
         this._updateAgentStatus('Searching');
     }
 
@@ -396,7 +341,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     </div>
                     <div id="searching-content" class="header-divs"></div>
                     <div id="answer-div"></div>
-                    <div id="still-to-be-found" class="header-divs">Still to be found: <span id="exploration-summary"></span></div>
                 </div>
                 <h1>Exploration Steps 
                     <span class="info-icon" id="info-icon">i</span>
@@ -409,25 +353,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     This is <strong>not</strong> a call graph or dependency graph—it's a guided code exploration using standard developer tools.
                 </div>
                 <div id="graph-container"></div>
-                <div id="current-task">
-                    <div id="current-task-content"></div>
-                </div>
-                <div id="exploration-steps" style="display:none;">
-                    <div class="task">
-                        <div class="task-header">
-                            <div class="step-circle">0</div>
-                            <h3>Initial question: ${this._question}</h3>
-                        </div>
-                        <div class="task-content">
-                            <p>Selected code in <a href="#" class="line-link" data-file-uri="${this._initialFileUri}" data-line="${this._initialLineNumber}">
-                                    line ${this._initialLineNumber + 1}
-                                </a>:
-                            </p>
-                            <div class="code-box">
-                                <pre class="line-numbers language-ts"><code class="language-ts">${stripLineIndentation(this._selectedCode)}</code></pre>
-                            </div>
-                        </div>
-                </div> 
                 <script src="${prismJS}"></script>
                 <script src="${html2pdfJS}"></script>
                 <script src="${scriptUri}"></script>
@@ -449,102 +374,14 @@ export class SidebarView implements vscode.WebviewViewProvider {
         }
     }
 
-    public async addTask3Results(final_decision_sufficient: boolean, task3Output: any) {
+    public async showAnswer(answerText: string) {
         if (this._view) {
-            /* const webview = this._view.webview;
-            const explorationUniqueId = `exploration-task3-results-${this._stepCounter}`; // Unique ID for exploration steps
-             */
-            const currentTaskUniqueId = `current-task3-results-${this._stepCounter}`; // Unique ID for current task
-            //var i = -1;
 
-            // Update the preliminary answer text in the webview
-            let answerText = "";
-            if (task3Output.answer) {
-                answerText = task3Output.answer;
-            }
+            this._view?.webview.postMessage({
+                command: 'updateAnswer',
+                answer: answerText
+            });
 
-            const nextStepSummary = final_decision_sufficient
-                ? ""
-                : (task3Output.next_step_summary || "");
-
-            let findingsHtml = "";
-
-            let currentTaskHtml = "";
-
-            if (task3Output.sub_problems.length > 0) {
-                currentTaskHtml = `<div class="task-content">`;
-                const firstSubProblem = task3Output.sub_problems[0];
-                const codeContext = firstSubProblem.code_context;
-                const fileName = this.getFileNameFromUri(codeContext.file_uri);
-                const { contextText } = await getSurroundingCode(vscode.Uri.parse(codeContext.file_uri), codeContext.line_number, codeContext.line_number);
-
-                // Show the first invocation place
-                currentTaskHtml += `
-                    <div class="sub-question">
-                        <p><strong>Currently exploring:</strong> ${firstSubProblem.sub_question}</p>
-                        <p class="code-info">
-                            Exploring <strong>${codeContext.invoke_variable}</strong> in <strong>${fileName}, 
-                            <a href="#" class="line-link" data-file-uri="${codeContext.file_uri}" data-line="${codeContext.line_number}">
-                                Line ${codeContext.line_number + 1}
-                            </a></strong>:
-                        </p>
-                        <div class="code-box">
-                            <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(contextText)}</code></pre>
-                        </div>
-                        <p class="code-info"><strong>Why to explore:</strong> ${firstSubProblem.reason}</p>
-                    </div>
-                `;
-
-                // Show the clickable line to expand remaining invocation places
-                if (task3Output.sub_problems.length > 1) {
-                    const remainingCount = task3Output.sub_problems.length - 1;
-                    currentTaskHtml += `
-                        <p class="show-more-invocations" id="${currentTaskUniqueId}-show-more" onClick="toggleAdditionalInvocations('${currentTaskUniqueId}-show-more')">
-                            ... also exploring <strong>${remainingCount}</strong> other places ...
-                        </p>
-                        <div id="${currentTaskUniqueId}-additional-invocations" style="display: none;">
-                    `;
-
-                    // Add remaining invocation places, hidden by default
-                    for (let j = 1; j < task3Output.sub_problems.length; j++) {
-                        const subProblem = task3Output.sub_problems[j];
-                        const otherCodeContext = subProblem.code_context;
-                        const otherFileName = this.getFileNameFromUri(otherCodeContext.file_uri);
-
-                        currentTaskHtml += `
-                            <div class="sub-question additional-invocation">
-                                <p><strong>Exploring:</strong> ${subProblem.sub_question}</p>
-                                <p class="code-info">
-                                    Exploring <strong>${otherCodeContext.invoke_variable}</strong> in <strong>${otherFileName}, 
-                                    <a href="#" class="line-link" data-file-uri="${otherCodeContext.file_uri}" data-line="${otherCodeContext.line_number}">
-                                        Line ${otherCodeContext.line_number + 1}
-                                    </a></strong>:
-                                </p>
-                                <div class="code-box">
-                                    <pre class="line-numbers language-ts"><code class="language-ts">${this.escapeHtml(otherCodeContext.full_statement)}</code></pre>
-                                </div>
-                                <p class="code-info"><strong>Why to explore:</strong> ${subProblem.reason}</p>
-                            </div>
-                        `;
-                    }
-                    currentTaskHtml += `</div>`; // Close additional-invocations div
-                }
-                currentTaskHtml += `</div>`; // Close task-content div
-
-                // Post the HTML to the current task content
-                //webview.postMessage({ command: 'updateCurrentTaskContent', html: currentTaskHtml, id: currentTaskUniqueId, num: i });
-                // Only enqueue updates for non-empty answer or task content
-                if (answerText || nextStepSummary || currentTaskHtml) {
-                    const locations = [{ fileUri: firstSubProblem.code_context.file_uri, lineNumber: firstSubProblem.code_context.line_number }];
-                    this.enqueueTaskResultUpdate(answerText || "", nextStepSummary || "", findingsHtml || "", currentTaskHtml || "", locations);
-                }
-            } else {
-                if (answerText || nextStepSummary) {
-                    this.enqueueTaskResultUpdate(answerText || "", nextStepSummary || "", findingsHtml || "", currentTaskHtml || "");
-                }
-            }
-
-            // Increment the step counter
             this._stepCounter++;
         }
     }
@@ -554,26 +391,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
             command: 'updateAnswer',
             answer: answer
         });
-    }
-
-    // Helper function to extract the file name from the URI
-    private getFileNameFromUri(uri: string): string {
-        if (!uri) {
-            return '';
-        }
-        const parts = uri.split('/');
-        return parts[parts.length - 1];
-    }
-
-    // Escape HTML to prevent XSS or code rendering issues
-    private escapeHtml(unsafe: string): string {
-        unsafe = stripLineIndentation(unsafe);
-        return unsafe
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;")
-            .replace(/'/g, "&#039;");
     }
 
     private removeCircularReferences(node: TreeNode, seen = new Set()): any {

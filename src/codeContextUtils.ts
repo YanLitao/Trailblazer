@@ -426,6 +426,8 @@ async function findNode(
                 return node;
             } else if (isFunction == 4 && ts.isClassDeclaration(node)) {
                 return node;
+            } else if (isFunction == 9 && ts.isIfStatement(node)) {
+                return node;
             }
         }
 
@@ -450,12 +452,12 @@ export async function findCompleteStatementText(
     const lineText = await getLineText(fileUri, lineNumber);
     const trimmedLine = lineText.trim();
 
-    if (!trimmedLine) {
-        console.error(`Line ${lineNumber} not found in file ${fileUri}`);
+    if (!trimmedLine || (!trimmedLine.endsWith(",") && !trimmedLine.endsWith(";"))) {
         return { statementText: lineText, startLineNum: lineNumber, endLineNum: lineNumber };
     }
 
     let isFunction = 0;
+
     if (trimmedLine.includes("=")) {
         isFunction = 0; // assignment
     } else if (trimmedLine.endsWith(",")) {
@@ -879,7 +881,8 @@ function extractClass(node: ts.Node,
 export async function analyze(
     fileUri: vscode.Uri,
     lineNumber: number,
-    inputVariable: string = ""
+    inputVariable: string = "",
+    depth: number = 0 // Add depth control
 ) {
     const lineText = await getLineText(fileUri, lineNumber);
     const trimmedLine = lineText.trim();
@@ -888,7 +891,21 @@ export async function analyze(
         console.error(`Line ${lineNumber} not found in file ${fileUri}`);
         return [];
     }
+
     let isFunction = 0;
+
+    // Handle if-else conditions
+    if (depth == 0 && (trimmedLine.startsWith("if ") || trimmedLine.startsWith("else if ") || trimmedLine.startsWith("else {"))) {
+        console.log(`Handling if-else condition at line ${lineNumber}`);
+
+        // If depth > 0, only return statements without further analysis
+        return findIfElseDirectStatementsWithLines(fileUri, lineNumber, inputVariable, 0);
+    }
+
+    if (!trimmedLine.endsWith(",") && !trimmedLine.endsWith(";")) {
+        return normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber);
+    }
+
     if (trimmedLine.includes("=")) {
         isFunction = 0; // assignment
     } else if (trimmedLine.endsWith(",")) {
@@ -937,6 +954,65 @@ function normalProcess(
         : [];
 }
 
-export async function test() {
+async function findIfElseDirectStatementsWithLines(
+    fileUri: vscode.Uri,
+    lineNumber: number,
+    inputVariable: string = "",
+    depth: number = 0 // Pass depth to control recursion
+): Promise<any[]> {
+    const document = await vscode.workspace.openTextDocument(fileUri);
+    const fileContent = document.getText();
+    const sourceFile = ts.createSourceFile(
+        fileUri.toString(),
+        fileContent,
+        ts.ScriptTarget.ESNext,
+        true
+    );
 
+    function visit(node: ts.Node): ts.IfStatement | null {
+        if (ts.isIfStatement(node)) {
+            const startPos = node.getStart(sourceFile);
+            const startLine = document.positionAt(startPos).line;
+
+            if (startLine === lineNumber) {
+                return node;
+            }
+        }
+
+        for (const child of node.getChildren(sourceFile)) {
+            const result = visit(child);
+            if (result) {
+                return result;
+            }
+        }
+
+        return null;
+    }
+
+    const ifNode = visit(sourceFile);
+    if (!ifNode) return [];
+
+    let allResults: Promise<any[]>[] = [];
+
+    function collectDirectStatements(block: ts.Block) {
+        for (const statement of block.statements) {
+            const startPos = statement.getStart(sourceFile);
+            const statementLine = document.positionAt(startPos).line;
+
+            // Recursively analyze each statement, preventing deeper if-analysis
+            allResults.push(analyze(fileUri, statementLine, inputVariable, depth + 1));
+        }
+    }
+
+    if (ifNode.thenStatement && ts.isBlock(ifNode.thenStatement)) {
+        collectDirectStatements(ifNode.thenStatement);
+    }
+    if (ifNode.elseStatement && ts.isBlock(ifNode.elseStatement)) {
+        collectDirectStatements(ifNode.elseStatement);
+    }
+
+    return Promise.all(allResults).then(results => results.flat());
+}
+
+export async function test() {
 }
