@@ -896,7 +896,6 @@ export async function analyze(
 
     // Handle if-else conditions
     if (depth == 0 && (trimmedLine.startsWith("if ") || trimmedLine.startsWith("else if ") || trimmedLine.startsWith("else {"))) {
-        console.log(`Handling if-else condition at line ${lineNumber}`);
 
         // If depth > 0, only return statements without further analysis
         return findIfElseDirectStatementsWithLines(fileUri, lineNumber, inputVariable, 0);

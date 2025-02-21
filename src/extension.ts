@@ -217,8 +217,7 @@ const task7Schema = z.object({
                 details: z.string(), // Explanation of the stage's role or function.
                 reference: z.string(),
             })
-        ),
-        Practical_Insights: z.string(), // Summary of best practices, tips, or pitfalls.
+        )
     })
 }).strict();
 
@@ -270,7 +269,7 @@ class Agent {
             apiKey: API_KEY,
             maxTokens: 16384,
             temperature: 0,
-            topP: 1,
+            topP: 0.1,
         });
 
         this._fasterModel = new ChatOpenAI({
@@ -278,7 +277,7 @@ class Agent {
             apiKey: API_KEY,
             maxTokens: 16384,
             temperature: 0,
-            topP: 1,
+            topP: 0.1,
         });
 
         this._reasoningModel = new ChatOpenAI({
@@ -286,7 +285,7 @@ class Agent {
             apiKey: API_KEY,
             maxTokens: 128000,
             temperature: 0,
-            topP: 1,
+            topP: 0.1,
         });
 
         this._openai = new OpenAI({
@@ -1400,16 +1399,17 @@ class Agent {
 
         let evaluationOutput = "";
         if (this._updateFindings) {
-            let [task7Output, task6Output] = await Promise.all([
+            /* let [task7Output, task6Output] = await Promise.all([
                 this.runTask7(),
                 this.runTask6()
-            ]);
-            if (this._final_decision_sufficient) {
+            ]); */
+            evaluationOutput = await this.runTask7();
+            /* if (this._final_decision_sufficient) {
                 evaluationOutput = task7Output;
                 this._sidebarViewProvider.addAnswer(evaluationOutput);
             } else {
                 evaluationOutput = task7Output + task6Output;
-            }
+            } */
         }
 
         return evaluationOutput;
@@ -1542,7 +1542,7 @@ class Agent {
 
 
     private processFinalAnswer(task7Output: any): string {
-        const { Overview, Lifecycle, Practical_Insights } = task7Output.answer;
+        const { Overview, Lifecycle } = task7Output.answer;
 
         // Helper functions for markdown processing
 
@@ -1580,19 +1580,12 @@ class Agent {
                 .join("");
         };
 
-        // Process the "Practical_Insights" section
-        const processPracticalInsights = (insights: string): string => {
-            return `<div class="practical-insights"><h2>Practical Insights</h2><p>${processMarkdown(insights)}</p></div>`;
-        };
-
-        // Add the lifecycle and practical insights container with toggle functionality
         const lifecycleAndInsightsContainer = `
             <div id="details-container" style="display: ${task7Output.final_decision_sufficient ? "block" : "none"};">
                 <div class="lifecycle">
                     <h2>Highlights</h2>
                     ${processLifecycle(Lifecycle)}
                 </div>
-                ${processPracticalInsights(Practical_Insights)}
             </div>
         `;
 
@@ -1777,10 +1770,10 @@ class Agent {
 
                 Objective:
                 1. Assess if the current findings and code exploration sufficiently answer the refined question.
-                2. Generate a structured, evidence-based answer that includes key insights, practical tips, and clarity for developers.
+                2. Generate a structured, evidence-based answer that includes key insights for developers.
 
                 Input:
-                1. refined_question: The question to answer (e.g., "What does this function do?", "Why is this parameter needed?", "How does this variable handle X?").
+                1. refined_question
                 2. data_flow_tree: A structured tree containing findings and associated code snippets.
 
                 TreeNode = {
@@ -1816,8 +1809,7 @@ class Agent {
                    - insightName: Name of the key insight (e.g., "Initialization," "Data Flow," "Parameter Influence").
                    - details: A short explanation of the insight.
                    - reference: A single snippetKey reference ([snippetKey: number]) that supports the explanation. Do not reference snippetKey: -1, as it represents the root node.
-                - Practical_Insights: A string summarizing best practices, tips, or common pitfalls relevant to the question.
-
+                
                 Guidelines for Generating Good "Key Insights":
                 - Each insight should capture an important aspect of how the code works.
                 - Focus on execution flow, structural relationships, or logical steps.
