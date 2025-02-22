@@ -229,7 +229,7 @@ class Agent {
     private _stepCounter: number = 0;
     private _question: string = "";
     private _refined_question: string | null = null;
-    private _numberOfVariablesThreshold: number = 15; // If the collection of variables is less than this threshold, explore them directly without using LLMs to choose the next steps
+    private _numberOfVariablesThreshold: number = 25; // If the collection of variables is less than this threshold, explore them directly without using LLMs to choose the next steps
     private _batchSize: number = 10; // Number of variables to process in a single batch
     private _sidebarViewProvider: SidebarView;
     private _exploredVariables: any[] = [];
@@ -439,7 +439,7 @@ class Agent {
             const endStep = new Date().getTime();
             console.log(`Step ${this._stepCounter} took ${endStep - startStep}ms`);
 
-            if (this._final_decision_sufficient || refinedOutput.sub_problems.length === 0) {
+            if (this._final_decision_sufficient && refinedOutput.sub_problems.length === 0) {
                 break;
             }
         }
@@ -684,7 +684,7 @@ class Agent {
             const results = await this._runTool(fileUri, lineNumber, offset, subProblem);
 
             if (results.length === 0) {
-                console.warn(`No results were found for sub-problem "${subProblem.sub_question}".`);
+                console.warn(`No results were found for "${subProblem.code_context.invoke_variable}" near line ${subProblem.code_context.line_number}.`);
                 task2Results.push({
                     sub_question: subProblem.sub_question,
                     tool: subProblem.tool,
@@ -756,7 +756,7 @@ class Agent {
             const definitionLocations = await vscode.commands.executeCommand<vscode.Location[] | vscode.LocationLink[]>(
                 'vscode.executeDefinitionProvider', loc.uri, loc.range.start
             );
-            results = await this._prepareResults(definitionLocations, subProblem);
+            results = await this._prepareResults(definitionLocations as vscode.Location[] | vscode.LocationLink[], subProblem);
         } else if (subProblem.tool === 1) { // Find References
             const referenceLocations = await vscode.commands.executeCommand(
                 'vscode.executeReferenceProvider', loc.uri, loc.range.start
@@ -814,7 +814,7 @@ class Agent {
     async _prepareResults(locations: vscode.Location[] | vscode.LocationLink[], subProblem: any) {
         const results: Array<{ file_uri: string, line_number: number, code_line: string, full_statement: string, variable: string }> = [];
         if (!locations || locations.length === 0) {
-            console.warn(`No locations found for sub-problem: ${subProblem.sub_question}`);
+            console.warn(`No locations found for ${subProblem.code_context.invoke_variable} around line ${subProblem.code_context.line_number}.`);
             return results;
         }
 
@@ -1634,7 +1634,6 @@ class Agent {
             this._sidebarViewProvider.showAnswer(refinedOutput.answer);
         }
         this._updateFindings = false;
-        //this.updateGraphVisualization();
     }
 
     async _callAgentAPI(inputJson: any, taskNumber: number, selectedSchema: any): Promise<string> {
@@ -1783,24 +1782,39 @@ class Agent {
                     lineNumber: number;
                     variable: string;
                     codeLine: string;
-                    codeSnippet: string; // 3 lines before and after the codeLine
+                    codeSnippet: string; 
                     isIntermediate: boolean;
-                    statement: string; // findings extracted from this line of code
-                    children: TreeNode[]; // Recursive definition
+                    statement: string; 
+                    children: TreeNode[]; 
                 };
 
                 Instructions:
 
                 1. Decide final_decision_sufficient:
-                Evaluate if the current findings and data flow tree are enough to fully answer the refined question:
-                - Depth: Are the explored code snippets detailed enough to address the question's scope (e.g., logic, behavior, dependencies)?
-                - Coverage: Does the exploration include all relevant parts of the codebase (e.g., key functions, variables, structures) needed to answer the question?
-                - Clarity: Is the data flow traceable, and are the findings coherent enough to form a beginner-friendly answer?
+                Evaluate if the current findings and data flow tree are fully sufficient to answer the refined question. Consider the following factors strictly:
 
-                Set:
-                - final_decision_sufficient: true if all aspects are covered.
-                - final_decision_sufficient: false if further exploration is needed, specifying:
-                    - Missing areas (e.g., unexamined dependencies, unexplored control flows, or unclear logic).
+                (A) Concrete Code Evidence: 
+                - Are there direct code references (e.g., function calls, assignments, CSS changes, control flows) supporting each key part of the answer?
+                - Does the data flow tree contain explicit operations that prove the behavior rather than inferred logic?
+
+                (B) Execution Flow and Dependencies: 
+                - Are all necessary execution steps traced? (e.g., function calls, variable mutations, interactions across files)
+                - Does the explanation cover how the answer is implemented rather than just what it does?
+
+                (C) Scope and Coverage:  
+                - Are all relevant parts of the codebase (e.g., related functions, affecting variables, impacted components) included?
+                - Are there missing dependencies, control flows, or unexplored conditions that could affect the answer?
+
+                (D) Clarity and Completeness:  
+                - Does the explanation clearly show how the findings lead to the final answer?  
+                - Would a developer, unfamiliar with the code, be able to understand and verify the reasoning based on the provided snippets?  
+                - If an important part is missing (e.g., where exactly a property is modified), the answer is insufficient.
+
+                Decision Rules:
+                - final_decision_sufficient: true → Only if the data flow tree contains concrete, traceable evidence covering all aspects above.
+                - final_decision_sufficient: false → If any crucial evidence is missing, specify:
+                - Missing areas (e.g., unexamined dependencies, unexplored control flows, or unclear logic).
+                - Additional steps required (e.g., tracking function calls, variable changes, external dependencies).
 
                 2. Generate Answer:
                 Provide a structured, detailed answer object, whether or not findings are sufficient. The structure should include:

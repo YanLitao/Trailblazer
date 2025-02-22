@@ -275,6 +275,10 @@ export class SidebarView implements vscode.WebviewViewProvider {
     private _updateAgentStatus(status: string) {
         if (this._view) {
             this._view.webview.postMessage({ command: 'updateStatus', status: status });
+        } else {
+            // Retry after 1 second if the view is not yet available, and continue retrying until it is
+            console.log("Retrying to update agent status...");
+            setTimeout(() => this._updateAgentStatus(status), 1000);
         }
     }
 

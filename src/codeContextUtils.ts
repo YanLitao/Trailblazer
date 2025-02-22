@@ -452,26 +452,30 @@ export async function findCompleteStatementText(
     const lineText = await getLineText(fileUri, lineNumber);
     const trimmedLine = lineText.trim();
 
-    if (!trimmedLine || (!trimmedLine.endsWith(",") && !trimmedLine.endsWith(";"))) {
+    if (!trimmedLine) {
         return { statementText: lineText, startLineNum: lineNumber, endLineNum: lineNumber };
     }
 
     let isFunction = 0;
-
-    if (trimmedLine.includes("=")) {
-        isFunction = 0; // assignment
-    } else if (trimmedLine.endsWith(",")) {
-        isFunction = 0; // destructuring assignment
-    } else if (trimmedLine.includes("function ")) {
-        isFunction = 1; // function definition
-    } else if (trimmedLine.includes("=>")) {
-        isFunction = 2; // arrow function
-    } else if (trimmedLine.includes("class")) {
-        isFunction = 4; // class
-    } else if (trimmedLine.includes("(")) {
-        isFunction = 3; // function call
+    if (trimmedLine.startsWith("if ") || trimmedLine.startsWith("else if ") || trimmedLine.startsWith("else {")) {
+        const ifBlockText = await extractSpecificIfElseBlock(fileUri, lineNumber);
+        return ifBlockText;
     } else {
-        return { statementText: lineText, startLineNum: lineNumber, endLineNum: lineNumber };
+        if (trimmedLine.includes("=")) {
+            isFunction = 0; // assignment
+        } else if (trimmedLine.endsWith(",")) {
+            isFunction = 0; // destructuring assignment
+        } else if (trimmedLine.includes("function ")) {
+            isFunction = 1; // function definition
+        } else if (trimmedLine.includes("=>")) {
+            isFunction = 2; // arrow function
+        } else if (trimmedLine.includes("class")) {
+            isFunction = 4; // class
+        } else if (trimmedLine.includes("(")) {
+            isFunction = 3; // function call
+        } else {
+            return { statementText: lineText, startLineNum: lineNumber, endLineNum: lineNumber };
+        }
     }
 
     const completeLineNode = await findNode(fileUri, lineNumber, isFunction);
@@ -901,10 +905,6 @@ export async function analyze(
         return findIfElseDirectStatementsWithLines(fileUri, lineNumber, inputVariable, 0);
     }
 
-    if (!trimmedLine.endsWith(",") && !trimmedLine.endsWith(";")) {
-        return normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber);
-    }
-
     if (trimmedLine.includes("=")) {
         isFunction = 0; // assignment
     } else if (trimmedLine.endsWith(",")) {
@@ -1011,6 +1011,95 @@ async function findIfElseDirectStatementsWithLines(
     }
 
     return Promise.all(allResults).then(results => results.flat());
+}
+
+async function extractSpecificIfElseBlock(
+    fileUri: vscode.Uri,
+    lineNumber: number
+): Promise<{ fileUri: vscode.Uri; lineNumber: number; statementText: string; startLineNum: number; endLineNum: number }> {
+    const document = await vscode.workspace.openTextDocument(fileUri);
+    const fileContent = document.getText();
+    const sourceFile = ts.createSourceFile(
+        fileUri.toString(),
+        fileContent,
+        ts.ScriptTarget.ESNext,
+        true
+    );
+
+    function visit(node: ts.Node): ts.IfStatement | null {
+        if (ts.isIfStatement(node)) {
+            const startPos = node.getStart(sourceFile);
+            const startLine = document.positionAt(startPos).line;
+
+            if (startLine === lineNumber) {
+                return node;
+            }
+        }
+
+        for (const child of node.getChildren(sourceFile)) {
+            const result = visit(child);
+            if (result) {
+                return result;
+            }
+        }
+
+        return null;
+    }
+
+    const ifNode = visit(sourceFile);
+
+    function getBlockInfo(statement: ts.Statement | undefined): { statementText: string; startLineNum: number; endLineNum: number } {
+        if (!statement) {
+            return {
+                statementText: "",
+                startLineNum: lineNumber,
+                endLineNum: lineNumber
+            };
+        }
+
+        const startPos = statement.getStart(sourceFile);
+        const endPos = statement.getEnd();
+        const startLine = document.positionAt(startPos).line;
+        const endLine = document.positionAt(endPos).line;
+
+        return {
+            statementText: fileContent.substring(startPos, endPos).trim(),
+            startLineNum: startLine,
+            endLineNum: endLine
+        };
+    }
+
+    if (ifNode) {
+        // Check if the `if` statement itself starts at the given line number
+        if (document.positionAt(ifNode.getStart(sourceFile)).line === lineNumber) {
+            return { fileUri, lineNumber, ...getBlockInfo(ifNode.thenStatement) };
+        }
+
+        // Traverse `else if` and `else` branches
+        let elseBranch = ifNode.elseStatement;
+        while (elseBranch) {
+            const elseStartLine = document.positionAt(elseBranch.getStart(sourceFile)).line;
+
+            if (elseStartLine === lineNumber) {
+                return { fileUri, lineNumber, ...getBlockInfo(ts.isIfStatement(elseBranch) ? elseBranch.thenStatement : elseBranch) };
+            }
+
+            if (ts.isIfStatement(elseBranch)) {
+                elseBranch = elseBranch.elseStatement; // Move to the next else-if or else block
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Fallback: If no matching block is found, return the raw line
+    return {
+        fileUri,
+        lineNumber,
+        statementText: document.lineAt(lineNumber).text.trim(),
+        startLineNum: lineNumber,
+        endLineNum: lineNumber
+    };
 }
 
 export async function test() {

@@ -303,66 +303,6 @@ document.addEventListener("click", function (event) {
     }
 });
 
-document.addEventListener("mouseover", function (event) {
-    if (event.target.classList.contains("citation-ref")) {
-        const refId = parseInt(event.target.getAttribute("data-ref"), 10); // Get the snippetKey
-        const node = findNodeBySnippetKey(graphData, refId); // Find the node in graphData
-
-        if (!node) {
-            console.warn(`Node with snippetKey "${refId}" not found in graphData.`);
-            return;
-        }
-
-        // Extract file URI, line number, and code snippet
-        const { fileUri, lineNumber, codeSnippet } = node;
-
-        // Create tooltip element
-        const tooltip = document.createElement("div");
-        tooltip.classList.add("tooltip");
-
-        // Add a header with file and line information
-        const fileName = fileUri ? fileUri.split("/").pop() : "Unknown file";
-        const header = `<div class="tooltip-header">
-                            ${fileName}, line ${lineNumber + 1}:
-                        </div>`;
-
-        // Add the code content
-        const codeContent = `<div class="tooltip-content">${codeSnippet}</div>`;
-
-        // Combine header and code content
-        tooltip.innerHTML = header + codeContent;
-
-        // Style and append the tooltip
-        document.body.appendChild(tooltip);
-
-        // Calculate position
-        const rect = event.target.getBoundingClientRect();
-        const tooltipRect = tooltip.getBoundingClientRect();
-        const spaceAbove = rect.top;
-        const spaceBelow = window.innerHeight - rect.bottom;
-
-        if (spaceBelow >= tooltipRect.height || spaceBelow > spaceAbove) {
-            // Position below the citation-ref
-            tooltip.style.top = `${rect.bottom + window.scrollY + 5}px`;
-            tooltip.style.left = `${rect.left + window.scrollX}px`;
-        } else {
-            // Position above the citation-ref
-            tooltip.style.top = `${rect.top + window.scrollY - tooltipRect.height - 5}px`;
-            tooltip.style.left = `${rect.left + window.scrollX}px`;
-        }
-
-        // Show the tooltip
-        tooltip.style.position = "absolute";
-        tooltip.style.zIndex = "1000";
-
-        // Add event to remove tooltip on mouseout
-        event.target.addEventListener("mouseout", function hideTooltip() {
-            tooltip.remove();
-            event.target.removeEventListener("mouseout", hideTooltip);
-        });
-    }
-});
-
 function toggleHiddenStatement(element) {
     const hiddenStatement = element.nextElementSibling; // Find the next sibling <span>
     if (hiddenStatement) {
