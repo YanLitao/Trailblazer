@@ -83,10 +83,32 @@ export function getAccurateLineNumber(fullFile: string, fullStatement: string, v
     const statementLines = fullStatement.split('\n');
     const variableLine = statementLines.findIndex((line) => line.includes(variable));
     if (variableLine === -1) {
-        return fuzzyLineNum;
+        let lineNumberArr = [];
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes(variable)) {
+                lineNumberArr.push(i);
+            }
+        }
+
+        if (lineNumberArr.length === 0) {
+            console.error(`Variable "${variable}" not found in the full file.`);
+            return -1;
+        } else if (lineNumberArr.length === 1) {
+            return lineNumberArr[0];
+        } else {
+            let minDiff = Math.abs(lineNumberArr[0] - fuzzyLineNum);
+            let minDiffIndex = 0;
+            for (let i = 1; i < lineNumberArr.length; i++) {
+                const diff = Math.abs(lineNumberArr[i] - fuzzyLineNum);
+                if (diff < minDiff) {
+                    minDiff = diff;
+                    minDiffIndex = i;
+                }
+            }
+            return lineNumberArr[minDiffIndex];
+        }
     }
 
-    // we need to find the start line number of the fullStatement in the fullFile
     let startLineNum = 0;
     for (let i = 0; i < lines.length; i++) {
         if (lines[i].includes(statementLines[0])) {
@@ -94,7 +116,6 @@ export function getAccurateLineNumber(fullFile: string, fullStatement: string, v
             break;
         }
     }
-
     return startLineNum + variableLine;
 }
 
@@ -119,8 +140,20 @@ export function getLineNumber(codeSnippet: string, variableName: string, startLi
 export function searchVariableOffset(
     document: vscode.TextDocument,
     variableName: string,
-    lineNumber: number,
+    lineNumber: number
 ): number {
+    // Ensure document is valid
+    if (!document) {
+        console.error("Document is undefined or not initialized.");
+        return -1;
+    }
+
+    // Validate line number
+    if (!Number.isInteger(lineNumber) || lineNumber < 0 || lineNumber >= document.lineCount) {
+        console.error(`Invalid line number: ${lineNumber}. Document has ${document.lineCount} lines.`);
+        return -1;
+    }
+
     const lineText = document.lineAt(lineNumber).text;
 
     // Search for the variable name in the current line
@@ -925,7 +958,7 @@ export async function analyze(
     return results;
 }
 
-function normalProcess(
+export function normalProcess(
     line: string,
     inputVariable: string,
     fileUri: string,

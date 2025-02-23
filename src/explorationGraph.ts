@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getSurroundingCode } from './codeContextUtils';
+import { getSurroundingCode, normalProcess } from './codeContextUtils';
 // Node interface representing both invoking and result nodes
 export interface Node {
     id: string; // Unique ID: `${fileUri}:${lineNumber}:${variable}`
@@ -107,14 +107,17 @@ export class ExplorationGraph {
      * If the node already exists, updates its properties. Otherwise, adds a new node.
      */
     async upsertNode(fromId: string, toUri: string, toLineNumber: number, toVariable: string, tool: string) {
-        const variables = toVariable.split(".");
+        const toVariables = normalProcess(toVariable, "", toUri, toLineNumber);
+        const variables = toVariables.map((v) => v.variable);
         for (let i = 0; i < variables.length; i++) {
-            const newNodeId = `${toUri}:${toLineNumber}:${toVariable}`;
+            if (variables[i] === "this") {
+                continue;
+            }
+            const newNodeId = `${toUri}:${toLineNumber}:${variables[i]}`;
             const existingNode = this.nodes.get(newNodeId);
             if (existingNode) {
                 return;
             }
-
             const fileUri = vscode.Uri.parse(toUri);
             const document = await vscode.workspace.openTextDocument(fileUri);
             const lineText = document.lineAt(toLineNumber).text.trim();
@@ -125,7 +128,7 @@ export class ExplorationGraph {
                 id: newNodeId,
                 fileUri: toUri,
                 lineNumber: toLineNumber,
-                variable: toVariable,
+                variable: variables[i],
                 codeLine: lineText,
                 codeSnippet: contextText,
                 edges: new Set(),
@@ -182,13 +185,18 @@ export class ExplorationGraph {
         return this.nodes.get(nodeId);
     }
 
-    findNodeByLine(fileUri: string, lineNumber: number): string | null {
+    findNodeByLine(fileUri: string, lineNumber: number, returnAll: boolean = false): string[] {
+        let nodeIds: string[] = [];
         for (const node of this.nodes.values()) {
-            if (node.fileUri == fileUri && node.lineNumber == lineNumber) {
-                return node.id; // Return the first matching node
+            if (node.fileUri == fileUri && node.lineNumber == lineNumber && node.id !== this.fakeOriginId) {
+                if (returnAll) {
+                    nodeIds.push(node.id);
+                } else {
+                    return [node.id]; // Return the first matching node
+                }
             }
         }
-        return null;
+        return nodeIds;
     }
 
     /**

@@ -4,7 +4,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
 import { SidebarView } from './SideBarView';
-import { test, getLineText, getSurroundingCode, getLineNumber, getFileNameFromUri, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, processMarkdown, analyze, findCompleteStatementText } from './codeContextUtils';
+import { test, getLineText, getSurroundingCode, getLineNumber, normalProcess, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, processMarkdown, analyze, findCompleteStatementText } from './codeContextUtils';
 import { ExplorationGraph, Node, TreeNode } from './explorationGraph';
 
 // API key for OpenAI
@@ -21,7 +21,7 @@ let sidebarDisposable: vscode.Disposable | undefined;
 export function activate(context: vscode.ExtensionContext) {
     test();
 
-    // Initialize and register the SidebarView **once**
+    // Initialize and register the SidebarView once
     sidebarViewProvider = new SidebarView(context);
     sidebarDisposable = vscode.window.registerWebviewViewProvider(
         SidebarView.viewType,
@@ -164,24 +164,6 @@ const task3Schema = z.object({
     next_step_summary: z.string(),
 });
 
-const task4Schema = z.object({
-    evaluations: z.array(
-        z.object({
-            file_uri: z.string(),
-            line_number: z.number(),
-            valuable: z.boolean(),
-            next_step: z
-                .object({
-                    variable: z.string(),
-                    tool: z.union([z.literal(0), z.literal(1)]),
-                    reason: z.string(),
-                })
-                .nullable(),
-        }).strict()
-    ),
-    next_step_summary: z.string(),
-});
-
 const task5Schema = z.object({
     ranked_results: z.array(
         z.object({
@@ -208,17 +190,18 @@ const task6Schema = z.object({
 });
 
 const task7Schema = z.object({
-    final_decision_sufficient: z.boolean(),
     answer: z.object({
         Overview: z.string(), // High-level summary of the question and findings.
         Lifecycle: z.array(
             z.object({
                 insightName: z.string(), // Name of the lifecycle stage or behavior.
                 details: z.string(), // Explanation of the stage's role or function.
-                reference: z.string(),
+                reference: z.number(),
             })
         )
-    })
+    }),
+    final_decision_sufficient: z.boolean(),
+    new_exploration_questions: z.array(z.string()).optional()
 }).strict();
 
 class Agent {
@@ -267,7 +250,6 @@ class Agent {
         this._model = new ChatOpenAI({
             model: "gpt-4o",
             apiKey: API_KEY,
-            maxTokens: 16384,
             temperature: 0,
             topP: 0.1,
         });
@@ -275,15 +257,13 @@ class Agent {
         this._fasterModel = new ChatOpenAI({
             model: "gpt-4o-mini",
             apiKey: API_KEY,
-            maxTokens: 16384,
             temperature: 0,
             topP: 0.1,
         });
 
         this._reasoningModel = new ChatOpenAI({
-            model: "o1-mini",
+            model: "o3-mini",
             apiKey: API_KEY,
-            maxTokens: 128000,
             temperature: 0,
             topP: 0.1,
         });
@@ -439,7 +419,7 @@ class Agent {
             const endStep = new Date().getTime();
             console.log(`Step ${this._stepCounter} took ${endStep - startStep}ms`);
 
-            if (this._final_decision_sufficient && refinedOutput.sub_problems.length === 0) {
+            if (this._final_decision_sufficient || refinedOutput.sub_problems.length === 0) {
                 break;
             }
         }
@@ -569,7 +549,7 @@ class Agent {
 
         const response = await this._callAgentAPI(inputJson, 1, task1Schema);
         task1Output = JSON.parse(response);
-        this._refined_question += task1Output.refined_question;
+        this._refined_question = task1Output.refined_question;
 
         this._sidebarViewProvider.updateSearchingContent("Refined your question into: " + task1Output.refined_question);
 
@@ -681,17 +661,11 @@ class Agent {
                 continue;
             }
             // Perform the selected tool action (Go to Definition or Find References)
+            console.log(`Exploring "${variableName}" in ${fileUri.toString()} line ${lineNumber} with tool ${subProblem.tool}...`);
             const results = await this._runTool(fileUri, lineNumber, offset, subProblem);
 
             if (results.length === 0) {
-                console.warn(`No results were found for "${subProblem.code_context.invoke_variable}" near line ${subProblem.code_context.line_number}.`);
-                task2Results.push({
-                    sub_question: subProblem.sub_question,
-                    tool: subProblem.tool,
-                    code_context: subProblem.code_context,
-                    filtered_results: [],
-                    reason: "No results found"
-                });
+                console.warn(`No new results were found for "${subProblem.code_context.invoke_variable}" near line ${subProblem.code_context.line_number} with tool ${subProblem.tool}.`);
                 continue;
             }
 
@@ -912,7 +886,6 @@ class Agent {
             next_step_summary: agentOutput.next_step_summary,
             answer: ""
         };
-
         for (const item of agentOutput.evaluations) {
             if (item.valuable && item.next_step) {
                 const variables = item.next_step.variable.split(".");
@@ -962,74 +935,90 @@ class Agent {
     }
 
     async filterInput(exploredCode: any[]) {
-        let newVariables = [];
+        let newVariables: { file_uri: string, line_number: number, code_line: string, variables: string[] }[] = [];
         let variableCount = 0;
-        let nextExploreVariables = [];
+
+        // Use a Set to track unique variable entries in newVariables
+        let uniqueVariables = new Set<string>();
+        // Use a Map to track unique exploration requests based on (file_uri, variable, line_number, tool)
+        let uniqueExploreRequests = new Map<string, any>();
+
         for (const code of exploredCode) {
             for (const variable of code.variables) {
-                if (code.code_snippet == "") {
+                if (code.code_snippet === "") {
                     console.error("Code snippet is empty for variable: ", code);
                 }
+
                 const accurateLineNumber = getLineNumber(code.code_snippet, variable, code.start_line);
+                const lineNumber = accurateLineNumber ?? code.start_line;
+
                 const existingVariables = this._exploredVariables.filter(
-                    v => v.invoke_variable === variable && v.line_number === accurateLineNumber && v.file_uri === code.file_uri
+                    v => v.invoke_variable === variable &&
+                        v.line_number === lineNumber &&
+                        v.file_uri === code.file_uri
                 );
-                const lineText = await getLineText(vscode.Uri.parse(code.file_uri), accurateLineNumber ?? code.start_line);
-                let toolsUsed: number[] = [];
-                if (existingVariables) {
-                    // Determine which tools have been used
-                    const toolsUsed = new Set(existingVariables.map(v => v.tool));
 
-                    // If both tools have been used, skip this variable
-                    if (toolsUsed.has(0) && toolsUsed.has(1)) {
-                        continue;
+                // Track tools already used for this variable
+                let toolsUsed = new Set(existingVariables.map(v => v.tool));
+
+                const createExploreRequest = (tool: number, reason: string) => {
+                    const nodeId = `${code.file_uri}:${lineNumber}:${variable}`;
+                    const exploreKey = `${nodeId}:${tool}`;
+                    let node = this._explorationGraph.getNode(nodeId);
+                    if (!uniqueExploreRequests.has(exploreKey) && node) {
+                        uniqueExploreRequests.set(exploreKey, {
+                            sub_question: "",
+                            tool: tool,
+                            code_context: {
+                                file_uri: code.file_uri,
+                                invoke_variable: variable,
+                                code_line: code.code_snippet,
+                                line_number: lineNumber,
+                                full_statement: code.code_snippet
+                            },
+                            reason: reason
+                        });
                     }
-                }
+                };
 
-                // If only one tool has been used, return the other tool
-                if (!toolsUsed.includes(1)) {
-                    nextExploreVariables.push({
-                        sub_question: "",
-                        tool: 1, // Use Find References
-                        code_context: {
-                            file_uri: code.file_uri,
-                            invoke_variable: variable,
-                            code_line: code.code_snippet,
-                            line_number: accurateLineNumber ?? code.start_line,
-                            full_statement: code.code_snippet
-                        },
-                        reason: "Explore the last reached variables in the code line using Find References"
-                    });
+                if (!toolsUsed.has(1)) {
+                    createExploreRequest(1, "Explore the last reached variables in the code line using Find References");
                 }
-                if (!toolsUsed.includes(0)) {
-                    nextExploreVariables.push({
-                        sub_question: "",
-                        tool: 0, // Use Go to Definition
-                        code_context: {
-                            file_uri: code.file_uri,
-                            invoke_variable: variable,
-                            code_line: code.code_snippet,
-                            line_number: accurateLineNumber ?? code.start_line,
-                            full_statement: code.code_snippet
-                        },
-                        reason: "Explore the last reached variables in the code line using Go to Definition"
-                    });
+                if (!toolsUsed.has(0)) {
+                    createExploreRequest(0, "Explore the last reached variables in the code line using Go to Definition");
                 }
-
-                variableCount++;
-                newVariables.push({
-                    file_uri: code.file_uri,
-                    line_number: accurateLineNumber ?? code.start_line,
-                    code_line: lineText,
-                    variable: variable
-                });
             }
+
+            code.code_snippet.split("\n").forEach(async (line: string, index: number) => {
+                const lineNumber = code.start_line + index;
+                const lineText = line.trim();
+                const nodeIds = this._explorationGraph.findNodeByLine(code.file_uri, lineNumber, true);
+                const lineVariables = nodeIds.map((nodeId: string) => {
+                    const parts = nodeId.split(":");
+                    return parts[parts.length - 1];
+                });
+                const variableKey = `${code.file_uri}:${lineNumber}`;
+                if (lineVariables && !uniqueVariables.has(variableKey)) {
+                    uniqueVariables.add(variableKey);
+                    variableCount++;
+                    newVariables.push({
+                        file_uri: code.file_uri,
+                        line_number: lineNumber,
+                        code_line: lineText,
+                        variables: lineVariables
+                    });
+                }
+            });
         }
 
-        return { newVariables, variableCount, nextExploreVariables };
+        return {
+            newVariables,
+            variableCount,
+            nextExploreVariables: Array.from(uniqueExploreRequests.values())
+        };
     }
 
-    async runTask3() {
+    async runTask3(task4Flag: boolean = false) {
         console.warn("Running Task 3, processing ", this._newExploredCodeLines.length, " new code lines.");
         this._sidebarViewProvider.updateSearchingContent(`Deciding next exploration variables from ${this._newExploredCodeLines.length} new code lines...`);
         let task3Output: {
@@ -1053,12 +1042,16 @@ class Agent {
             answer: ""
         };
 
-        const { newVariables, variableCount, nextExploreVariables } = await this.filterInput(this._newExploredCodeLines);
+        let exploredCodeLines = this._newExploredCodeLines;
+        if (task4Flag) {
+            exploredCodeLines = this._exploredCodeLines;
+        }
+        const { newVariables, variableCount, nextExploreVariables } = await this.filterInput(exploredCodeLines);
 
         // If there are no new code lines to explore, directly run Task 4
         if (variableCount === 0) {
             console.warn("No new code lines to explore. Running Task 4.");
-            const task4Output = await this.runTask4() as {
+            const task4Output = await this.runTask3(true) as {
                 sub_problems: {
                     sub_question: string;
                     tool: number;
@@ -1078,9 +1071,10 @@ class Agent {
             task3Output = task4Output;
         } else {
             if (variableCount <= this._numberOfVariablesThreshold) {
+                console.warn("Number of variables is below threshold. Add all of them into the next step.");
                 task3Output.sub_problems = nextExploreVariables;
-
             } else {
+                console.warn("Number of variables is above threshold. Splitting into batches and running Task 3.");
                 const batchSize = this._batchSize;
                 const batches = [];
 
@@ -1096,6 +1090,7 @@ class Agent {
                         refined_question: this._refined_question ?? "",
                         variables_wait_for_exploring: batch
                     };
+                    console.log("Task 3 input: ", inputJson.variables_wait_for_exploring);
                     const response = await this._callAgentAPI(inputJson, 3, task3Schema);
                     return JSON.parse(response);
                 };
@@ -1130,7 +1125,7 @@ class Agent {
             // If Task 3 output is insufficient, run Task 4
             if (task3Output.sub_problems.length === 0) {
                 console.warn("Task 3 output insufficient. Running Task 4.");
-                const task4Output = await this.runTask4() as {
+                const task4Output = await this.runTask3(true) as {
                     sub_problems: {
                         sub_question: string;
                         tool: number;
@@ -1154,94 +1149,6 @@ class Agent {
         // log the task3Output
         console.log("Task 3 output: ", task3Output);
         return task3Output;
-    }
-
-    async runTask4() {
-        // check each variable in this._exploredCodeLines whether it has been explored in this._exploredVariables
-        let task4Output: {
-            sub_problems: {
-                sub_question: string;
-                tool: number;
-                code_context: {
-                    file_uri: string;
-                    invoke_variable: string;
-                    code_line: string;
-                    line_number: number;
-                    full_statement: string;
-                };
-                reason: string;
-            }[];
-            next_step_summary: string;
-            answer: string;
-        } = {
-            sub_problems: [],
-            next_step_summary: "",
-            answer: ""
-        };
-        const filterResult = await this.filterInput(this._exploredCodeLines);
-        let { newVariables, variableCount, nextExploreVariables } = filterResult;
-
-
-        if (variableCount > 0 && variableCount <= this._numberOfVariablesThreshold) {
-            task4Output.sub_problems = nextExploreVariables;
-        } else {
-            console.warn("Running task 4, evaluating ", variableCount, " variables.");
-            this._sidebarViewProvider.updateSearchingContent(`Deciding next exploration variables from ${variableCount} variables ...`);
-
-            const batchSize = this._batchSize;
-            const batches = [];
-
-            // Split newVariables into chunks of batchSize
-            for (let i = 0; i < newVariables.length; i += batchSize) {
-                batches.push(newVariables.slice(i, i + batchSize));
-            }
-
-            // Function to process each batch
-            const processBatch = async (batch: any[]) => {
-                const inputJson = {
-                    task: 4,
-                    refined_question: this._refined_question ?? "",
-                    variables_wait_for_exploring: batch,
-                };
-
-                try {
-                    const response = await this._callAgentAPI(inputJson, 4, task4Schema);
-                    return JSON.parse(response);
-                } catch (e) {
-                    console.error("Failed to parse JSON response for task 4:", e);
-                    return { evaluations: [], next_step_summary: "" };
-                }
-            };
-
-            // Dispatch API calls concurrently
-            const responses = await Promise.all(batches.map(processBatch));
-
-            // Merge results
-            let combinedEvaluations: any[] = [];
-            let nextStepSummaries: string[] = [];
-
-            for (const res of responses) {
-                if (res.evaluations) combinedEvaluations.push(...res.evaluations);
-                if (res.next_step_summary) nextStepSummaries.push(res.next_step_summary);
-            }
-
-            // Keep only the first 3 summaries and collapse the rest
-            let summarizedNextStep = nextStepSummaries.slice(0, 3).join("\n");
-            if (nextStepSummaries.length > 3) {
-                summarizedNextStep += "...";
-            }
-
-            // Store final output
-            const mergedOutput = {
-                evaluations: combinedEvaluations,
-                next_step_summary: summarizedNextStep
-            };
-
-            task4Output = await this.processTask3andTask4Output(mergedOutput);
-        }
-        this._sidebarViewProvider.updateSearchingContent(`Added ${task4Output.sub_problems.length} variables to explore next.`);
-        console.log("Task 4 output: ", task4Output);
-        return task4Output;
     }
 
     async runTask5(task2Results: Array<{ file_uri: string; line_number: number; code_line: string; full_statement: string; variables: Set<string> }>) {
@@ -1273,12 +1180,11 @@ class Agent {
                     line_number: result.line_number,
                     code_line: result.code_line,
                     full_statement: result.full_statement,
-                    variables: Array.from(result.variables),
-                    explanation: "",
-                    relevance_score: 0,
-                    findings: ""
+                    variables: Array.from(result.variables)
                 }))
             };
+
+            console.log("Task 5 input: ", inputJson.results);
 
             try {
                 const response = await this._callAgentAPI(inputJson, 5, task5Schema);
@@ -1324,18 +1230,11 @@ class Agent {
             if (result.relevance_score <= 0) {
                 return;
             }
-            // Define the path key and node ID
-            const pathId = `${result.file_uri}:${result.line_number}`;
 
             // Check if the snippet already exists
             const existingEntry = Array.from(this._importantCodeSnippets.entries()).find(
                 ([, value]) => value.file_uri === result.file_uri && value.line_number === result.line_number
             );
-
-            /* // Check if the snippet already in this._exploredCodeLines
-            const matchedCode = this._exploredCodeLines.find(
-                code => code.file_uri === result.file_uri && (code.start_line <= result.line_number && code.end_line >= result.line_number)
-            ); */
 
             let snippetKey: number;
 
@@ -1362,12 +1261,12 @@ class Agent {
             }
 
             const nodeId = this._explorationGraph.findNodeByLine(result.file_uri, result.line_number);
-            if (nodeId === null) {
-                console.error(`Node ID not found for line ${result.line_number} in ${result.file_uri}`);
+            if (nodeId.length === 0) {
+                console.warn(`Node ID not found for line ${result.line_number} in ${result.file_uri}`);
                 return {};
             } else {
                 nodeIds[snippetKey] = {
-                    nodeID: nodeId,
+                    nodeID: nodeId[0],
                     statement: result.finding ?? result.explanation
                 };
             }
@@ -1460,65 +1359,6 @@ class Agent {
         return updatedFindings;
     };
 
-    async runTask6(): Promise<string> {
-        console.warn("Running Task 6, processing ", this._findingsSummary.length, " findings.");
-        this._sidebarViewProvider.updateSearchingContent(`Summarizing ${this._findingsSummary.length} findings...`);
-        if (this._findingsSummary.length === 0 || !this._updateFindings) {
-            return "";
-        }
-
-        let findingAndCode: { snippetKey: number[], statement: string, outOfDate: boolean, codeSnippet: { snippetKey: number, codeLine: string }[] }[] = [];
-        this._findingsSummary.forEach(finding => {
-            findingAndCode.push({
-                snippetKey: finding.snippetKey,
-                statement: finding.statement,
-                outOfDate: finding.outOfDate,
-                codeSnippet: finding.snippetKey.map(key => {
-                    const entry = this._importantCodeSnippets.get(key);
-                    return { snippetKey: key, codeLine: entry?.code_line ?? "" };
-                })
-            });
-        });
-
-
-        const inputJson = {
-            task: 6,
-            refined_question: this._refined_question ?? "",
-            findings: findingAndCode
-        };
-
-        const response = await this._callAgentAPI(inputJson, 6, task6Schema);
-        const task6Output = JSON.parse(response);
-
-        if (!task6Output || !task6Output.filtered_findings) {
-            console.error("Invalid output from task 6.");
-            return "";
-        }
-
-        // Update the findings summary
-        const updatedFindings = this.updateFindingsSummary(task6Output.filtered_findings);
-
-        // Generate the HTML for the findings
-        let concatenatedHtml = "Findings: <ul>";
-
-        updatedFindings.forEach(finding => {
-            const snippetKeys = `[${finding.snippetKey.map((key: number) => `<span class="citation-ref" data-ref="${key}">${key}</span>`).join(", ")}]`;
-            let parsedStatement = processMarkdown(finding.statement);
-            const statementHtml = finding.outOfDate
-                ? `<span class="additional-finding" onclick="toggleHiddenStatement(this)">[1 additional finding]</span>
-                   <span class="hidden-statement" style="display: none;">${parsedStatement}${snippetKeys}</span>`
-                : `${parsedStatement}${snippetKeys}`;
-
-            concatenatedHtml += `
-                <li class="${finding.isUpdated ? "highlight-new finding-summary" : "finding-summary"}">
-                    ${statementHtml}
-                </li>
-            `;
-        });
-
-        return concatenatedHtml + "</ul>";
-    }
-
     private findSnippetBySnippetKey(snippetKey: number): { fileUri: string; lineNumber: number } | null {
         // Recursive function to search the tree
         const traverseTree = (node: TreeNode): { fileUri: string; lineNumber: number } | null => {
@@ -1553,27 +1393,23 @@ class Agent {
         };
 
         // Process each insight in the "Lifecycle" section
-        const processLifecycle = (lifecycle: Array<{ insightName: string; details: string; reference: string }>): string => {
+        const processLifecycle = (lifecycle: Array<{ insightName: string; details: string; reference: number }>): string => {
             return lifecycle
                 .map((insight) => {
                     insight.details = processMarkdown(insight.details);
 
                     // Extract snippetKey from reference
-                    const snippetKeyMatch = insight.reference.match(/snippetKey:\s*(-?\d+)/);
-                    let snippetKey = snippetKeyMatch ? parseInt(snippetKeyMatch[1], 10) : parseInt(insight.reference, 10);
-
-                    // Find snippet data using the recursive traversal function
-                    const snippetData = snippetKey !== null ? this.findSnippetBySnippetKey(snippetKey) : null;
+                    const snippetData = insight.reference !== null ? this.findSnippetBySnippetKey(insight.reference) : null;
 
                     // Add data attributes for fileUri and lineNumber
                     return `
                         <div class="insight" 
                             data-file-uri="${snippetData?.fileUri || ''}" 
                             data-line-number="${snippetData?.lineNumber || ''}" 
-                            data-ref="${snippetKey}">
+                            data-ref="${insight.reference}">
                             <h3>${insight.insightName}</h3>
                             <p>${insight.details}
-                                [<span class="citation-ref" data-ref="${snippetKey}">See how we found this</span>]
+                                [<span class="citation-ref" data-ref="${insight.reference}">See how we found this</span>]
                             </p>
                         </div>`;
                 })
@@ -1614,6 +1450,7 @@ class Agent {
         this._sidebarViewProvider.updateSearchingContent(`Deciding whether the exploration is sufficient based on a tree with ${this._explorationGraph.getNumberOfNodesInTree()}...`);
         const inputJson = {
             task: 7,
+            user_question: this._question,
             refined_question: this._refined_question ?? this._question,
             data_flow_tree: this._tree
         };
@@ -1621,6 +1458,13 @@ class Agent {
         const response = await this._callAgentAPI(inputJson, 7, task7Schema);
         const task7Output = JSON.parse(response);
 
+        // update refined question if new_exploration_questions is not empty
+        if (task7Output.new_exploration_questions.length > 0) {
+            this._refined_question = "";
+            for (const question of task7Output.new_exploration_questions) {
+                this._refined_question += " " + question;
+            }
+        }
         this._final_decision_sufficient = task7Output.final_decision_sufficient;
         this._sidebarViewProvider.updateSearchingContent(`Exploration is ${this._final_decision_sufficient ? "sufficient" : "insufficient"}.`);
         return this.processFinalAnswer(task7Output);
@@ -1662,53 +1506,19 @@ class Agent {
 
                     1. Input Evaluation:
                     - You are given a refined question and a list of variables_wait_for_exploring.
-                    - Assess what variables in variables_wait_for_exploring are worth exploring next.
-
-                    2. Output Requirements:
-                    - Provide evaluations for each explored line:
-                        - For each line, specify if it is valuable for further exploration. 
-                        - Some lines may not be valuable for further exploration immediately but could be valuable later. So, try to mark all potentially valuable lines.
-                        - If valuable, specify at least one variables from the variables array in the input variables_wait_for_exploring, the exploration tool, and a reason.
-                        - Ensure at least one line is marked as valuable to explore next.
-                        - Summarize the proposed next steps in "next_step_summary".
-
-                    3. Line-by-Line Evaluation:
-                    - For each variable in variables_wait_for_exploring:
-                        - Specify whether the line is valuable for further exploration.
-                        - If valuable:
-                        - Identify the variable to explore next.
-                        - Select the appropriate tool:
-                            - 0: Go to Definition
-                            - 1: Find References
-                        - Provide a reason for choosing the variable and tool.
-                `;
-                break;
-            case 4:
-                taskInstructions = taskInstructions = `
-                    task 4: Evaluate the variables_wait_for_exploring based on the refined question and determine the next steps for further exploration.
-    
-                    Instructions:
-    
-                    1. Input Evaluation:
-                    - You are given a refined question and a list of variables wait for exploring.
+                    - For each item in variables_wait_for_exploring contains a code_line and an array of unexplored variables. 
                     - Assess what variables are worth exploring next.
-    
+
                     2. Output Requirements:
-                    - Provide evaluations for each explored line:
-                        - For each line, specify if it is valuable for further exploration.
-                        - If valuable, specify at least one variables, the exploration tool, and a reason.
-                        - Ensure at least one line is marked as valuable to explore next.
-                        - Summarize the proposed next steps in "next_step_summary".
-    
-                    3. Line-by-Line Evaluation:
-                    - For each variable in variables_wait_for_exploring:
-                        - Specify whether the line is valuable for further exploration.
-                        - If valuable:
-                        - Identify the variable to explore next.
+                    - Some code_lines may not be valuable for further exploration immediately but could be valuable later. So, try to mark all potentially valuable lines.
+                    - If valuable, identify the valuable variable to explore next from variables array.
                         - Select the appropriate tool:
                             - 0: Go to Definition
                             - 1: Find References
                         - Provide a reason for choosing the variable and tool.
+                    - If a line has more than one valuable variables, add multiple entries for that line.
+                    - Do not include any other variables not from the variables array, even they are in the code_line.
+                    - Only output if it is valuable for further exploration. 
                 `;
                 break;
             case 5:
@@ -1717,7 +1527,7 @@ class Agent {
 
                     Assign a "relevance_score" of 0 or 1 to each result, where:
                     - 0: Not relevant - The result is not useful or does not contribute to the understanding of the refined question. Exclude this result.
-                    - 1: Worth showing - The result contains valuable findings that provide meaningful insights for the programmer to understand the important aspects of the exploration.
+                    - 1: Worth showing - The result's code_line can directly or partially answer the question. Or it contains valuable findings that provide meaningful insights for the programmer to understand the important aspects of the exploration.
 
                     For each result in the "results" array:
                     - Provide an "explanation" of why it is helpful or how it contributes to understanding the question.
@@ -1728,7 +1538,7 @@ class Agent {
                         Important: The variable must be selected only from the "variables" array provided in the result. Do not use or infer any other variables.
 
                     Important:
-                    - Do not modify the values of "file_uri", "code_line", "line_number", "full_statement", or "variables" for each result.
+                    - Do not modify the values of "file_uri", "code_line", "line_number", "full_statement", or "variables" for each exploration result in the input.
                 `;
                 break;
             case 6:
@@ -1767,30 +1577,77 @@ class Agent {
                 taskInstructions = `
                 Task 7: Decide Sufficiency and Generate Answer
 
-                Objective:
-                1. Assess if the current findings and code exploration sufficiently answer the refined question.
-                2. Generate a structured, evidence-based answer that includes key insights for developers.
+                Goals:
+                1. Firstly, assess if the current findings and code exploration sufficiently answer the refined question.
+                2. Then, generate a structured, evidence-based answer that includes key insights for developers.
+                3. Finally, suggest New Questions if final_decision_sufficient is false.
 
                 Input:
-                1. refined_question
-                2. data_flow_tree: A structured tree containing findings and associated code snippets.
-
-                TreeNode = {
-                    id: string;
-                    snippetKey: number;
-                    fileUri: string;
-                    lineNumber: number;
-                    variable: string;
-                    codeLine: string;
-                    codeSnippet: string; 
-                    isIntermediate: boolean;
-                    statement: string; 
-                    children: TreeNode[]; 
-                };
+                1. user_question: The original user question.
+                2. refined_question
+                3. data_flow_tree: A structured tree containing findings and associated code snippets.
 
                 Instructions:
 
-                1. Decide final_decision_sufficient:
+                1. Generate Answer:
+                Provide a structured, detailed answer object, whether or not findings are sufficient. The structure should include:
+                - Overview: A concise summary of the code element's purpose and relevance to the question.
+                - Key Insights: An array of objects representing crucial execution steps, dependencies, or structural behaviors:
+                   - insightName: Name of the key insight (e.g., "Initialization," "Data Flow," "Parameter Influence").
+                   - details: A short explanation of the insight.
+                   - reference: A single snippetKey reference ([snippetKey: number]) that supports the explanation. 
+                
+                2. Guidelines for Generating Good "Key Insights":
+                - Each claim in the Overview should have a corresponding key insight to support it.
+                - Key insights should directly answer to the question. Make sure all question-relevant nodes from the tree are covered. 
+                - Other important insights should capture important aspects of how the code works.
+                - Other insights can focus on execution flow, control flow, data flow, structural relationships, or logical steps.
+                - Name the insight concisely while making it clear what aspect of the code it describes.
+                - Each insight should be specific, meaningful, and useful for understanding the question.
+
+                Common Types of Key Insights Based on Code Elements:
+                - Functions (What does this function do?)
+                   - "Input Handling" - How the function processes incoming parameters.
+                   - "Computation Logic" - How the function transforms data.
+                   - "State Update" - If the function modifies state variables.
+                   - "Output Generation" - What the function returns.
+                   - "Error Handling" - How errors are caught or managed.
+                   - "Side Effects" - Any changes outside the function (e.g., modifying global state).
+
+                - Variables (How is this variable used?)
+                   - "Initialization" - Where and how the variable is first assigned.
+                   - "Modification" - What parts of the code change its value.
+                   - "Usage" - Where and how it is referenced in computations or logic.
+                   - "Scope and Lifetime" - How long the variable exists in the program.
+                   - "Dependencies" - Other variables/functions that affect its value.
+
+                - Parameters (Why is this parameter needed?)
+                   - "Influence on Execution" - How the parameter affects function behavior.
+                   - "Default Behavior" - What happens if the parameter is missing.
+                   - "Conditional Logic" - Where the parameter influences branches (if/switch).
+                   - "Dependency Injection" - If the parameter provides external dependencies.
+
+                - Objects and Classes (What does this class or object do?)
+                   - "Initialization" - How the object is created.
+                   - "Properties and Methods" - Key attributes and their behaviors.
+                   - "Interactions" - What other components this interacts with.
+                   - "State Management" - How internal state is handled.
+
+                - Configuration Settings (How does this setting affect behavior?)
+                   - "Impact on Execution" - What this setting changes in the program.
+                   - "Default and Custom Values" - What happens if it is set or left blank.
+                   - "Dependency on Other Configurations" - If it interacts with other settings.
+                   - "Performance Impact" - Whether this setting affects performance.
+                   - "Security Considerations" - If the setting has security implications.
+
+                Reference Guidelines:
+                - Each insight should have a single number for referring to a code snippet reference (the number is from snippetKey: number in the tree). 
+                - Not two insights should reference the same snippetKey.
+                - Do not reference snippetKey: -1, as it represents the root node.
+                - Use bold formatting (**importantMethod**) for function names and variables.
+                - Use inline code formatting (\`someVariable\`) for small code snippets.
+
+                3. Decide final_decision_sufficient:
                 Evaluate if the current findings and data flow tree are fully sufficient to answer the refined question. Consider the following factors strictly:
 
                 (A) Concrete Code Evidence: 
@@ -1811,64 +1668,18 @@ class Agent {
                 - If an important part is missing (e.g., where exactly a property is modified), the answer is insufficient.
 
                 Decision Rules:
-                - final_decision_sufficient: true → Only if the data flow tree contains concrete, traceable evidence covering all aspects above.
-                - final_decision_sufficient: false → If any crucial evidence is missing, specify:
+                - final_decision_sufficient = true: Only if the data flow tree contains concrete, traceable evidence covering all aspects above.
+                - final_decision_sufficient = false: If any crucial evidence is missing, specify:
                 - Missing areas (e.g., unexamined dependencies, unexplored control flows, or unclear logic).
                 - Additional steps required (e.g., tracking function calls, variable changes, external dependencies).
 
-                2. Generate Answer:
-                Provide a structured, detailed answer object, whether or not findings are sufficient. The structure should include:
-                - Overview: A concise summary of the code element's purpose and relevance to the question.
-                - Key Insights: An array of objects representing crucial execution steps, dependencies, or structural behaviors:
-                   - insightName: Name of the key insight (e.g., "Initialization," "Data Flow," "Parameter Influence").
-                   - details: A short explanation of the insight.
-                   - reference: A single snippetKey reference ([snippetKey: number]) that supports the explanation. Do not reference snippetKey: -1, as it represents the root node.
-                
-                Guidelines for Generating Good "Key Insights":
-                - Each insight should capture an important aspect of how the code works.
-                - Focus on execution flow, structural relationships, or logical steps.
-                - Name the insight concisely while making it clear what aspect of the code it describes.
-                - Each insight should be specific, meaningful, and useful for understanding the question.
+                4. Suggest New Questions if final_decision_sufficient = false
+                If the findings are not sufficient, generate new exploration questions based on the missing areas.
 
-                Common Types of Key Insights Based on Code Elements:
-                1. Functions (What does this function do?)
-                   - "Input Handling" - How the function processes incoming parameters.
-                   - "Computation Logic" - How the function transforms data.
-                   - "State Update" - If the function modifies state variables.
-                   - "Output Generation" - What the function returns.
-                   - "Error Handling" - How errors are caught or managed.
-                   - "Side Effects" - Any changes outside the function (e.g., modifying global state).
-
-                2. Variables (How is this variable used?)
-                   - "Initialization" - Where and how the variable is first assigned.
-                   - "Modification" - What parts of the code change its value.
-                   - "Usage" - Where and how it is referenced in computations or logic.
-                   - "Scope and Lifetime" - How long the variable exists in the program.
-                   - "Dependencies" - Other variables/functions that affect its value.
-
-                3. Parameters (Why is this parameter needed?)
-                   - "Influence on Execution" - How the parameter affects function behavior.
-                   - "Default Behavior" - What happens if the parameter is missing.
-                   - "Conditional Logic" - Where the parameter influences branches (if/switch).
-                   - "Dependency Injection" - If the parameter provides external dependencies.
-
-                4. Objects and Classes (What does this class or object do?)
-                   - "Initialization" - How the object is created.
-                   - "Properties and Methods" - Key attributes and their behaviors.
-                   - "Interactions" - What other components this interacts with.
-                   - "State Management" - How internal state is handled.
-
-                5. Configuration Settings (How does this setting affect behavior?)
-                   - "Impact on Execution" - What this setting changes in the program.
-                   - "Default and Custom Values" - What happens if it is set or left blank.
-                   - "Dependency on Other Configurations" - If it interacts with other settings.
-                   - "Performance Impact" - Whether this setting affects performance.
-                   - "Security Considerations" - If the setting has security implications.
-
-                Reference Guidelines:
-                - Each insight should have a single code snippet reference ([snippetKey: number]).
-                - Use bold formatting (**importantMethod**) for function names and variables.
-                - Use inline code formatting (\`someVariable\`) for small code snippets.
+                Guidelines for New Questions:
+                - Target the gaps in the current exploration tree.
+                - Be specific about what needs to be investigated.
+                - Encourage deeper exploration (e.g., function calls, missing conditions, related variables).
                 `;
                 break;
             default:
@@ -1903,12 +1714,12 @@ class Agent {
             // Time the agent's response
             const start = new Date().getTime();
             let model;
-            if (taskNumber === 3 || taskNumber === 4 || taskNumber === 6 || taskNumber === 7) {
-                model = this._model;
+            if (taskNumber === 3 || taskNumber === 5) {
+                model = this._fasterModel;
             } /* else if (taskNumber === 7) {
                 model = this._reasoningModel; // need tier 5 users
             } */ else {
-                model = this._fasterModel;
+                model = this._model;
             }
 
             const completion = await this._openai.beta.chat.completions.parse({

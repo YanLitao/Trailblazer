@@ -502,6 +502,7 @@ code {
     margin: 0;
     padding: 0;
     font-size: 0.9em;
+    font-weight: 300;
     text-shadow: none;
     background-color: rgb(0, 0, 0, 0);
     color: black;
