@@ -170,21 +170,10 @@ const task5Schema = z.object({
             file_uri: z.string(),
             code_line: z.string(),
             line_number: z.number(),
-            full_statement: z.string(),
             explanation: z.string(),
             relevance_score: z.number(),
             finding: z.string(),
             variable: z.string(),
-        }).strict()
-    ),
-});
-
-const task6Schema = z.object({
-    filtered_findings: z.array(
-        z.object({
-            snippetKey: z.array(z.number()),
-            statement: z.string(),
-            outOfDate: z.boolean(),
         }).strict()
     ),
 });
@@ -223,8 +212,9 @@ class Agent {
     private _explorationGraph: ExplorationGraph;
     private isPaused: boolean = false;     // Track if the agent is paused
     private isStopped: boolean = false;    // Track if the agent is stopped
-    private _importantCodeSnippets = new Map<number, { file_uri: string; code_line: string; line_number: number; full_statement: string; explanation: string; relevance_score: number }>();
+    private _importantCodeSnippets = new Map<number, { file_uri: string; code_line: string; line_number: number; explanation: string; relevance_score: number }>();
     private _fileExtensionsToExclude = ['.test.ts', '.spec.ts', '.test.tsx', '.spec.tsx', '.test.js', '.spec.js', '.test.jsx', '.spec.jsx', '.d.ts'];
+    private _primaryFolder: string = "";
     private _previousParsedNodes: { [key: number]: { nodeID: string; statement: string } } = {};
     private _tree: TreeNode = {
         id: "root",
@@ -248,7 +238,7 @@ class Agent {
     constructor(sidebarViewProvider: SidebarView) {
 
         this._model = new ChatOpenAI({
-            model: "gpt-4o",
+            model: "gpt-4o-mini",
             apiKey: API_KEY,
             temperature: 0,
             topP: 0.1,
@@ -369,7 +359,9 @@ class Agent {
         this._question = question;
         const MAX_STEPS = 10;
         let refinedOutput;
-
+        const pathParts = uri.fsPath.split("/");
+        this._primaryFolder = pathParts.slice(0, -1).join("/");
+        console.log("Primary folder: ", this._primaryFolder);
         // Fetch the file content and add it to _exploredFiles if not already present
         const document = await vscode.workspace.openTextDocument(uri);
         const fileUriString = uri.toString();
@@ -461,10 +453,10 @@ class Agent {
         let sentenceStartLineNum = startLine;
         // Split the surrounding code into lines
         const codeSentences = surroundingCode.split("\n");
-        codeSentences.forEach(async (sentence, index) => {
+        for (const [index, sentence] of codeSentences.entries()) {
             const extractedVariables = await analyze(uri, sentenceStartLineNum + index);
             const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, sentenceStartLineNum + index);
-            const codeLines = sentence;
+            const codeLines = sentence.trim();
             const variables = extractedVariables.map((variableInfo: any) => variableInfo.variable);
 
             extractedVariables.forEach(async (variableInfo: any) => {
@@ -530,7 +522,7 @@ class Agent {
             this._addOrUpdateExploredCodeLines(fileUriString, startLineNum, endLineNum, statementText, variables);
             //sentenceStartLineNum += codeLines.length;
             totalVariables += extractedVariables.length;
-        });
+        };
 
         let task1Output: any = {
             refined_question: this._question,
@@ -689,7 +681,9 @@ class Agent {
             results.forEach(result => {
                 const existingLine = newExploredLines.find(line => line.file_uri === result.file_uri && line.line_number === result.line_number);
                 if (existingLine) {
-                    existingLine.variables.add(result.variable);
+                    if (!existingLine.variables.has(result.variable)) {
+                        existingLine.variables.add(result.variable);
+                    }
                 } else {
                     newExploredLines.push({
                         file_uri: result.file_uri,
@@ -799,7 +793,9 @@ class Agent {
 
             const uri = location instanceof vscode.Location ? location.uri : location.targetUri;
             const fileUri = uri.toString();
-            if (this._fileExtensionsToExclude.some(ext => fileUri.includes(ext))) {
+            const pathParts = fileUri.split("/");
+            let includedFolder = pathParts.slice(0, -1).join("/");
+            if (this._fileExtensionsToExclude.some(ext => fileUri.includes(ext)) && this._primaryFolder.includes(includedFolder)) {
                 continue;
             }
 
@@ -1179,7 +1175,6 @@ class Agent {
                     file_uri: result.file_uri,
                     line_number: result.line_number,
                     code_line: result.code_line,
-                    full_statement: result.full_statement,
                     variables: Array.from(result.variables)
                 }))
             };
@@ -1221,7 +1216,6 @@ class Agent {
             file_uri: string;
             line_number: number;
             code_line: string;
-            full_statement: string;
             variable: string;
             explanation: string;
             relevance_score: number;
@@ -1244,7 +1238,6 @@ class Agent {
                     file_uri: result.file_uri,
                     code_line: result.code_line,
                     line_number: result.line_number,
-                    full_statement: result.full_statement,
                     explanation: result.explanation,
                     relevance_score: result.relevance_score
                 });
@@ -1288,7 +1281,7 @@ class Agent {
             // Update the tree and visualization
             if (newTree.children.length > 0) {
                 this._tree = newTree;
-                this._sidebarViewProvider.updateGraphVisualization(this._tree);
+                // this._sidebarViewProvider.updateGraphVisualization(this._tree);
                 this._previousParsedNodes = nodeIds;
             } else {
                 console.error("Failed to update the tree with the given node IDs: ", nodeIds);
@@ -1313,51 +1306,6 @@ class Agent {
 
         return evaluationOutput;
     }
-
-    updateFindingsSummary = (newFindings: any[]): any[] => {
-        const updatedFindings: { snippetKey: number[], statement: string, outOfDate: boolean, isUpdated?: boolean }[] = []; // To store the updated findings with `isUpdated` key
-
-        // Match and compare existing findings
-        newFindings.forEach(newFinding => {
-            const existingFinding = this._lastFindingSummary.find(existing =>
-                JSON.stringify(existing.snippetKey.sort()) === JSON.stringify(newFinding.snippetKey.sort())
-            );
-
-            if (existingFinding) {
-                // Detect updates if the statement is different or the finding is not out of date
-                const isUpdated =
-                    existingFinding.statement !== newFinding.statement || !newFinding.outOfDate;
-
-                // Add the `isUpdated` key
-                updatedFindings.push({
-                    ...newFinding,
-                    isUpdated
-                });
-
-                // Update the existing finding
-                if (isUpdated) {
-                    existingFinding.statement = newFinding.statement;
-                    existingFinding.outOfDate = newFinding.outOfDate;
-                }
-            } else {
-                const isUpdated = !newFinding.outOfDate;
-                // Mark new findings as updated
-                updatedFindings.push({
-                    ...newFinding,
-                    isUpdated: isUpdated
-                });
-            }
-        });
-
-        // Sort the new findings by the smallest snippetKey
-        updatedFindings.sort((a, b) => Math.min(...a.snippetKey) - Math.min(...b.snippetKey));
-
-        // Update the findings summary without the `isUpdated` key
-        this._lastFindingSummary = updatedFindings;
-
-        // Return the updated findings with the `isUpdated` key
-        return updatedFindings;
-    };
 
     private findSnippetBySnippetKey(snippetKey: number): { fileUri: string; lineNumber: number } | null {
         // Recursive function to search the tree
@@ -1394,7 +1342,26 @@ class Agent {
 
         // Process each insight in the "Lifecycle" section
         const processLifecycle = (lifecycle: Array<{ insightName: string; details: string; reference: number }>): string => {
-            return lifecycle
+            let usedReferences = new Set<number>();
+            // Extract all references used in the insights
+            lifecycle.forEach((insight) => {
+                usedReferences.add(insight.reference);
+            });
+
+            const newPreviousParsedNodes: any = {};
+            for (const key in this._previousParsedNodes) {
+                if (usedReferences.has(parseInt(key))) {
+                    newPreviousParsedNodes[key] = this._previousParsedNodes[key];
+                }
+            }
+            this._previousParsedNodes = newPreviousParsedNodes;
+            // generate the tree with the newPreviousParsedNodes
+            if (Object.keys(this._previousParsedNodes).length > 0) {
+                this._tree = this._explorationGraph.findSmallestTree(this._previousParsedNodes);
+                this._sidebarViewProvider.updateGraphVisualization(this._tree);
+            }
+
+            let processedHighlights = lifecycle
                 .map((insight) => {
                     insight.details = processMarkdown(insight.details);
 
@@ -1414,6 +1381,9 @@ class Agent {
                         </div>`;
                 })
                 .join("");
+            // clean the _previousParsedNodes by only keeping the used references
+
+            return processedHighlights;
         };
 
         const lifecycleAndInsightsContainer = `
@@ -1598,12 +1568,14 @@ class Agent {
                    - reference: A single snippetKey reference ([snippetKey: number]) that supports the explanation. 
                 
                 2. Guidelines for Generating Good "Key Insights":
-                - Each claim in the Overview should have a corresponding key insight to support it.
-                - Key insights should directly answer to the question. Make sure all question-relevant nodes from the tree are covered. 
-                - Other important insights should capture important aspects of how the code works.
-                - Other insights can focus on execution flow, control flow, data flow, structural relationships, or logical steps.
-                - Name the insight concisely while making it clear what aspect of the code it describes.
-                - Each insight should be specific, meaningful, and useful for understanding the question.
+                - Each claim in the Overview **must** have a corresponding Key Insight that fully supports it with concrete code evidence.
+                - Key insights **must** directly answer the question. **Include all question-relevant nodes** from the tree.
+                - Extract **all leaf nodes** that provide direct answers, ensuring they are prioritized.
+                - Include **important intermediate nodes** that explain execution flow, control flow, data flow, structural relationships, or logical steps.
+                - **Do not infer or assume behaviors**—all insights must be strictly based on the code.
+                - Use **clear, definitive language**. Do **not** use uncertain terms like "likely" or "seems."
+                - Name each insight concisely while clearly indicating what aspect of the code it describes.
+                - Each insight **must be specific, meaningful, and directly relevant** to answering the question.
 
                 Common Types of Key Insights Based on Code Elements:
                 - Functions (What does this function do?)
@@ -1619,7 +1591,7 @@ class Agent {
                    - "Modification" - What parts of the code change its value.
                    - "Usage" - Where and how it is referenced in computations or logic.
                    - "Scope and Lifetime" - How long the variable exists in the program.
-                   - "Dependencies" - Other variables/functions that affect its value.
+                   - "Dependencies" - Other variables/functions that affect its value (e.g., changing of the styles).
 
                 - Parameters (Why is this parameter needed?)
                    - "Influence on Execution" - How the parameter affects function behavior.
@@ -1691,13 +1663,10 @@ class Agent {
             Your role depends on the task in the input, and you must carefully follow task-specific instructions and formats.
             
             General Instructions:
-            - Understand the Input: Read the input carefully to determine which task to perform.
-            - Maintain Consistency: The refined_question should remain consistent across all tasks and throughout the entire exploration process.
+            - Understand the Input: Read the input carefully.
             - Ensure Thorough Exploration: Explore the codebase deeply enough to fully answer the refined question. Consider related functions, classes, or files that may be necessary to examine. 
-            - Generate Additional Sub-Questions When Necessary: If initial explorations are insufficient, create further sub-questions to delve deeper into the code.
-            - Avoid Redundancy: Always consider the explored sub-questions to prevent redundant efforts.
+            - Avoid Redundancy: Always consider the explored refined questions to prevent redundant efforts.
             - Professionalism: Use clear, concise, and professional language in your responses.
-            - Strict Formats: Adhere strictly to the output JSON schemas specified for each task.
     
             ${taskInstructions}
             
@@ -1714,11 +1683,9 @@ class Agent {
             // Time the agent's response
             const start = new Date().getTime();
             let model;
-            if (taskNumber === 3 || taskNumber === 5) {
-                model = this._fasterModel;
-            } /* else if (taskNumber === 7) {
-                model = this._reasoningModel; // need tier 5 users
-            } */ else {
+            if (taskNumber === 7) {
+                model = this._reasoningModel;
+            } else {
                 model = this._model;
             }
 

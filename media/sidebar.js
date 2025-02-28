@@ -1011,6 +1011,19 @@ function renderGraph(data) {
     // Add a scroll event listener to dynamically adjust control panel visibility
     window.addEventListener("scroll", ensureControlPanelVisibility);
 
+    function updateButtonStates() {
+        document.getElementById("start-over").disabled = (currentStepIndex === 0);
+        document.getElementById("prev-step").disabled = (currentStepIndex === 0);
+        document.getElementById("next-step").disabled = (currentStepIndex >= currentNodes.length - 1);
+        document.getElementById("jump-to-end").disabled = (currentStepIndex >= currentNodes.length - 1);
+
+        // Update button styles
+        document.getElementById("start-over").style.backgroundColor = (currentStepIndex === 0) ? "#d3d3d3" : "#007acc";
+        document.getElementById("prev-step").style.backgroundColor = (currentStepIndex === 0) ? "#d3d3d3" : "#007acc";
+        document.getElementById("next-step").style.backgroundColor = (currentStepIndex >= currentNodes.length - 1) ? "#d3d3d3" : "#007acc";
+        document.getElementById("jump-to-end").style.backgroundColor = (currentStepIndex >= currentNodes.length - 1) ? "#d3d3d3" : "#007acc";
+    }
+
     function animateLines(nodes) {
         svg.selectAll(".node, .link").style("opacity", 0.2);
         stepThroughNodes(nodes, 0);
@@ -1019,6 +1032,7 @@ function renderGraph(data) {
     function stepThroughNodes(nodes, index) {
         if (isPaused) return;
         currentStepIndex = index;
+        updateButtonStates();
         const sourceNode = nodes[index];
         d3.select(`#node-${generateNodeId(sourceNode.data)}`).style("opacity", 1);
         // scroll to the node in the graph
@@ -1124,6 +1138,7 @@ function renderGraph(data) {
 
         // Scroll to the previous node
         document.getElementById(`node-${generateNodeId(previousNode.data)}`).scrollIntoView({ behavior: "smooth", block: "center" });
+        updateButtonStates();
     });
 
     document.getElementById("next-step").addEventListener("click", function () {
@@ -1145,6 +1160,7 @@ function renderGraph(data) {
 
         // Scroll to the next node
         document.getElementById(`node-${generateNodeId(nextNode.data)}`).scrollIntoView({ behavior: "smooth", block: "center" });
+        updateButtonStates();
     });
 
     document.getElementById("start-over").addEventListener("click", function () {
@@ -1162,6 +1178,8 @@ function renderGraph(data) {
         // Restart the animation
         currentStepIndex = 0; // Reset the step index
         stepThroughNodes(currentNodes, currentStepIndex);
+
+        updateButtonStates();
     });
 
     document.getElementById("jump-to-end").addEventListener("click", function () {
@@ -1187,6 +1205,8 @@ function renderGraph(data) {
 
         // Scroll to the last node
         document.getElementById(`node-${generateNodeId(lastNode.data)}`).scrollIntoView({ behavior: "smooth", block: "center" });
+
+        updateButtonStates();
     });
 
     // Define the exit-replay functionality

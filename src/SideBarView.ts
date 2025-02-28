@@ -304,8 +304,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
     private _getHtmlForWebview(webview: vscode.Webview): string {
         const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', 'sidebar.js'));
         const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', 'sidebar.css'));
-        //const prismCSS = webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', 'prism.css'));
-        const prismJS = webview.asWebviewUri(vscode.Uri.joinPath(this._context.extensionUri, 'media', 'prism.js'));
         const html2pdfJS = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js';
         const d3Uri = 'https://d3js.org/d3.v7.min.js';
 
@@ -320,7 +318,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 <link rel="preconnect" href="https://fonts.googleapis.com">
                 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
                 <link href="https://fonts.googleapis.com/css2?family=Lato:ital,wght@0,100;0,300;0,400;0,700;0,900;1,100;1,300;1,400;1,700;1,900&display=swap" rel="stylesheet">
-                <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/9000.0.1/themes/prism.min.css" />
                 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
                 <script src="${d3Uri}"></script>
             </head>
@@ -357,7 +354,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     This is <strong>not</strong> a call graph or dependency graph—it's a guided code exploration using standard developer tools.
                 </div>
                 <div id="graph-container"></div>
-                <script src="${prismJS}"></script>
                 <script src="${html2pdfJS}"></script>
                 <script src="${scriptUri}"></script>
             </body>
