@@ -180,8 +180,8 @@ const task5Schema = z.object({
 
 const task7Schema = z.object({
     answer: z.object({
-        Overview: z.string(), // High-level summary of the question and findings.
-        Lifecycle: z.array(
+        overview: z.string(), // High-level summary of the question and findings.
+        code_insight: z.array(
             z.object({
                 insightName: z.string(), // Name of the lifecycle stage or behavior.
                 details: z.string(), // Explanation of the stage's role or function.
@@ -212,7 +212,7 @@ class Agent {
     private _explorationGraph: ExplorationGraph;
     private isPaused: boolean = false;     // Track if the agent is paused
     private isStopped: boolean = false;    // Track if the agent is stopped
-    private _importantCodeSnippets = new Map<number, { file_uri: string; code_line: string; line_number: number; explanation: string; relevance_score: number }>();
+    private _importantCodeSnippets: { file_uri: string, code_line: string, line_number: number, explanation: string, relevance_score: number, snippetKey: number }[] = [];
     private _fileExtensionsToExclude = ['.test.ts', '.spec.ts', '.test.tsx', '.spec.tsx', '.test.js', '.spec.js', '.test.jsx', '.spec.jsx', '.d.ts'];
     private _primaryFolder: string = "";
     private _previousParsedNodes: { [key: number]: { nodeID: string; statement: string } } = {};
@@ -231,14 +231,13 @@ class Agent {
     };
     private _followUpBranchNodeId: string = "";
     private _findingsSummary: { snippetKey: number[], statement: string, outOfDate: boolean }[] = [];
-    private _lastFindingSummary: { snippetKey: number[], statement: string, outOfDate: boolean }[] = [];
     private _updateFindings: boolean = false;
     private _final_decision_sufficient: boolean = false;
 
     constructor(sidebarViewProvider: SidebarView) {
 
         this._model = new ChatOpenAI({
-            model: "gpt-4o-mini",
+            model: "gpt-4o",
             apiKey: API_KEY,
             temperature: 0,
             topP: 0.1,
@@ -323,7 +322,6 @@ class Agent {
         // Step 4: Reset findings and exploration graph
         this._explorationGraph = new ExplorationGraph();
         this._findingsSummary = [];
-        this._lastFindingSummary = [];
         this._updateFindings = false;
         this._final_decision_sufficient = false;
 
@@ -349,6 +347,7 @@ class Agent {
             this._sidebarViewProvider.updatetitleQuestion(this._question);
         }
         this._followUpBranchNodeId = `${fileUri}:${lineNumber}:${variable}`;
+        console.log("Follow-up question graph ", this._tree, this._explorationGraph.nodes);
         this.runWorkflow(this._question, vscode.Uri.parse(fileUri), lineNumber, lineNumber);
     }
 
@@ -782,11 +781,11 @@ class Agent {
     async _prepareResults(locations: vscode.Location[] | vscode.LocationLink[], subProblem: any) {
         const results: Array<{ file_uri: string, line_number: number, code_line: string, full_statement: string, variable: string }> = [];
         if (!locations || locations.length === 0) {
-            console.warn(`No locations found for ${subProblem.code_context.invoke_variable} around line ${subProblem.code_context.line_number}.`);
+            console.warn(`No result found for ${subProblem.code_context.invoke_variable} around line ${subProblem.code_context.line_number} with ${subProblem.tool}.`);
             return results;
         }
-
         for (const location of locations) {
+            let totalVariables = [];
             const lineNumber = location instanceof vscode.Location
                 ? location.range.start.line
                 : (location as vscode.LocationLink).targetSelectionRange?.start.line ?? 0;
@@ -795,7 +794,7 @@ class Agent {
             const fileUri = uri.toString();
             const pathParts = fileUri.split("/");
             let includedFolder = pathParts.slice(0, -1).join("/");
-            if (this._fileExtensionsToExclude.some(ext => fileUri.includes(ext)) && this._primaryFolder.includes(includedFolder)) {
+            if (this._fileExtensionsToExclude.some(ext => fileUri.includes(ext)) || this._primaryFolder.includes(includedFolder)) {
                 continue;
             }
 
@@ -853,10 +852,10 @@ class Agent {
             });
             // Add both the base result variable and the relevant variables to the variable name list
             const variables = [variable, ...relevantVariables.map((variableInfo: any) => variableInfo.variable)];
+            totalVariables.push(...variables);
             this._addOrUpdateExploredCodeLines(fileUri, startLineNum, endLineNum, statementText, variables);
             this._addToExploredFiles(vscode.Uri.parse(fileUri), document);
         }
-
         return results;
     }
 
@@ -1086,7 +1085,7 @@ class Agent {
                         refined_question: this._refined_question ?? "",
                         variables_wait_for_exploring: batch
                     };
-                    console.log("Task 3 input: ", inputJson.variables_wait_for_exploring);
+                    //console.log("Task 3 input: ", inputJson.variables_wait_for_exploring);
                     const response = await this._callAgentAPI(inputJson, 3, task3Schema);
                     return JSON.parse(response);
                 };
@@ -1142,7 +1141,6 @@ class Agent {
             }
         }
         this._newExploredCodeLines = []; // Reset the new explored code lines
-        // log the task3Output
         console.log("Task 3 output: ", task3Output);
         return task3Output;
     }
@@ -1152,10 +1150,14 @@ class Agent {
         this._sidebarViewProvider.updateSearchingContent(`Evaluating the importance of ${task2Results.length} results gained in this exploration...`);
 
         const filteredResults = task2Results.filter(
-            result =>
-                !Array.from(this._importantCodeSnippets.values()).some(
+            result => {
+                const isAlreadyInImportantSnippets = Array.from(this._importantCodeSnippets.values()).some(
                     r => r.file_uri === result.file_uri && r.line_number === result.line_number
-                )
+                );
+                const nodeId = this._explorationGraph.findNodeByLine(result.file_uri, result.line_number);
+                const isNodeInGraph = nodeId.length > 0;
+                return !isAlreadyInImportantSnippets && isNodeInGraph;
+            }
         );
 
         const batchSize = 10;
@@ -1179,7 +1181,7 @@ class Agent {
                 }))
             };
 
-            console.log("Task 5 input: ", inputJson.results);
+            //console.log("Task 5 input: ", inputJson.results);
 
             try {
                 const response = await this._callAgentAPI(inputJson, 5, task5Schema);
@@ -1197,7 +1199,8 @@ class Agent {
         let combinedRankedResults: any[] = [];
 
         for (const res of responses) {
-            if (res.ranked_results) combinedRankedResults.push(...res.ranked_results);
+            // only append the result in res.ranked_results with relevance_score > 0
+            combinedRankedResults.push(...res.ranked_results.filter((result: any) => result.relevance_score > 0));
         }
 
         // Store final output in task5Output
@@ -1205,13 +1208,6 @@ class Agent {
             ranked_results: combinedRankedResults
         };
 
-        // nodeIds: {snippetKey: {nodeID: string, statement: string} ...} is an object that stores the node IDs and statement with the snippetKey as the key in this._importantCodeSnippets
-        let nodeIds: {
-            [key: number]: {
-                nodeID: string;
-                statement: string;
-            }
-        } = {};
         task5Output.ranked_results.forEach((result: {
             file_uri: string;
             line_number: number;
@@ -1221,27 +1217,24 @@ class Agent {
             relevance_score: number;
             finding: string;
         }) => {
-            if (result.relevance_score <= 0) {
-                return;
-            }
 
             // Check if the snippet already exists
-            const existingEntry = Array.from(this._importantCodeSnippets.entries()).find(
-                ([, value]) => value.file_uri === result.file_uri && value.line_number === result.line_number
+            const existingEntry = this._importantCodeSnippets.find(
+                value => value.file_uri === result.file_uri && value.line_number === result.line_number
             );
 
             let snippetKey: number;
 
             if (!existingEntry) {
-                snippetKey = this._importantCodeSnippets.size;
-                this._importantCodeSnippets.set(snippetKey, {
+                snippetKey = this._importantCodeSnippets.length;
+                this._importantCodeSnippets.push({
                     file_uri: result.file_uri,
                     code_line: result.code_line,
                     line_number: result.line_number,
                     explanation: result.explanation,
-                    relevance_score: result.relevance_score
+                    relevance_score: result.relevance_score,
+                    snippetKey: snippetKey
                 });
-
                 this._findingsSummary.push({
                     snippetKey: [snippetKey],
                     statement: result.finding ?? result.explanation,
@@ -1249,88 +1242,19 @@ class Agent {
                 });
 
                 this._updateFindings = true;
-            } else {
-                snippetKey = existingEntry[0];
-            }
-
-            const nodeId = this._explorationGraph.findNodeByLine(result.file_uri, result.line_number);
-            if (nodeId.length === 0) {
-                console.warn(`Node ID not found for line ${result.line_number} in ${result.file_uri}`);
-                return {};
-            } else {
-                nodeIds[snippetKey] = {
-                    nodeID: nodeId[0],
-                    statement: result.finding ?? result.explanation
-                };
             }
         });
 
-        if (nodeIds !== this._previousParsedNodes && Object.keys(nodeIds).length > 0) {
-            // Merge previous parsed nodes with the current ones
-            nodeIds = { ...this._previousParsedNodes, ...nodeIds };
-            console.log("Node IDs to form a tree: ", nodeIds);
-            let newTree: TreeNode;
-            // Decide between branch-specific or global updates
-            if (this._followUpBranchNodeId) {
-                newTree = this._explorationGraph.appendOrAddNodesToTree(nodeIds, this._followUpBranchNodeId);
-            } else if (Object.keys(this._previousParsedNodes).length > 0) {
-                newTree = this._explorationGraph.appendOrAddNodesToTree(nodeIds);
-            } else {
-                newTree = this._explorationGraph.findSmallestTree(nodeIds);
-            }
-            // Update the tree and visualization
-            if (newTree.children.length > 0) {
-                this._tree = newTree;
-                // this._sidebarViewProvider.updateGraphVisualization(this._tree);
-                this._previousParsedNodes = nodeIds;
-            } else {
-                console.error("Failed to update the tree with the given node IDs: ", nodeIds);
-            }
-            console.log("Tree: ", newTree);
-        }
-
         let evaluationOutput = "";
         if (this._updateFindings) {
-            /* let [task7Output, task6Output] = await Promise.all([
-                this.runTask7(),
-                this.runTask6()
-            ]); */
             evaluationOutput = await this.runTask7();
-            /* if (this._final_decision_sufficient) {
-                evaluationOutput = task7Output;
-                this._sidebarViewProvider.addAnswer(evaluationOutput);
-            } else {
-                evaluationOutput = task7Output + task6Output;
-            } */
         }
 
         return evaluationOutput;
     }
 
-    private findSnippetBySnippetKey(snippetKey: number): { fileUri: string; lineNumber: number } | null {
-        // Recursive function to search the tree
-        const traverseTree = (node: TreeNode): { fileUri: string; lineNumber: number } | null => {
-            if (node.snippetKey === snippetKey) {
-                return { fileUri: node.fileUri, lineNumber: node.lineNumber };
-            }
-
-            for (const child of node.children) {
-                const result = traverseTree(child);
-                if (result) {
-                    return result; // Return as soon as a match is found
-                }
-            }
-
-            return null; // Return null if no match is found
-        };
-
-        return traverseTree(this._tree);
-    }
-
-
-
     private processFinalAnswer(task7Output: any): string {
-        const { Overview, Lifecycle } = task7Output.answer;
+        const { overview, code_insight } = task7Output.answer;
 
         // Helper functions for markdown processing
 
@@ -1341,47 +1265,51 @@ class Agent {
         };
 
         // Process each insight in the "Lifecycle" section
-        const processLifecycle = (lifecycle: Array<{ insightName: string; details: string; reference: number }>): string => {
+        const processLifecycle = (code_insight: Array<{ insightName: string; details: string; reference: number }>): string => {
             let usedReferences = new Set<number>();
+            let processedHighlights = "";
+            let renewGraph = false;
             // Extract all references used in the insights
-            lifecycle.forEach((insight) => {
-                usedReferences.add(insight.reference);
-            });
-
-            const newPreviousParsedNodes: any = {};
-            for (const key in this._previousParsedNodes) {
-                if (usedReferences.has(parseInt(key))) {
-                    newPreviousParsedNodes[key] = this._previousParsedNodes[key];
+            code_insight.forEach((insight) => {
+                if (usedReferences.has(insight.reference)) {
+                    return;
                 }
-            }
-            this._previousParsedNodes = newPreviousParsedNodes;
-            // generate the tree with the newPreviousParsedNodes
-            if (Object.keys(this._previousParsedNodes).length > 0) {
-                this._tree = this._explorationGraph.findSmallestTree(this._previousParsedNodes);
-                this._sidebarViewProvider.updateGraphVisualization(this._tree);
-            }
-
-            let processedHighlights = lifecycle
-                .map((insight) => {
-                    insight.details = processMarkdown(insight.details);
-
-                    // Extract snippetKey from reference
-                    const snippetData = insight.reference !== null ? this.findSnippetBySnippetKey(insight.reference) : null;
-
-                    // Add data attributes for fileUri and lineNumber
-                    return `
+                insight.details = processMarkdown(insight.details);
+                for (const record of this._importantCodeSnippets) {
+                    if (record.snippetKey == insight.reference) {
+                        usedReferences.add(insight.reference);
+                        processedHighlights += `
                         <div class="insight" 
-                            data-file-uri="${snippetData?.fileUri || ''}" 
-                            data-line-number="${snippetData?.lineNumber || ''}" 
+                            data-file-uri="${record.file_uri || ''}" 
+                            data-line-number="${record.line_number || ''}" 
                             data-ref="${insight.reference}">
                             <h3>${insight.insightName}</h3>
                             <p>${insight.details}
                                 [<span class="citation-ref" data-ref="${insight.reference}">See how we found this</span>]
                             </p>
                         </div>`;
-                })
-                .join("");
-            // clean the _previousParsedNodes by only keeping the used references
+                        const nodeId = this._explorationGraph.findNodeByLine(record.file_uri, record.line_number);
+                        if (nodeId.length > 0) {
+                            renewGraph = true;
+                            const newNode = {
+                                nodeID: nodeId[0],
+                                statement: record.explanation
+                            };
+                            this._previousParsedNodes[record.snippetKey] = newNode;
+                            return;
+                        } else {
+                            console.warn(`Node ID not found for line ${record.line_number} in ${record.file_uri}`);
+                        }
+                    }
+                }
+            });
+
+            // generate the tree with the newPreviousParsedNodes
+            if (renewGraph) {
+                this._tree = this._explorationGraph.findSmallestTree(this._previousParsedNodes);
+                //console.log("New tree: ", this._tree);
+                this._sidebarViewProvider.updateGraphVisualization(this._tree);
+            }
 
             return processedHighlights;
         };
@@ -1390,7 +1318,7 @@ class Agent {
             <div id="details-container" style="display: ${task7Output.final_decision_sufficient ? "block" : "none"};">
                 <div class="lifecycle">
                     <h2>Highlights</h2>
-                    ${processLifecycle(Lifecycle)}
+                    ${processLifecycle(code_insight)}
                 </div>
             </div>
         `;
@@ -1406,7 +1334,7 @@ class Agent {
         const processedAnswer = `
             <div class="final-answer">
                 <h1 id="final-answer-header" style="font-weight: bold;">${task7Output.final_decision_sufficient ? "Final Answer" : "Preliminary Answer"}:</h1>
-                ${processOverview(Overview)}
+                ${processOverview(overview)}
                 ${toggleButton}
                 ${lifecycleAndInsightsContainer}
             </div>
@@ -1422,11 +1350,15 @@ class Agent {
             task: 7,
             user_question: this._question,
             refined_question: this._refined_question ?? this._question,
-            data_flow_tree: this._tree
+            relevant_code: this._importantCodeSnippets
         };
+        //console.log("Task 7 input: ", inputJson);
 
         const response = await this._callAgentAPI(inputJson, 7, task7Schema);
         const task7Output = JSON.parse(response);
+        if (this._stepCounter < 3) {
+            task7Output.final_decision_sufficient = false;
+        }
 
         // update refined question if new_exploration_questions is not empty
         if (task7Output.new_exploration_questions.length > 0) {
@@ -1456,16 +1388,37 @@ class Agent {
         switch (taskNumber) {
             case 1:
                 taskInstructions = `
-                    Task 1: Refine the user's question by incorporating relevant surrounding code while ensuring conciseness. Include only the necessary parts of the surrounding code that directly contribute to understanding and answering the question.
+                    Task 1: Refine the user's question to enhance clarity, specificity, and effectiveness in guiding code exploration.
 
-                    Next, identify valuable variables to explore using VSCode tools and select an appropriate tool from the following list by providing the corresponding integer value:
-                    - 0: Go to Definition
-                    - 1: Find References
-                    
-                    Each item in the sub_problems array corresponds to a code line with an array of variables available for exploration.
-                    Evaluate each variable in the variables array and determine whether it is valuable to explore to answer the refined question. Justify the selection with a reason.
-                    
-                    The output format must strictly adhere to the JSON schema provided. Ensure that the tool is represented as an integer and do not alter the code_line.
+                    1. Ensure the refined question is precise and actionable.
+                    - Remove ambiguity by specifying the goal of the exploration (e.g., finding where a variable is assigned, tracing function execution, understanding a data structure).
+                    - Ensure that the refined question is answerable using code analysis tools like "Go to Definition" or "Find References."
+
+                    2. Include only the necessary surrounding code.
+                    - Extract only the most relevant code snippets that directly contribute to answering the question.
+                    - Avoid excessive code that does not provide insight into the question.
+
+                    3. Guide deeper exploration when required.
+                    - If answering the question requires tracing execution flow, ensure the refined question explicitly asks for function calls, dependencies, or data transformations.
+                    - Example: If the question involves how data is processed, refine it to track how the variable is initialized, modified, and used.
+                    - If the question involves UI rendering, refine it to focus on where JSX is generated.
+                    - If the question involves an algorithm, refine it to focus on key computation steps.
+
+                    4. Identify valuable variables for further investigation.
+                    - Evaluate which variables/functions are crucial for answering the question.
+                    - Select the appropriate VSCode tool:
+                        - 0: Go to Definition: To find where a function, variable, or class is implemented.
+                        - 1: Find References: To track how a function or variable is used throughout the codebase.
+
+                    5. Validate that the refined question encourages meaningful code exploration.
+                    - The question should not stop at a high level (e.g., "Where is this function used?") but instead guide AI to find concrete evidence (e.g., "What function ultimately calls this and what does it return?").
+                    - The refined question should focus on actionable steps to answer the user's intent.
+
+                    Output Format:
+                    The output must strictly follow the JSON schema, ensuring that:
+                    - The refined question is clear, specific, and actionable.
+                    - The code snippets included are directly relevant.
+                    - The tool selection is justified based on the variable's importance.
                 `;
                 break;
             case 3:
@@ -1477,10 +1430,10 @@ class Agent {
                     1. Input Evaluation:
                     - You are given a refined question and a list of variables_wait_for_exploring.
                     - For each item in variables_wait_for_exploring contains a code_line and an array of unexplored variables. 
-                    - Assess what variables are worth exploring next.
+                    - Assess what variables are worth exploring next based on the refined question. Select the most relevant variables to explore further based on the question.
 
                     2. Output Requirements:
-                    - Some code_lines may not be valuable for further exploration immediately but could be valuable later. So, try to mark all potentially valuable lines.
+                    - Some code_lines may not be valuable for further exploration immediately. But as an intermeditate node, it could help us to reach to other relevant code. 
                     - If valuable, identify the valuable variable to explore next from variables array.
                         - Select the appropriate tool:
                             - 0: Go to Definition
@@ -1497,7 +1450,7 @@ class Agent {
 
                     Assign a "relevance_score" of 0 or 1 to each result, where:
                     - 0: Not relevant - The result is not useful or does not contribute to the understanding of the refined question. Exclude this result.
-                    - 1: Worth showing - The result's code_line can directly or partially answer the question. Or it contains valuable findings that provide meaningful insights for the programmer to understand the important aspects of the exploration.
+                    - 1: Relevant - The result's code can directly answer the question.
 
                     For each result in the "results" array:
                     - Provide an "explanation" of why it is helpful or how it contributes to understanding the question.
@@ -1545,114 +1498,53 @@ class Agent {
                 break;
             case 7:
                 taskInstructions = `
-                Task 7: Decide Sufficiency and Generate Answer
+                    Task 7: Assess sufficiency and generate an answer.
 
-                Goals:
-                1. Firstly, assess if the current findings and code exploration sufficiently answer the refined question.
-                2. Then, generate a structured, evidence-based answer that includes key insights for developers.
-                3. Finally, suggest New Questions if final_decision_sufficient is false.
+                    Goals:
+                    1. Determine if the current findings sufficiently answer the refined question.
+                    2. Provide a structured, evidence-based answer with relevant code insights.
+                    3. If the answer is insufficient, suggest follow-up questions.
 
-                Input:
-                1. user_question: The original user question.
-                2. refined_question
-                3. data_flow_tree: A structured tree containing findings and associated code snippets.
+                    1. Generate Answer  
+                    If the findings are sufficient, return:
+                    - Overview: A concise summary explaining how the identified code answers the question.
+                    - code_insight: Key execution steps supported by relevant code snippets, each with:
+                    - insightName: A short label describing the insight (e.g., "Execution Flow," "Final Output").
+                    - details: A clear explanation of what the code does.
+                    - reference: The snippetKey of the supporting code.
 
-                Instructions:
+                    Formatting Rules:
+                    - Use bold formatting (inside of two asterisk signs) for function names and key variables.
+                    - Use inline code formatting (\`backtick\`) for small code snippets.
 
-                1. Generate Answer:
-                Provide a structured, detailed answer object, whether or not findings are sufficient. The structure should include:
-                - Overview: A concise summary of the code element's purpose and relevance to the question.
-                - Key Insights: An array of objects representing crucial execution steps, dependencies, or structural behaviors:
-                   - insightName: Name of the key insight (e.g., "Initialization," "Data Flow," "Parameter Influence").
-                   - details: A short explanation of the insight.
-                   - reference: A single snippetKey reference ([snippetKey: number]) that supports the explanation. 
-                
-                2. Guidelines for Generating Good "Key Insights":
-                - Each claim in the Overview **must** have a corresponding Key Insight that fully supports it with concrete code evidence.
-                - Key insights **must** directly answer the question. **Include all question-relevant nodes** from the tree.
-                - Extract **all leaf nodes** that provide direct answers, ensuring they are prioritized.
-                - Include **important intermediate nodes** that explain execution flow, control flow, data flow, structural relationships, or logical steps.
-                - **Do not infer or assume behaviors**—all insights must be strictly based on the code.
-                - Use **clear, definitive language**. Do **not** use uncertain terms like "likely" or "seems."
-                - Name each insight concisely while clearly indicating what aspect of the code it describes.
-                - Each insight **must be specific, meaningful, and directly relevant** to answering the question.
+                    2. Guidelines for "code_insight"  
+                    Each insight must provide concrete, verifiable evidence, covering:
+                    - Functions: What they do, how they transform data, and what they return.
+                    - Variables: How they are initialized, modified, and used.
+                    - Objects and Classes: Key properties, methods, and interactions.
+                    - UI Components: Data binding, event handling, and rendering logic.
 
-                Common Types of Key Insights Based on Code Elements:
-                - Functions (What does this function do?)
-                   - "Input Handling" - How the function processes incoming parameters.
-                   - "Computation Logic" - How the function transforms data.
-                   - "State Update" - If the function modifies state variables.
-                   - "Output Generation" - What the function returns.
-                   - "Error Handling" - How errors are caught or managed.
-                   - "Side Effects" - Any changes outside the function (e.g., modifying global state).
+                    Reference Guidelines:
+                    - Every code_insight must include a snippetKey referencing the relevant code.
+                    - Each snippetKey should only be used once per insight.
+                    - Do not reference snippetKey: -1 (it represents the root node).
 
-                - Variables (How is this variable used?)
-                   - "Initialization" - Where and how the variable is first assigned.
-                   - "Modification" - What parts of the code change its value.
-                   - "Usage" - Where and how it is referenced in computations or logic.
-                   - "Scope and Lifetime" - How long the variable exists in the program.
-                   - "Dependencies" - Other variables/functions that affect its value (e.g., changing of the styles).
+                    3. Decide Sufficiency  
+                    Findings are sufficient only if they:
+                    1. Include direct code evidence (function calls, assignments, return values, or rendering logic).
+                    2. Trace execution fully, following function calls and dependencies step by step.
+                    3. Identify the final impact, such as where data is transformed, UI is updated, or output is generated.
+                    4. Provide a clear, logical explanation, showing how the code leads to the final behavior.
 
-                - Parameters (Why is this parameter needed?)
-                   - "Influence on Execution" - How the parameter affects function behavior.
-                   - "Default Behavior" - What happens if the parameter is missing.
-                   - "Conditional Logic" - Where the parameter influences branches (if/switch).
-                   - "Dependency Injection" - If the parameter provides external dependencies.
+                    Stopping at an intermediate function or a partial transformation is not sufficient unless it directly produces the final result.
 
-                - Objects and Classes (What does this class or object do?)
-                   - "Initialization" - How the object is created.
-                   - "Properties and Methods" - Key attributes and their behaviors.
-                   - "Interactions" - What other components this interacts with.
-                   - "State Management" - How internal state is handled.
-
-                - Configuration Settings (How does this setting affect behavior?)
-                   - "Impact on Execution" - What this setting changes in the program.
-                   - "Default and Custom Values" - What happens if it is set or left blank.
-                   - "Dependency on Other Configurations" - If it interacts with other settings.
-                   - "Performance Impact" - Whether this setting affects performance.
-                   - "Security Considerations" - If the setting has security implications.
-
-                Reference Guidelines:
-                - Each insight should have a single number for referring to a code snippet reference (the number is from snippetKey: number in the tree). 
-                - Not two insights should reference the same snippetKey.
-                - Do not reference snippetKey: -1, as it represents the root node.
-                - Use bold formatting (**importantMethod**) for function names and variables.
-                - Use inline code formatting (\`someVariable\`) for small code snippets.
-
-                3. Decide final_decision_sufficient:
-                Evaluate if the current findings and data flow tree are fully sufficient to answer the refined question. Consider the following factors strictly:
-
-                (A) Concrete Code Evidence: 
-                - Are there direct code references (e.g., function calls, assignments, CSS changes, control flows) supporting each key part of the answer?
-                - Does the data flow tree contain explicit operations that prove the behavior rather than inferred logic?
-
-                (B) Execution Flow and Dependencies: 
-                - Are all necessary execution steps traced? (e.g., function calls, variable mutations, interactions across files)
-                - Does the explanation cover how the answer is implemented rather than just what it does?
-
-                (C) Scope and Coverage:  
-                - Are all relevant parts of the codebase (e.g., related functions, affecting variables, impacted components) included?
-                - Are there missing dependencies, control flows, or unexplored conditions that could affect the answer?
-
-                (D) Clarity and Completeness:  
-                - Does the explanation clearly show how the findings lead to the final answer?  
-                - Would a developer, unfamiliar with the code, be able to understand and verify the reasoning based on the provided snippets?  
-                - If an important part is missing (e.g., where exactly a property is modified), the answer is insufficient.
-
-                Decision Rules:
-                - final_decision_sufficient = true: Only if the data flow tree contains concrete, traceable evidence covering all aspects above.
-                - final_decision_sufficient = false: If any crucial evidence is missing, specify:
-                - Missing areas (e.g., unexamined dependencies, unexplored control flows, or unclear logic).
-                - Additional steps required (e.g., tracking function calls, variable changes, external dependencies).
-
-                4. Suggest New Questions if final_decision_sufficient = false
-                If the findings are not sufficient, generate new exploration questions based on the missing areas.
-
-                Guidelines for New Questions:
-                - Target the gaps in the current exploration tree.
-                - Be specific about what needs to be investigated.
-                - Encourage deeper exploration (e.g., function calls, missing conditions, related variables).
-                `;
+                    4. Suggest New Questions  
+                    If findings are insufficient, generate follow-up questions to explore missing parts:
+                    - What function or process applies the final transformation?
+                    - Where is this value modified before being used?
+                    - What is the last step in execution affecting the result?
+                    - How does this function contribute to the final behavior?
+                    `;
                 break;
             default:
                 throw new Error("Unknown task number provided.");
@@ -1686,7 +1578,7 @@ class Agent {
             if (taskNumber === 7) {
                 model = this._reasoningModel;
             } else {
-                model = this._model;
+                model = this._fasterModel;
             }
 
             const completion = await this._openai.beta.chat.completions.parse({
@@ -1718,7 +1610,7 @@ class Agent {
         }
 
         // Log and return the validated result
-        console.log(`Validated Task ${taskNumber} Output:`, result);
+        // console.log(`Validated Task ${taskNumber} Output:`, result);
         return result;
     }
 

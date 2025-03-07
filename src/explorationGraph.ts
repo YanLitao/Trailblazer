@@ -296,7 +296,7 @@ export class ExplorationGraph {
                 if (nodeIds) {
                     const key = Object.keys(nodeIds).find((key: any) => nodeIds[key].nodeID === node.id);
                     if (key) {
-                        snippetKey = parseInt(key, 10);
+                        snippetKey = typeof key === 'number' ? key : parseInt(key, 10);
                         statement = nodeIds[snippetKey].statement;
                         isIntermediate = false;
                     }
@@ -325,6 +325,12 @@ export class ExplorationGraph {
         const root = createOrGetNode(this.fakeOriginId);
 
         nodeIdArray.forEach(nodeId => {
+            // Check if the node exists in the graph
+            if (!this.nodes.has(nodeId)) {
+                console.warn(`Node ${nodeId} not found in the graph to create a tree.`);
+                return;
+            }
+
             let currentNodeId = nodeId;
 
             while (currentNodeId && !shortestPathTree.has(currentNodeId)) {
@@ -332,6 +338,8 @@ export class ExplorationGraph {
 
                 if (parentData) {
                     shortestPathTree.set(currentNodeId, { parent: parentData.parent, tool: parentData.tool }); // Record parent-child relationship
+                } else {
+                    console.warn(`Parent not found for node ${currentNodeId}.`);
                 }
                 currentNodeId = parentData?.parent!;
             }
@@ -346,9 +354,12 @@ export class ExplorationGraph {
             }
         });
 
-        this.tree = this.removeDuplicatesAndMerge(root)!;
+        const newTree = this.removeDuplicatesAndMerge(root);
+        if (newTree) {
+            this.tree = newTree;
+        }
 
-        return root;
+        return this.tree;
     }
 
     appendOrAddNodesToTree(
@@ -392,10 +403,8 @@ export class ExplorationGraph {
             }
 
             const statement = Object.values(nodeIds).find((n) => n.nodeID === newNodeId)?.statement || "";
-            const snippetKey = parseInt(
-                Object.keys(nodeIds).find((key: any) => nodeIds[key].nodeID === newNodeId) || "-1",
-                10
-            );
+            const key = Object.keys(nodeIds).find((key: any) => nodeIds[key].nodeID === newNodeId);
+            const snippetKey = key ? (typeof key === 'number' ? key : parseInt(key, 10)) : -1;
 
             // Find the shortest path to the branch or tree
             const pathToTree = this.findShortestPathToTree(newNodeId, nodeMap, branchNodeId);
@@ -498,13 +507,11 @@ export class ExplorationGraph {
 
         // Return the prioritized non-fake-origin connection if found
         if (prioritizedConnection) {
-            console.log("Prioritized connection found.");
             return prioritizedConnection.path;
         }
 
         // Fallback to fake-origin connection if no other connections are found
         if (fakeOriginPath) {
-            console.log("Fallback to fake-origin connection.");
             return fakeOriginPath.path;
         }
 

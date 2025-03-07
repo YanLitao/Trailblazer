@@ -601,7 +601,7 @@ function extractVariablesAndFunctions(node: ts.Node): {
         if (layer >= 15) return; // Stop for deeply nested nodes
 
         // Skip irrelevant nodes
-        if (ts.SyntaxKind.TypePredicate <= node.kind && node.kind <= ts.SyntaxKind.ImportType || ts.SyntaxKind.JSDoc == node.kind) {
+        if (ts.SyntaxKind.FunctionType <= node.kind && node.kind <= ts.SyntaxKind.ImportType || ts.SyntaxKind.JSDoc == node.kind) {
             return;
         }
 
@@ -933,29 +933,32 @@ export async function analyze(
 
     // Handle if-else conditions
     if (depth == 0 && (trimmedLine.startsWith("if ") || trimmedLine.startsWith("else if ") || trimmedLine.startsWith("else {"))) {
-
         // If depth > 0, only return statements without further analysis
         return findIfElseDirectStatementsWithLines(fileUri, lineNumber, inputVariable, 0);
     }
 
-    if (trimmedLine.includes("=")) {
-        isFunction = 0; // assignment
-    } else if (trimmedLine.endsWith(",")) {
-        isFunction = 0; // destructuring assignment
-    } else if (trimmedLine.includes("function ")) {
-        isFunction = 1; // function definition
-    } else if (trimmedLine.includes("=>")) {
-        isFunction = 2; // arrow function
-    } else if (trimmedLine.includes("class")) {
+    if (trimmedLine.includes("class")) {
         isFunction = 4; // class
-    } else if (trimmedLine.includes("(")) {
-        isFunction = 3; // function call
-    } else {
+    } /* else if (trimmedLine.includes("function ")) {
+        return normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber);
+    } else if (trimmedLine.includes("=>")) {
+        return normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber);
+    } */ else if (trimmedLine.endsWith(",")) {
+        isFunction = 0; // destructuring assignment
+    } /* else if (trimmedLine.includes("=") && !trimmedLine.includes("==") && !trimmedLine.includes("===")) {
+        isFunction = 0; // assignment
+    } else if (trimmedLine.endsWith("{")) {
+        return normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber);
+    }  */else {
         return normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber);
     }
 
     const results = await extractVariables(fileUri, lineNumber, inputVariable, isFunction);
-    return results;
+
+    if (results.length > 0) {
+        return results
+    }
+    return normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber);
 }
 
 export function normalProcess(
@@ -1136,4 +1139,10 @@ async function extractSpecificIfElseBlock(
 }
 
 export async function test() {
+    const fileUri = vscode.Uri.file("/Users/litaoyan/Documents/Research/dataflow/material-ui-master/packages/mui-joy/src/Autocomplete/Autocomplete.tsx");
+    const lineNumber = 686;
+    const inputVariable = "groupedOptions";
+
+    const results = await analyze(fileUri, lineNumber, inputVariable);
+    console.log(results);
 }

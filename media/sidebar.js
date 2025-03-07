@@ -38,7 +38,6 @@ window.addEventListener('message', event => {
     const message = event.data;
     switch (message.command) {
         case 'updateStatus':
-            console.log("Received status update: ", message.status);
             updateStatus(message.status);
             break;
         case 'updateAnswer':
@@ -273,8 +272,7 @@ document.addEventListener("click", function (event) {
         const updated = updateNodeAndAncestors(graphData, refId);
 
         if (!updated) {
-            console.warn(`Node with snippetKey "${refId}" not found in graphData.`);
-            return;
+            console.warn(`Node with snippetKey "${refId}" not found in graphData:`, graphData);
         }
 
         // Redraw the graph
@@ -493,6 +491,10 @@ function initializeHiddenField(treeNode, hidden = 2) {
 }
 
 function generateNodeId(data) {
+    if (!data || !data.fileUri || !data.lineNumber || !data.variable) {
+        console.warn("Invalid data object:", data);
+        return "";
+    }
     const fileName = data.fileUri.split('/').pop(); // Get the file name
     return `${fileName}_${data.lineNumber}_${data.variable}`.replace(/[^\w-]/g, "_");
 }
@@ -956,8 +958,6 @@ function renderGraph(data) {
                         const targetNodeId = event.target.getAttribute("data-node-id");
                         const targetNodeElement = document.querySelector(`#node-${targetNodeId}`);
                         if (targetNodeElement) {
-                            console.log("targetNodeElement: ", targetNodeElement);
-
                             // Dynamically get the current height of the sticky header
                             const stickyHeader = document.querySelector("#sticky-header");
                             const stickyHeaderHeight = stickyHeader ? stickyHeader.offsetHeight : 0;
