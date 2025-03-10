@@ -65,7 +65,7 @@ window.addEventListener('message', event => {
 
                 reAppendInsights();
 
-                if (message.answer.includes("Final Answer")) {
+                if (message.answer.includes("Answer")) {
                     document.querySelectorAll('.removable').forEach((element) => {
                         element.style.display = 'none';
                     });
@@ -295,10 +295,10 @@ function toggleDetails() {
 
     if (container.style.display === "none") {
         container.style.display = "block";
-        button.textContent = "Hide Details";
+        button.textContent = "Hide tour";
     } else {
         container.style.display = "none";
-        button.textContent = "Show Details";
+        button.textContent = "Toggle descriptive tour of code";
     }
 }
 
@@ -439,7 +439,7 @@ function renderGraph(data) {
     `;
     container.appendChild(controlPanel);
 
-    const margin = { top: 20, right: 0, bottom: 20, left: 30 };
+    const margin = { top: 10, right: 0, bottom: 20, left: 10 };
 
     // Create the SVG container
     const svg = d3.select(container)
@@ -573,21 +573,20 @@ function renderGraph(data) {
                 // Description Text for Each Node
                 let descriptionHTML = "";
                 if (d.data.id === "fake-origin") {
-                    descriptionHTML = `<div class="node-description">I started here (${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}). Then I started to look for information.</div>
+                    descriptionHTML = `<div class="node-description">I started here. Then I started to look for information.</div>
                     `;
                 } else if (d.parent && d.parent.data.id === "fake-origin") {
                     // Node with fake-origin as parent
                     descriptionHTML = `
                         <div class="node-description">
-                            I decided to look for more information about <span class="inline-code">${d.data.variable}</span>
-                            from your selected code snippet.
+                            I decided to look for more information about <span class="inline-code">${d.data.variable}.
                         </div>
                     `;
                 } else if (d.data.tool === "reference") {
                     // Reference Node
                     descriptionHTML = `
                         <div class="node-description">
-                            This let me to this reference of <span class="inline-code">${d.data.variable}</span>.
+                            This led me to this reference of <span class="inline-code">${d.data.variable}</span>.
                         </div>
                     `;
                 } else if (d.data.tool === "assignment") {
@@ -601,7 +600,7 @@ function renderGraph(data) {
                     // Default Case
                     descriptionHTML = `
                         <div class="node-description">
-                            This let me to this definition of <span class="inline-code">${d.data.variable}</span>.
+                            This led me to this definition of <span class="inline-code">${d.data.variable}</span>.
                         </div>
                     `;
                 }

@@ -226,7 +226,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
     // Example usage: Set agent status to "Searching"
     public agentIsRunning() {
         console.log("Agent is running");
-        this._updateAgentStatus('Searching');
+        this._updateAgentStatus('Searching...');
     }
 
     // Example usage: Set agent status to "Finished"
@@ -265,13 +265,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
             <body>
                 <div id="header">
                     <div class="header-divs">Searching for answer to "<span id="title-question">${this._question}</span>"</div>
-                    <div class="code-box header-divs">
-                        Starting point
-                        <button class="jump-btn" title="Jump to Editor" data-file-uri="${this._initialFileUri}" data-line-number="${this._initialLineNumber}">
-                            <i class="fa-solid fa-file-import"></i>
-                        </button>
-                        <code>${stripLineIndentation(this._selectedCode)}</code>
-                    </div>
                     <div id="agent-status" class="header-divs">
                         <div id="actions">
                             <div id="status">Status: <span id="agent-status-text" class="idle-status">Idle</span></div>
@@ -280,16 +273,25 @@ export class SidebarView implements vscode.WebviewViewProvider {
                             <button id="save-pdf" class="action-btn removable"><i class="fa-solid fa-file-pdf"></i></button>
                         </div>
                     </div>
+                    <div class="code-box header-divs">
+                        Starting point
+                        <code>${stripLineIndentation(this._selectedCode)}</code>
+                        <button class="jump-btn" title="Jump to Editor" data-file-uri="${this._initialFileUri}" data-line-number="${this._initialLineNumber}">
+                            <i class="fa-solid fa-file-import"></i>
+                        </button>
+                    </div>
                     <div id="searching-content" class="header-divs"></div>
                     <div id="answer-div"></div>
                 </div>
-                <h1>Code base walkthrough</h1>
-                <div id="info-box" class="info-box">
-                    Below, you can see all of the things I found as I walked through the code base to answer your question. I found all of these things using code analysis (e.g., jumping to definitions or references). You might get something out of seeing what I saw.
+                <div id="walkthrough">
+                    <h1>My walkthrough of the code</h1>
+                    <div id="info-box" class="info-box">
+                        Below, you will see all of the things I found as I walked through the code base to answer your question. I found all of these things using code analysis (e.g., jumping to definitions or references).
+                    </div>
+                    <div id="graph-container"></div>
+                    <script src="${html2pdfJS}"></script>
+                    <script src="${scriptUri}"></script>
                 </div>
-                <div id="graph-container"></div>
-                <script src="${html2pdfJS}"></script>
-                <script src="${scriptUri}"></script>
             </body>
             </html>
         `;
