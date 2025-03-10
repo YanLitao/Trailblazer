@@ -683,6 +683,9 @@ function renderGraph(data) {
                     }).join("\n");
                 }
 
+                // get the width of the button container
+                let startOverWidth = d.depth * nodeSize + 20;
+                let buttonContainerWidth = container.offsetWidth - startOverWidth;
                 let htmlContent = `
                     ${descriptionHTML}
                     <div class="node-container-box" id="container-${generateNodeId(d.data)}" data-snippet-key="${d.data.snippetKey}" style="border: ${borderStyle}; ${displayment};">
@@ -692,13 +695,13 @@ function renderGraph(data) {
                             </div>
                             <div class="tree-node-button-container">
                                 <button class="replay-btn" title="Replay" data-node-id="${d.data.id}">
-                                    <i class="fas fa-undo-alt"></i> ${container.offsetWidth > 230 ? 'Replay' : ''}
+                                    <i class="fas fa-undo-alt"></i> ${buttonContainerWidth > 240 ? 'Replay' : ''}
                                 </button>
                                 <button class="jump-btn" title="Jump to Editor" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">
-                                    <i class="fas fa-arrow-right"></i> ${container.offsetWidth > 230 ? 'Go to line' : ''}
+                                    <i class="fas fa-arrow-right"></i> ${buttonContainerWidth > 240 ? 'Go to line' : ''}
                                 </button>
                                 <button class="search-btn" title="Search" data-node-id="${d.data.id}">
-                                    <i class="fas fa-search"></i> ${container.offsetWidth > 230 ? 'Search' : ''}
+                                    <i class="fas fa-search"></i> ${buttonContainerWidth > 240 ? 'Search' : ''}
                                 </button>
                             </div>
                         </div>

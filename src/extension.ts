@@ -642,11 +642,12 @@ class Agent {
             if (existingVariable && existingVariable.results.length > 0) {
                 continue;
             }
+
+            console.log(`Exploring "${variableName}" near ${fileUri.toString()} line ${lineNumber} with tool ${subProblem.tool}.`);
             // Perform the selected tool action (Go to Definition or Find References)
             const results = await this._runTool(fileUri, lineNumber, offset, subProblem);
 
             if (results.length === 0) {
-                console.warn(`No new results were found for "${subProblem.code_context.invoke_variable}" near line ${subProblem.code_context.line_number} with tool ${subProblem.tool}.`);
                 continue;
             }
 
