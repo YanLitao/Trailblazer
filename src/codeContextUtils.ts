@@ -1139,10 +1139,10 @@ async function extractSpecificIfElseBlock(
 }
 
 export async function test() {
-    const fileUri = vscode.Uri.file("/Users/litaoyan/Documents/Research/dataflow/material-ui-master/packages/mui-joy/src/Autocomplete/Autocomplete.tsx");
-    const lineNumber = 686;
-    const inputVariable = "groupedOptions";
-
-    const results = await analyze(fileUri, lineNumber, inputVariable);
-    console.log(results);
+    /*     const fileUri = vscode.Uri.file("/Users/litaoyan/Documents/Research/dataflow/material-ui-master/packages/mui-base/src/unstable_useModal/ModalManager.ts");
+        const lineNumber = 88;
+        const inputVariable = "handleContainer";
+    
+        const results = await analyze(fileUri, lineNumber, inputVariable);
+        console.log(results); */
 }

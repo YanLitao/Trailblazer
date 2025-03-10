@@ -23,7 +23,12 @@ function reAppendInsights() {
             clonedInsightContainer.querySelectorAll('.citation-ref').forEach((ref) => ref.remove());
 
             // Append the cleaned insight container
-            insightContainer.appendChild(clonedInsightContainer);
+            const codeBox = insightContainer.querySelector('.tree-node.code-box');
+            if (codeBox) {
+                insightContainer.insertBefore(clonedInsightContainer, codeBox);
+            } else {
+                insightContainer.appendChild(clonedInsightContainer);
+            }
 
             // Style the container as needed
             insightContainer.classList.add('insight-in-container');
@@ -272,6 +277,7 @@ document.addEventListener("click", function (event) {
         const updated = updateNodeAndAncestors(graphData, refId);
 
         if (!updated) {
+            graphData = initializeHiddenField(graphData); // Reset hidden states if not found
             console.warn(`Node with snippetKey "${refId}" not found in graphData:`, graphData);
         }
 
@@ -301,13 +307,6 @@ document.addEventListener("click", function (event) {
     }
 });
 
-function toggleHiddenStatement(element) {
-    const hiddenStatement = element.nextElementSibling; // Find the next sibling <span>
-    if (hiddenStatement) {
-        hiddenStatement.style.display = hiddenStatement.style.display === "none" ? "inline" : "none";
-    }
-}
-
 // control showing the preliminary answer
 function toggleDetails() {
     const container = document.getElementById("details-container");
@@ -319,111 +318,6 @@ function toggleDetails() {
     } else {
         container.style.display = "none";
         button.textContent = "Show Details";
-    }
-}
-
-// JavaScript to toggle additional invocations
-function toggleAdditionalInvocations(elementId) {
-    const element = document.getElementById(elementId);
-    const currentTaskUniqueId = elementId.split('-show-more')[0]; // Get unique ID part
-    const additionalInvocations = document.getElementById(`${currentTaskUniqueId}-additional-invocations`);
-
-    if (!additionalInvocations) {
-        return;
-    }
-
-    if (additionalInvocations.style.display === 'none') {
-        additionalInvocations.style.display = 'block';
-        element.style.display = 'none'; // Hide the "show more" link after clicking
-    } else {
-        additionalInvocations.style.display = 'none';
-        element.style.display = 'block';
-    }
-}
-
-
-
-function appendFindingsHtml(html) {
-    // Append the HTML content to findings
-    if (!html) {
-        return;
-    }
-    const findingsContainer = document.getElementById('findings');
-    findingsContainer.innerHTML = html;
-
-    // Add click event listeners for the .code-wrapper elements
-    findingsContainer.querySelectorAll('.code-wrapper').forEach((wrapper) => {
-        wrapper.addEventListener('click', (event) => {
-            event.stopPropagation();  // Stop the event from bubbling up
-
-            // Toggle visibility of the .parent-node-info div
-            const parentNodeInfo = wrapper.querySelector('.parent-node-info');
-            if (parentNodeInfo) {
-                // Toggle display between 'none' and 'block'
-                parentNodeInfo.style.display = parentNodeInfo.style.display === 'none' ? 'block' : 'none';
-            }
-        });
-    });
-
-    setupJumpToLine();
-}
-
-function appendPath(pathHtml, nodeId) {
-    // Find the code-wrapper div by data-node-id attribute
-    const codeWrapper = document.querySelector(`.code-wrapper[data-node-id="${nodeId}"]`);
-
-    if (!codeWrapper) {
-        console.warn(`No code-wrapper found with data-node-id: ${nodeId}`);
-        return;
-    }
-
-    // Get the .parent-node-info div within the selected code-wrapper
-    const parentNodeInfo = codeWrapper.querySelector('.parent-node-info');
-
-    if (!parentNodeInfo) {
-        console.warn(`No .parent-node-info found within code-wrapper with data-node-id: ${nodeId}`);
-        return;
-    }
-
-    // Set the HTML content of .parent-node-info to the pathHtml
-    parentNodeInfo.innerHTML = pathHtml;
-    parentNodeInfo.style.display = 'block';  // Make sure it is visible
-}
-
-// Add click event listeners to the titles that contain line numbers
-function setupJumpToLine() {
-    document.querySelectorAll('.line-link').forEach(element => {
-        element.addEventListener('click', () => {
-            const fileUri = element.getAttribute('data-file-uri');
-            const lineNumber = parseInt(element.getAttribute('data-line'));
-
-            // Send a message to VSCode to jump to the line in the given file
-            vscode.postMessage({
-                command: 'openFileAtLine',
-                fileUri: fileUri,
-                lineNumber: lineNumber
-            });
-        });
-    });
-}
-
-function setupToggleDetails(id, num) {
-    for (let i = 0; i <= num; i++) {
-        document.getElementById(id + "-btn-" + i).addEventListener('click', function () {
-            const targetId = this.getAttribute('data-target'); // 'this' refers to the clicked button
-            const targetElement = document.getElementById(targetId);
-            const triangle = this.querySelector('.triangle-right, .triangle-down'); // Select the triangle
-
-            if (targetElement.style.display === 'none') {
-                targetElement.style.display = 'block';
-                triangle.classList.remove('triangle-right');
-                triangle.classList.add('triangle-down'); // Change to down-pointing triangle
-            } else {
-                targetElement.style.display = 'none';
-                triangle.classList.remove('triangle-down');
-                triangle.classList.add('triangle-right'); // Change to right-pointing triangle
-            }
-        });
     }
 }
 
@@ -471,8 +365,6 @@ function updateStatus(status) {
     }
 }
 
-
-
 function initializeHiddenField(treeNode, hidden = 2) {
     // Set the hidden state based on the node's relationship to the root
     if (treeNode.id === "fake-origin") {
@@ -497,6 +389,59 @@ function generateNodeId(data) {
     }
     const fileName = data.fileUri.split('/').pop(); // Get the file name
     return `${fileName}_${data.lineNumber}_${data.variable}`.replace(/[^\w-]/g, "_");
+}
+
+// Function to calculate the height of a code snippet rectangle
+function getCodeSnippetHeight(snippetKey, codeSnippet, hidden = false) {
+    if (hidden == 0) {
+        return 0; // Return 0 height for hidden nodes
+    }
+    const container = document.getElementById("graph-container");
+    const tempDiv = document.createElement("div");
+    tempDiv.style.visibility = "hidden";
+    tempDiv.style.position = "absolute";
+    tempDiv.style.font = "12px monospace";
+    tempDiv.style.width = `${container.offsetWidth - 60 - 30}px`;
+
+    // Include both the code snippet and statement in the temporary div
+    let htmlContent = `
+        <div class="tree-node">
+            <div class="node-description">Node description</div>
+        </div>
+    `;
+
+    if (hidden == 2) {
+        const snippetKeyStr = String(snippetKey);
+        if (insightMap.has(snippetKeyStr)) {
+            htmlContent += `
+            <div class="insight-copy">
+                ${insightMap.get(snippetKeyStr)}
+            </div>`;
+        }
+        htmlContent += `
+        <div class="node-container-box">
+            <div class="tree-node code-box">
+                <div class="code-container">
+                    <code style="white-space: pre;">${codeSnippet}</code>
+                </div>
+                <div class="tree-node-button-container">
+                    <button class="replay-btn" title="Replay"><i class="fas fa-undo-alt"></i> Replay</button>
+                    <button class="jump-btn" title="Jump to Editor"><i class="fas fa-arrow-right"></i> Go to line</button>
+                    <button class="search-btn" title="Search"><i class="fas fa-search"></i> Search</button>
+                </div>
+            </div>
+        </div>`;
+    }
+    tempDiv.innerHTML = htmlContent;
+
+    document.body.appendChild(tempDiv);
+    let height = tempDiv.getBoundingClientRect().height + 20; // Measure total height
+    document.body.removeChild(tempDiv); // Clean up
+
+    if (height < 50) {
+        return 50; // Minimum height
+    }
+    return height;
 }
 
 function renderGraph(data) {
@@ -565,7 +510,7 @@ function renderGraph(data) {
                 d.data.hidden = 0; // If the parent is hidden or partially visible, hide this node
             }
             if (d.data.hidden !== 0) {
-                const snippetHeight = getCodeSnippetHeight(d.data.snippetKey, d.data.codeSnippet, d.data.statement, d.data.hidden);
+                const snippetHeight = getCodeSnippetHeight(d.data.snippetKey, d.data.codeSnippet, d.data.hidden);
                 d.yOffset = yOffset;
                 yOffset += snippetHeight + gapSpace;
             }
@@ -646,7 +591,7 @@ function renderGraph(data) {
                 const availableWidth = width - margin.right - margin.left; // Total available width
                 return availableWidth - xPosition; // Adjust width to align right edge
             })
-            .attr("height", d => getCodeSnippetHeight(d.data.snippetKey, d.data.codeSnippet, d.data.statement, d.data.hidden))
+            .attr("height", d => getCodeSnippetHeight(d.data.snippetKey, d.data.codeSnippet, d.data.hidden))
             .html(d => {
                 // Description Text for Each Node
                 let descriptionHTML = "";
@@ -690,7 +635,7 @@ function renderGraph(data) {
                     `;
                 }
 
-                let borderStyle = d.data.isIntermediate ? "1px dashed #aaa" : "1px solid #aaa";
+                let borderStyle = "1px solid #aaa";
                 let displayment = (d.data.hidden !== 2) ? "display: none" : "";
 
                 let snippetLines = d.data.codeSnippet;
@@ -746,29 +691,19 @@ function renderGraph(data) {
                                 <code style="white-space: pre;" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">${snippetLines}</code>
                             </div>
                             <div class="tree-node-button-container">
-                                <!-- Replay Button -->
                                 <button class="replay-btn" title="Replay" data-node-id="${d.data.id}">
-                                    <i class="fas fa-undo-alt"></i> Replay
+                                    <i class="fas fa-undo-alt"></i> ${container.offsetWidth > 230 ? 'Replay' : ''}
                                 </button>
-                                <!-- Jump to Line Button -->
                                 <button class="jump-btn" title="Jump to Editor" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">
-                                    <i class="fas fa-arrow-right"></i> Go to line
+                                    <i class="fas fa-arrow-right"></i> ${container.offsetWidth > 230 ? 'Go to line' : ''}
                                 </button>
-                                <!-- Search Button -->
                                 <button class="search-btn" title="Search" data-node-id="${d.data.id}">
-                                    <i class="fas fa-search"></i> Search
+                                    <i class="fas fa-search"></i> ${container.offsetWidth > 230 ? 'Search' : ''}
                                 </button>
                             </div>
                         </div>
                     </div>
                 `;
-                if (!d.data.isIntermediate) {
-                    htmlContent += `
-                        <div class="tree-node-finding">
-                            <strong>Finding:</strong> ${d.data.statement}
-                        </div>
-                    `;
-                }
                 return htmlContent;
             });
 
@@ -816,68 +751,6 @@ function renderGraph(data) {
         });
 
         reAppendInsights();
-    }
-
-    // Function to calculate the height of a code snippet rectangle
-    function getCodeSnippetHeight(snippetKey, codeSnippet, statement, hidden = false) {
-        const maxHeight = 130; // Maximum height for a code snippet
-        if (hidden == 0) {
-            return 0; // Return 0 height for hidden nodes
-        }
-
-        const tempDiv = document.createElement("div");
-        tempDiv.style.visibility = "hidden";
-        tempDiv.style.position = "absolute";
-        tempDiv.style.font = "12px monospace";
-        tempDiv.style.width = `${container.offsetWidth - margin.right - margin.left - 30}px`;
-
-        // Include both the code snippet and statement in the temporary div
-        let htmlContent = `
-            <div class="tree-node">
-                <div class="node-description">Node description</div>
-            </div>
-        `;
-
-        if (hidden == 2) {
-            htmlContent += `
-            <div class="node-container-box">
-                <div class="tree-node code-box">
-                    <div class="code-container">
-                        <code style="white-space: pre;">${codeSnippet}</code>
-                    </div>
-                    <div class="tree-node-button-container">
-                        <button class="replay-btn" title="Replay"><i class="fas fa-undo-alt"></i> Replay</button>
-                        <button class="jump-btn" title="Jump to Editor"><i class="fas fa-arrow-right"></i> Go to line</button>
-                        <button class="search-btn" title="Search"><i class="fas fa-search"></i> Search</button>
-                    </div>
-                </div>
-            </div>`;
-            if (statement !== "") {
-                htmlContent += `
-                <div class="tree-node-finding">
-                    <strong>Finding:</strong> ${statement}
-                </div>
-            `;
-            }
-        }
-        tempDiv.innerHTML = htmlContent;
-
-        document.body.appendChild(tempDiv);
-        let height = tempDiv.getBoundingClientRect().height + 20; // Measure total height
-        document.body.removeChild(tempDiv); // Clean up
-
-        if (snippetKey in insightMap) {
-            height = maxHeight;
-        }
-
-        if (height < 50) {
-            return 50; // Minimum height
-        }
-
-        if (height > maxHeight) {
-            return maxHeight + 20; // Maximum height
-        }
-        return height;
     }
 
     function addStickyScroll() {
@@ -940,14 +813,14 @@ function renderGraph(data) {
                         // highlight the variable in the code line
                         const highlightedLine = ancestor.codeLine.replace(
                             new RegExp(`\\b${ancestor.variable}\\b`, "g"),
-                            `<span class="inline-variable">${ancestor.variable}</span>`
+                            `<span class="inline-code">${ancestor.variable}</span>`
                         );
 
                         return `
                             <div 
                                 class="sticky-header-item"
                                 data-node-id="${generateNodeId(ancestor)}">
-                                ${indent}${ancestor.fileUri.split('/').pop()}, line ${ancestor.lineNumber + 1}: <span class="inline-code">${highlightedLine}</span>
+                                ${indent}${ancestor.fileUri.split('/').pop()}, line ${ancestor.lineNumber + 1}: <span class="scroll-header-code">${highlightedLine}</span>
                             </div>`;
                     })
                     .join("");

@@ -27,7 +27,6 @@ export type TreeNode = {
     variable: string;
     codeLine: string;
     codeSnippet: string;
-    isIntermediate: boolean;
     statement: string;
     tool: "definition" | "reference" | "assignment";
     children: TreeNode[]; // Recursive definition
@@ -47,7 +46,6 @@ export class ExplorationGraph {
         variable: "fakeOrigin",
         codeLine: "",
         codeSnippet: "",
-        isIntermediate: false,
         statement: "",
         tool: "assignment",
         children: [],
@@ -115,32 +113,31 @@ export class ExplorationGraph {
             }
             const newNodeId = `${toUri}:${toLineNumber}:${variables[i]}`;
             const existingNode = this.nodes.get(newNodeId);
-            if (existingNode) {
-                return;
+            if (!existingNode) {
+                const fileUri = vscode.Uri.parse(toUri);
+                const document = await vscode.workspace.openTextDocument(fileUri);
+                const lineText = document.lineAt(toLineNumber).text.trim();
+                const { contextText, startContextLine } = await getSurroundingCode(fileUri, toLineNumber, toLineNumber);
+
+                // Create the new node
+                const newNode: Node = {
+                    id: newNodeId,
+                    fileUri: toUri,
+                    lineNumber: toLineNumber,
+                    variable: variables[i],
+                    codeLine: lineText,
+                    codeSnippet: contextText,
+                    edges: new Set(),
+                };
+
+                this.nodes.set(newNode.id, newNode);
             }
-            const fileUri = vscode.Uri.parse(toUri);
-            const document = await vscode.workspace.openTextDocument(fileUri);
-            const lineText = document.lineAt(toLineNumber).text.trim();
-            const { contextText, startContextLine } = await getSurroundingCode(fileUri, toLineNumber, toLineNumber);
-
-            // Create the new node
-            const newNode: Node = {
-                id: newNodeId,
-                fileUri: toUri,
-                lineNumber: toLineNumber,
-                variable: variables[i],
-                codeLine: lineText,
-                codeSnippet: contextText,
-                edges: new Set(),
-            };
-
-            this.nodes.set(newNode.id, newNode);
 
             // Create the edge
-            if (tool !== "origin" && fromId !== newNode.id) {
+            if (tool !== "origin" && fromId !== newNodeId) {
                 const newEdge: Edge = {
                     from: fromId,
-                    to: newNode.id,
+                    to: newNodeId,
                     tool: tool as "definition" | "reference" | "assignment",
                     variable: variables[i],
                 };
@@ -157,7 +154,8 @@ export class ExplorationGraph {
      */
     addEdge(edge: Edge) {
         // Check whether the edge already exists
-        if (this.edges.has(edge)) {
+        const existingEdge = Array.from(this.edges).find((e) => e.from === edge.from && e.to === edge.to);
+        if (existingEdge) {
             return;
         }
 
@@ -288,7 +286,6 @@ export class ExplorationGraph {
         const createOrGetNode = (nodeId: string, tool: string | null = null): any => {
             if (!nodeMap.has(nodeId)) {
                 const node = this.nodes.get(nodeId)!;
-                let isIntermediate = true;
                 let snippetKey = -1;
                 let statement = "";
 
@@ -298,7 +295,6 @@ export class ExplorationGraph {
                     if (key) {
                         snippetKey = typeof key === 'number' ? key : parseInt(key, 10);
                         statement = nodeIds[snippetKey].statement;
-                        isIntermediate = false;
                     }
                 }
 
@@ -310,7 +306,6 @@ export class ExplorationGraph {
                     variable: node.variable,
                     codeLine: node.codeLine,
                     codeSnippet: node.codeSnippet,
-                    isIntermediate: isIntermediate,
                     statement: statement,
                     tool: tool || "assignment", // Use the provided tool or a default value
                     children: [],
@@ -339,7 +334,16 @@ export class ExplorationGraph {
                 if (parentData) {
                     shortestPathTree.set(currentNodeId, { parent: parentData.parent, tool: parentData.tool }); // Record parent-child relationship
                 } else {
-                    console.warn(`Parent not found for node ${currentNodeId}.`);
+                    if (currentNodeId !== this.fakeOriginId) {
+                        const res = this.extractConnectedEdgesAndNodes(currentNodeId);
+                        res.nodeIds.forEach((childId) => {
+                            console.warn(`Child not found for node ${currentNodeId}: ${childId}.`);
+                        });
+                        res.edges.forEach((edge) => {
+                            console.warn(`Edge not found for node ${currentNodeId}: ${edge.from} -> ${edge.to}.`);
+                        });
+                        console.warn(`Parent not found for node ${currentNodeId}.`);
+                    }
                 }
                 currentNodeId = parentData?.parent!;
             }
@@ -360,6 +364,37 @@ export class ExplorationGraph {
         }
 
         return this.tree;
+    }
+
+    /**
+     * Extracts all edges connected with the given node ID and the connected node IDs.
+     * @param currentNodeId - The ID of the node to find connected edges for.
+     * @returns An object containing the connected edges and node IDs.
+     */
+    extractConnectedEdgesAndNodes(currentNodeId: string): { edges: Edge[], nodeIds: string[] } {
+        const connectedEdges: Edge[] = [];
+        const connectedNodeIds: Set<string> = new Set();
+
+        // Find all edges where the current node is the source
+        this.edges.forEach(edge => {
+            if (edge.from === currentNodeId) {
+                connectedEdges.push(edge);
+                connectedNodeIds.add(edge.to);
+            }
+        });
+
+        // Find all edges where the current node is the target
+        this.edges.forEach(edge => {
+            if (edge.to === currentNodeId) {
+                connectedEdges.push(edge);
+                connectedNodeIds.add(edge.from);
+            }
+        });
+
+        return {
+            edges: connectedEdges,
+            nodeIds: Array.from(connectedNodeIds),
+        };
     }
 
     appendOrAddNodesToTree(
@@ -428,7 +463,6 @@ export class ExplorationGraph {
                         variable: node.variable,
                         codeLine: node.codeLine,
                         codeSnippet: node.codeSnippet,
-                        isIntermediate: node.id !== newNodeId,
                         statement: node.id === newNodeId ? statement : "",
                         tool: edge?.tool || "assignment",
                         children: [],

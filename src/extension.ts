@@ -83,10 +83,10 @@ function disposeAgentOnly() {
     console.log("Agent disposed, SidebarViewProvider is still active.");
 }
 
-export async function getQuestion(code: string) {
+export async function getQuestion() {
     return vscode.window.showInputBox({
         placeHolder: "What do you want to ask about this code?",
-        prompt: `The line of code is ${code}`
+        prompt: ``
     });
 }
 
@@ -106,7 +106,7 @@ async function askQuestionAboutCode(context: vscode.ExtensionContext, sidebarVie
     const endLine = selection.end.line;
 
     // Prompt user for the question
-    let query = await getQuestion(selectedText);
+    let query = await getQuestion();
     if (query === undefined) {
         return; // User canceled the input box
     } else if (query === "") {
@@ -224,7 +224,6 @@ class Agent {
         variable: "",
         codeLine: "",
         codeSnippet: "",
-        isIntermediate: false,
         statement: "",
         tool: "assignment",
         children: []
@@ -313,7 +312,6 @@ class Agent {
             variable: "",
             codeLine: "",
             codeSnippet: "",
-            isIntermediate: false,
             statement: "",
             tool: "assignment",
             children: []
@@ -347,7 +345,6 @@ class Agent {
             this._sidebarViewProvider.updatetitleQuestion(this._question);
         }
         this._followUpBranchNodeId = `${fileUri}:${lineNumber}:${variable}`;
-        console.log("Follow-up question graph ", this._tree, this._explorationGraph.nodes);
         this.runWorkflow(this._question, vscode.Uri.parse(fileUri), lineNumber, lineNumber);
     }
 
@@ -381,7 +378,7 @@ class Agent {
         // Loop to explore sub-problems
         while (!this._final_decision_sufficient && this._stepCounter < MAX_STEPS && !this.isStopped) {
             const startStep = new Date().getTime();
-
+            this._newExploredCodeLines = []; // Reset the new explored code lines
             if (!refinedOutput || !refinedOutput.sub_problems) {
                 console.error("Error: No sub-problems returned.");
                 break;
@@ -643,16 +640,9 @@ class Agent {
             );
 
             if (existingVariable && existingVariable.results.length > 0) {
-                task2Results.push({
-                    sub_question: subProblem.sub_question,
-                    tool: subProblem.tool,
-                    code_context: subProblem.code_context,
-                    filtered_results: existingVariable.results
-                });
                 continue;
             }
             // Perform the selected tool action (Go to Definition or Find References)
-            console.log(`Exploring "${variableName}" in ${fileUri.toString()} line ${lineNumber} with tool ${subProblem.tool}...`);
             const results = await this._runTool(fileUri, lineNumber, offset, subProblem);
 
             if (results.length === 0) {
@@ -785,16 +775,15 @@ class Agent {
             return results;
         }
         for (const location of locations) {
-            let totalVariables = [];
             const lineNumber = location instanceof vscode.Location
                 ? location.range.start.line
                 : (location as vscode.LocationLink).targetSelectionRange?.start.line ?? 0;
 
             const uri = location instanceof vscode.Location ? location.uri : location.targetUri;
             const fileUri = uri.toString();
-            const pathParts = fileUri.split("/");
+            let pathParts = fileUri.replace("file://", "").split("/");
             let includedFolder = pathParts.slice(0, -1).join("/");
-            if (this._fileExtensionsToExclude.some(ext => fileUri.includes(ext)) || this._primaryFolder.includes(includedFolder)) {
+            if (this._fileExtensionsToExclude.some(ext => fileUri.includes(ext)) || this._primaryFolder !== includedFolder) {
                 continue;
             }
 
@@ -827,15 +816,15 @@ class Agent {
 
             const sourceId = `${subProblem.code_context.file_uri}:${subProblem.code_context.line_number}:${variable}`;
             const resultNodeId = `${fileUri}:${lineNumber}:${variable}`;
-            this._explorationGraph.upsertNode(sourceId, fileUri, lineNumber, variable, subProblem.tool == 0 ? "definition" : "reference");
+            await this._explorationGraph.upsertNode(sourceId, fileUri, lineNumber, variable, subProblem.tool == 0 ? "definition" : "reference");
 
             // Analyze the code context for relevant variables
             const relevantVariables = await analyze(uri, lineNumber, variable); // after supporting class/function definitions, the full statement text could be different here.
             // Add each relevant variable as a separate result
-            relevantVariables.forEach((variableInfo: any) => {
+            for (const variableInfo of relevantVariables) {
                 const relevantResultNodeId = `${variableInfo.fileUri}:${variableInfo.lineNumber}:${variableInfo.variable}`;
                 if (relevantResultNodeId === resultNodeId) {
-                    return;
+                    continue;
                 }
                 const lineText = document.lineAt(variableInfo.lineNumber).text.trim();
 
@@ -846,13 +835,10 @@ class Agent {
                     full_statement: (lineText.includes(variableInfo.variable) && lineText.includes(";")) ? lineText : statementText,
                     variable: variableInfo.variable // Include the relevant variable
                 });
-                // Create result node if it doesn't already exist in the graph
-                this._explorationGraph.upsertNode(resultNodeId, variableInfo.fileUri, variableInfo.lineNumber, variableInfo.variable, "assignment");
-
-            });
+                await this._explorationGraph.upsertNode(resultNodeId, variableInfo.fileUri, variableInfo.lineNumber, variableInfo.variable, "assignment");
+            }
             // Add both the base result variable and the relevant variables to the variable name list
             const variables = [variable, ...relevantVariables.map((variableInfo: any) => variableInfo.variable)];
-            totalVariables.push(...variables);
             this._addOrUpdateExploredCodeLines(fileUri, startLineNum, endLineNum, statementText, variables);
             this._addToExploredFiles(vscode.Uri.parse(fileUri), document);
         }
@@ -993,7 +979,7 @@ class Agent {
                     return parts[parts.length - 1];
                 });
                 const variableKey = `${code.file_uri}:${lineNumber}`;
-                if (lineVariables && !uniqueVariables.has(variableKey)) {
+                if (lineVariables.length > 0 && !uniqueVariables.has(variableKey)) {
                     uniqueVariables.add(variableKey);
                     variableCount++;
                     newVariables.push({
@@ -1014,8 +1000,6 @@ class Agent {
     }
 
     async runTask3(task4Flag: boolean = false) {
-        console.warn("Running Task 3, processing ", this._newExploredCodeLines.length, " new code lines.");
-        this._sidebarViewProvider.updateSearchingContent(`Deciding next exploration variables from ${this._newExploredCodeLines.length} new code lines...`);
         let task3Output: {
             sub_problems: {
                 sub_question: string;
@@ -1042,6 +1026,8 @@ class Agent {
             exploredCodeLines = this._exploredCodeLines;
         }
         const { newVariables, variableCount, nextExploreVariables } = await this.filterInput(exploredCodeLines);
+        console.warn("Running Task 3, processing ", variableCount, " new code lines.");
+        this._sidebarViewProvider.updateSearchingContent(`Deciding next exploration variables from ${variableCount} new code lines...`);
 
         // If there are no new code lines to explore, directly run Task 4
         if (variableCount === 0) {
@@ -1069,7 +1055,6 @@ class Agent {
                 console.warn("Number of variables is below threshold. Add all of them into the next step.");
                 task3Output.sub_problems = nextExploreVariables;
             } else {
-                console.warn("Number of variables is above threshold. Splitting into batches and running Task 3.");
                 const batchSize = this._batchSize;
                 const batches = [];
 
@@ -1085,7 +1070,6 @@ class Agent {
                         refined_question: this._refined_question ?? "",
                         variables_wait_for_exploring: batch
                     };
-                    //console.log("Task 3 input: ", inputJson.variables_wait_for_exploring);
                     const response = await this._callAgentAPI(inputJson, 3, task3Schema);
                     return JSON.parse(response);
                 };
@@ -1098,7 +1082,7 @@ class Agent {
                 let nextStepSummaries: string[] = [];
 
                 for (const res of responses) {
-                    if (res.evaluations) combinedEvaluations.push(...res.evaluations);
+                    if (res.evaluations.length) combinedEvaluations.push(...res.evaluations);
                     if (res.next_step_summary) nextStepSummaries.push(res.next_step_summary);
                 }
 
@@ -1140,15 +1124,12 @@ class Agent {
                 task3Output = task4Output;
             }
         }
-        this._newExploredCodeLines = []; // Reset the new explored code lines
+
         console.log("Task 3 output: ", task3Output);
         return task3Output;
     }
 
     async runTask5(task2Results: Array<{ file_uri: string; line_number: number; code_line: string; full_statement: string; variables: Set<string> }>) {
-        console.warn("Running task 5, processing ", task2Results.length, " results.");
-        this._sidebarViewProvider.updateSearchingContent(`Evaluating the importance of ${task2Results.length} results gained in this exploration...`);
-
         const filteredResults = task2Results.filter(
             result => {
                 const isAlreadyInImportantSnippets = Array.from(this._importantCodeSnippets.values()).some(
@@ -1159,6 +1140,9 @@ class Agent {
                 return !isAlreadyInImportantSnippets && isNodeInGraph;
             }
         );
+
+        console.warn("Running task 5, processing ", filteredResults.length, " results.");
+        this._sidebarViewProvider.updateSearchingContent(`Evaluating the importance of ${filteredResults.length} results gained in this exploration...`);
 
         const batchSize = 10;
         const batches = [];
@@ -1285,7 +1269,7 @@ class Agent {
                             data-ref="${insight.reference}">
                             <h3>${insight.insightName}</h3>
                             <p>${insight.details}
-                                [<span class="citation-ref" data-ref="${insight.reference}">See how we found this</span>]
+                                [<span class="citation-ref" data-ref="${insight.reference}">see how I found this</span>]
                             </p>
                         </div>`;
                         const nodeId = this._explorationGraph.findNodeByLine(record.file_uri, record.line_number);
@@ -1345,14 +1329,14 @@ class Agent {
 
     async runTask7() {
         console.warn("Running Task 7.");
-        this._sidebarViewProvider.updateSearchingContent(`Deciding whether the exploration is sufficient based on a tree with ${this._explorationGraph.getNumberOfNodesInTree()}...`);
+        this._sidebarViewProvider.updateSearchingContent(`Deciding whether the exploration is sufficient based on ${this._importantCodeSnippets.length} code snippets...`);
         const inputJson = {
             task: 7,
             user_question: this._question,
             refined_question: this._refined_question ?? this._question,
             relevant_code: this._importantCodeSnippets
         };
-        //console.log("Task 7 input: ", inputJson);
+        console.log("Task 7 input: ", inputJson);
 
         const response = await this._callAgentAPI(inputJson, 7, task7Schema);
         const task7Output = JSON.parse(response);
@@ -1525,7 +1509,7 @@ class Agent {
                     - UI Components: Data binding, event handling, and rendering logic.
 
                     Reference Guidelines:
-                    - Every code_insight must include a snippetKey referencing the relevant code.
+                    - Each code_insight must include a snippetKey in the reference field, linking to the relevant code. Do not include snippetKey in the details.
                     - Each snippetKey should only be used once per insight.
                     - Do not reference snippetKey: -1 (it represents the root node).
 

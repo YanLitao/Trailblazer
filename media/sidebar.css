@@ -10,13 +10,11 @@ body {
 h1 {
     font-size: 1.2em;
     font-weight: bold;
-    margin: 10px;
 }
 
 h2 {
     font-size: 1.1em;
     font-weight: bold;
-    margin: 10px;
 }
 
 h3 {
@@ -24,7 +22,6 @@ h3 {
 }
 
 h4 {
-    margin: 0;
     font-size: 1em;
     font-weight: 300;
 }
@@ -40,13 +37,26 @@ h4 {
     margin-top: 10px;
 }
 
+.jump-btn {
+    border: 1px solid #ccc;
+    background-color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-weight: lighter;
+    cursor: pointer;
+    transition: background-color 0.3s, border-color 0.3s;
+}
+
+.jump-btn:hover {
+    background-color: #f5f5f5;
+    border-color: #888;
+}
+
 .final-answer {
     font-family: sans-serif;
     background-color: #ffffff;
-    border: 1px solid #e5e5e5;
-    border-radius: 12px;
     padding: 24px;
-    margin: 40px auto;
+    margin: 20px auto;
     max-width: 450px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
 }
@@ -93,6 +103,17 @@ h4 {
 .final-answer #toggle-details-btn {
     cursor: pointer;
     margin-top: 20px;
+    border: 1px solid #ccc;
+    background-color: white;
+    padding: 6px 12px;
+    font-weight: normal;
+    border-radius: 4px;
+    transition: all 0.2s ease-in-out;
+}
+
+.final-answer #toggle-details-btn:hover {
+    background-color: #f5f5f5;
+    border-color: #aaa;
 }
 
 .final-answer #details-container {
@@ -112,11 +133,11 @@ html {
 }
 
 .searching-status {
-    color: #ffa500;
+    color: black;
 }
 
 .paused-status {
-    color: pink;
+    color: darkgray;
 }
 
 .stop-status {
@@ -191,13 +212,18 @@ button.action-btn:hover {
     border: 1px solid #ccc;
 }
 
+.scroll-header-code {
+    font-family: Consolas, Monaco, 'Andale Mono', monospace;
+    font-size: 0.9em;
+}
+
 #preliminary-answer-text {
     font-weight: 300;
 }
 
 .insight {
     background-color: #f9f9f9;
-    border: 1px solid #e5e5e5;
+    border: none;
     border-radius: 6px;
     margin-bottom: 1.5rem;
     padding: 12px 16px;
@@ -269,7 +295,7 @@ button.action-btn:hover {
 
 .citation-ref {
     color: #007bff;
-    font-weight: normal;
+    font-weight: lighter;
     cursor: pointer;
     margin: 0;
 }
@@ -294,7 +320,7 @@ code {
     margin: 0;
     padding: 0;
     font-size: 0.9em;
-    font-weight: 200;
+    font-weight: 200 !important;
     text-shadow: none;
     background-color: rgb(0, 0, 0, 0);
     color: black;
@@ -395,10 +421,9 @@ code {
 }
 
 #graph-container .node-description {
-    white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-weight: bold;
+    font-weight: 200;
 }
 
 #graph-container .node-container-box {
@@ -406,11 +431,6 @@ code {
     border-radius: 6px;
     margin-bottom: 10px;
     overflow: hidden;
-}
-
-#graph-container .insight-in-container {
-    display: flex;
-    align-items: stretch;
 }
 
 .info-box {
@@ -484,9 +504,12 @@ code {
 }
 
 .node-container-box.insight-in-container {
-    display: flex;
-    align-items: flex-start;
-    max-height: 130px;
+    display: block;
+}
+
+.node-container-box.insight-in-container>* {
+    display: block;
+    width: 100%;
 }
 
 .tree-node.code-box {
@@ -502,11 +525,9 @@ code {
 }
 
 .insight-copy {
-    width: 40%;
     background-color: #eef6ff;
     padding: 10px;
     border: 1px solid #ddd;
-    overflow-y: auto;
 }
 
 .insight-copy h3 {
@@ -516,10 +537,17 @@ code {
 .node-container-box.insight-in-container .insight-copy {
     display: block;
     height: auto;
+    padding-bottom: 0;
 }
 
-.node-container-box.insight-in-container .tree-node.code-box {
-    width: 60%;
+.node-container-box.insight-in-container .insight-copy h3 {
+    font-size: 1em;
+}
+
+.node-container-box.insight-in-container .insight-copy p {
+    padding: 10px;
+    padding-left: 0;
+    font-weight: 200;
 }
 
 .tree-node-button-container {
@@ -533,8 +561,9 @@ code {
 .tree-node-button-container button {
     font-size: 12px;
     padding: 4px 6px;
-    border: 1px solid #ccc;
     border-radius: 4px;
+    border: 1px solid #ccc;
+    background-color: white;
     cursor: pointer;
 }
 
