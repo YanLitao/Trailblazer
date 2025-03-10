@@ -69,6 +69,8 @@ window.addEventListener('message', event => {
                     document.querySelectorAll('.removable').forEach((element) => {
                         element.style.display = 'none';
                     });
+                    const searchingContentDiv = document.getElementById('searching-content');
+                    searchingContentDiv.style.display = 'none';
                 }
             }
             break;
@@ -172,6 +174,8 @@ function followUpQuestionInput() {
     document.querySelectorAll('.removable').forEach((element) => {
         element.style.display = 'block';
     });
+    const searchingContentDiv = document.getElementById('searching-content');
+    searchingContentDiv.style.display = 'none';
     document.getElementById('final-answer-header').innerHTML = 'Preliminary Answer';
     document.getElementById('searching-content').style.display = 'block';
     updateStatus('Searching');
@@ -180,29 +184,6 @@ function followUpQuestionInput() {
     icon.classList.remove('fa-play');
     icon.classList.add('fa-pause');
 }
-
-const infoIcon = document.getElementById('info-icon');
-const infoBox = document.getElementById('info-box');
-
-// Show info-box when hovering over the icon
-infoIcon.addEventListener("mouseenter", function () {
-    infoBox.style.display = "block";
-});
-
-// Keep the info-box visible when the mouse is inside it
-infoBox.addEventListener("mouseenter", function () {
-    infoBox.style.display = "block";
-});
-
-// Hide info-box only when the mouse leaves both the icon and the box
-function hideInfoBox(event) {
-    if (!infoIcon.contains(event.relatedTarget) && !infoBox.contains(event.relatedTarget)) {
-        infoBox.style.display = "none";
-    }
-}
-
-infoIcon.addEventListener("mouseleave", hideInfoBox);
-infoBox.addEventListener("mouseleave", hideInfoBox);
 
 function findNodeBySnippetKey(node, snippetKey) {
     if (node.snippetKey === snippetKey) {
@@ -252,7 +233,7 @@ function updateNodeAndAncestors(treeNode, targetSnippetKey) {
 }
 
 document.addEventListener("click", function (event) {
-    let insightElement = event.target.closest(".insight");
+    let insightElement = event.target.closest(".jump-btn");
     let citationRefElement = event.target.closest(".citation-ref");
 
     // If the clicked element is within an `.insight`, trigger the file open event
@@ -426,7 +407,6 @@ function getCodeSnippetHeight(snippetKey, codeSnippet, hidden = false) {
                 </div>
                 <div class="tree-node-button-container">
                     <button class="replay-btn" title="Replay"><i class="fas fa-undo-alt"></i> Replay</button>
-                    <button class="jump-btn" title="Jump to Editor"><i class="fas fa-arrow-right"></i> Go to line</button>
                     <button class="search-btn" title="Search"><i class="fas fa-search"></i> Search</button>
                 </div>
             </div>
@@ -453,16 +433,13 @@ function renderGraph(data) {
     controlPanel.id = "control-panel";
     controlPanel.style.display = "none"; // Initially hidden
     controlPanel.innerHTML = `
-        <button id="start-over"><i class="fa-solid fa-backward-fast"></i></button>
         <button id="prev-step"><i class="fa-solid fa-backward-step"></i></button>
-        <button id="play-pause"><i class="fa-solid fa-pause"></i></button>
         <button id="next-step"><i class="fa-solid fa-forward-step"></i></button>
-        <button id="jump-to-end"><i class="fa-solid fa-forward-fast"></i></button>
         <button id="exit-replay"><i class="fa-solid fa-times"></i></button>
     `;
     container.appendChild(controlPanel);
 
-    const margin = { top: 20, right: 30, bottom: 20, left: 30 };
+    const margin = { top: 20, right: 0, bottom: 20, left: 30 };
 
     // Create the SVG container
     const svg = d3.select(container)
@@ -574,8 +551,8 @@ function renderGraph(data) {
             .style("font-size", "14px")
             .style("font-weight", "bold")
             .text(d => {
-                if (d.data.hidden === 1) return "+"; // Expand indicator
-                if (d.data.hidden === 2) return "-"; // Collapse indicator
+                if (d.data.hidden === 1) return "▸"; // Expand indicator
+                if (d.data.hidden === 2) return "▾"; // Collapse indicator
                 return ""; // No text if hidden = 0
             })
             .on("click", function (event, d) {
@@ -596,41 +573,35 @@ function renderGraph(data) {
                 // Description Text for Each Node
                 let descriptionHTML = "";
                 if (d.data.id === "fake-origin") {
-                    descriptionHTML = `<div class="node-description">Selected the code snippet: ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}.</div>
+                    descriptionHTML = `<div class="node-description">I started here (${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}). Then I started to look for information.</div>
                     `;
                 } else if (d.parent && d.parent.data.id === "fake-origin") {
                     // Node with fake-origin as parent
                     descriptionHTML = `
                         <div class="node-description">
-                            I explored <span class="inline-code">${d.data.variable}</span> 
-                            in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1} 
+                            I decided to look for more information about <span class="inline-code">${d.data.variable}</span>
                             from your selected code snippet.
                         </div>
                     `;
                 } else if (d.data.tool === "reference") {
                     // Reference Node
-                    const parentInfo = d.parent.data.variable;
                     descriptionHTML = `
                         <div class="node-description">
-                            I found <span class="inline-code">${d.data.variable}</span> 
-                            in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}
-                            is another reference to ${parentInfo}.
+                            This let me to this reference of <span class="inline-code">${d.data.variable}</span>.
                         </div>
                     `;
                 } else if (d.data.tool === "assignment") {
                     const parentInfo = d.parent.data.variable;
                     descriptionHTML = `
                         <div class="node-description">
-                            I found the derivation of <span class="inline-code">${d.data.variable}</span>
-                            in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}, related to ${parentInfo}.
+                            I found <span class="inline-code">${d.data.variable}</span>, which looked important and is based on ${parentInfo}.
                         </div>
                     `;
                 } else {
                     // Default Case
                     descriptionHTML = `
                         <div class="node-description">
-                            I found the definition of <span class="inline-code">${d.data.variable}</span>
-                            in ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}.
+                            This let me to this definition of <span class="inline-code">${d.data.variable}</span>.
                         </div>
                     `;
                 }
@@ -677,15 +648,12 @@ function renderGraph(data) {
                             );
 
                             // Highlight the full line
-                            return `<span class="code-line" style="background-color: #f9f9f9;">${highlightedLine}</span>`;
+                            return `<span class="code-line">${highlightedLine}</span>`;
                         }
                         return line;
                     }).join("\n");
                 }
 
-                // get the width of the button container
-                let startOverWidth = d.depth * nodeSize + 20;
-                let buttonContainerWidth = container.offsetWidth - startOverWidth;
                 let htmlContent = `
                     ${descriptionHTML}
                     <div class="node-container-box" id="container-${generateNodeId(d.data)}" data-snippet-key="${d.data.snippetKey}" style="border: ${borderStyle}; ${displayment};">
@@ -694,14 +662,17 @@ function renderGraph(data) {
                                 <code style="white-space: pre;" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">${snippetLines}</code>
                             </div>
                             <div class="tree-node-button-container">
+                                <div class="code-info">
+                                    ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}
+                                    <button class="jump-btn" title="Jump to Line" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">
+                                        <i class="fa-solid fa-file-import"></i>
+                                    </button>
+                                </div>
                                 <button class="replay-btn" title="Replay" data-node-id="${d.data.id}">
-                                    <i class="fas fa-undo-alt"></i> ${buttonContainerWidth > 240 ? 'Replay' : ''}
-                                </button>
-                                <button class="jump-btn" title="Jump to Editor" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">
-                                    <i class="fas fa-arrow-right"></i> ${buttonContainerWidth > 240 ? 'Go to line' : ''}
+                                    <i class="fa-solid fa-forward-step"></i></button>
                                 </button>
                                 <button class="search-btn" title="Search" data-node-id="${d.data.id}">
-                                    <i class="fas fa-search"></i> ${buttonContainerWidth > 240 ? 'Search' : ''}
+                                    <i class="fas fa-search"></i>
                                 </button>
                             </div>
                         </div>
@@ -888,16 +859,11 @@ function renderGraph(data) {
     window.addEventListener("scroll", ensureControlPanelVisibility);
 
     function updateButtonStates() {
-        document.getElementById("start-over").disabled = (currentStepIndex === 0);
         document.getElementById("prev-step").disabled = (currentStepIndex === 0);
         document.getElementById("next-step").disabled = (currentStepIndex >= currentNodes.length - 1);
-        document.getElementById("jump-to-end").disabled = (currentStepIndex >= currentNodes.length - 1);
 
-        // Update button styles
-        document.getElementById("start-over").style.backgroundColor = (currentStepIndex === 0) ? "#d3d3d3" : "#007acc";
         document.getElementById("prev-step").style.backgroundColor = (currentStepIndex === 0) ? "#d3d3d3" : "#007acc";
         document.getElementById("next-step").style.backgroundColor = (currentStepIndex >= currentNodes.length - 1) ? "#d3d3d3" : "#007acc";
-        document.getElementById("jump-to-end").style.backgroundColor = (currentStepIndex >= currentNodes.length - 1) ? "#d3d3d3" : "#007acc";
     }
 
     function animateLines(nodes) {
@@ -922,14 +888,7 @@ function renderGraph(data) {
 
         // Generate incoming and outgoing messages
         const { incomingMessage, outgoingMessage } = generateMessages(nodes, index);
-
-        // Schedule the next step
-        let timeout = 8000; // Default timeout
-        if (index === 0) timeout = 5000;
-        currentTimeout = setTimeout(() => {
-            postReplayMessage(targetNode, incomingMessage, outgoingMessage);
-            stepThroughNodes(nodes, index + 1);
-        }, timeout);
+        postReplayMessage(targetNode, incomingMessage, outgoingMessage);
     }
 
     function generateMessages(nodes, index) {
@@ -970,25 +929,6 @@ function renderGraph(data) {
 
         return { incomingMessage, outgoingMessage };
     }
-
-    document.getElementById("play-pause").addEventListener("click", function () {
-        isPaused = !isPaused;
-
-        const icon = this.querySelector("i");
-        if (isPaused) {
-            icon.classList.remove("fa-pause");
-            icon.classList.add("fa-play");
-            if (currentTimeout) clearTimeout(currentTimeout); // Pause the animation
-        } else {
-            icon.classList.remove("fa-play");
-            icon.classList.add("fa-pause");
-
-            // Generate messages for the current step
-            const { incomingMessage, outgoingMessage } = generateMessages(currentNodes, currentStepIndex);
-            postReplayMessage(currentNodes[currentStepIndex], incomingMessage, outgoingMessage);
-            stepThroughNodes(currentNodes, currentStepIndex); // Resume the animation
-        }
-    });
 
     document.getElementById("prev-step").addEventListener("click", function () {
         if (currentStepIndex <= 0) return; // No previous step
@@ -1036,52 +976,6 @@ function renderGraph(data) {
 
         // Scroll to the next node
         document.getElementById(`node-${generateNodeId(nextNode.data)}`).scrollIntoView({ behavior: "smooth", block: "center" });
-        updateButtonStates();
-    });
-
-    document.getElementById("start-over").addEventListener("click", function () {
-        if (!currentNodes.length) return; // No nodes to process
-
-        const firstNode = currentNodes[0]; // Get the first node
-
-        // Reset opacity for all nodes and links
-        svg.selectAll(".node, .link").style("opacity", 0.2);
-
-        // Generate messages for the first step
-        const { incomingMessage, outgoingMessage } = generateMessages(currentNodes, 0);
-        postReplayMessage(firstNode, incomingMessage, outgoingMessage);
-
-        // Restart the animation
-        currentStepIndex = 0; // Reset the step index
-        stepThroughNodes(currentNodes, currentStepIndex);
-
-        updateButtonStates();
-    });
-
-    document.getElementById("jump-to-end").addEventListener("click", function () {
-        if (!currentNodes.length) return; // No nodes to process
-
-        const lastNode = currentNodes[currentNodes.length - 1]; // Get the last node
-
-        // Set opacity for all nodes and links in the path
-        currentNodes.forEach((node, index) => {
-            d3.select(`#node-${generateNodeId(node.data)}`).style("opacity", 1); // Highlight node
-            if (index > 0) {
-                const previousNode = currentNodes[index - 1];
-                d3.select(`#link-${generateNodeId(previousNode.data)}-${generateNodeId(node.data)}`).style("opacity", 1); // Highlight link
-            }
-        });
-
-        // Generate messages for the last step
-        const { incomingMessage, outgoingMessage } = generateMessages(currentNodes, currentNodes.length - 1);
-        postReplayMessage(lastNode, incomingMessage, outgoingMessage);
-
-        // Update the step index to the last node
-        currentStepIndex = currentNodes.length - 1;
-
-        // Scroll to the last node
-        document.getElementById(`node-${generateNodeId(lastNode.data)}`).scrollIntoView({ behavior: "smooth", block: "center" });
-
         updateButtonStates();
     });
 

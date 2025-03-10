@@ -643,7 +643,6 @@ class Agent {
                 continue;
             }
 
-            console.log(`Exploring "${variableName}" near ${fileUri.toString()} line ${lineNumber} with tool ${subProblem.tool}.`);
             // Perform the selected tool action (Go to Definition or Find References)
             const results = await this._runTool(fileUri, lineNumber, offset, subProblem);
 
@@ -1240,13 +1239,8 @@ class Agent {
 
     private processFinalAnswer(task7Output: any): string {
         const { overview, code_insight } = task7Output.answer;
-
-        // Helper functions for markdown processing
-
-
-        // Process the "Overview" section
         const processOverview = (overview: string): string => {
-            return `<div class="overview"><h2>Overview</h2><p>${processMarkdown(overview)}</p></div>`;
+            return `<p>${processMarkdown(overview)}</p>`;
         };
 
         // Process each insight in the "Lifecycle" section
@@ -1264,13 +1258,13 @@ class Agent {
                     if (record.snippetKey == insight.reference) {
                         usedReferences.add(insight.reference);
                         processedHighlights += `
-                        <div class="insight" 
-                            data-file-uri="${record.file_uri || ''}" 
-                            data-line-number="${record.line_number || ''}" 
-                            data-ref="${insight.reference}">
+                        <div class="insight" data-ref="${insight.reference}">
                             <h3>${insight.insightName}</h3>
                             <p>${insight.details}
-                                [<span class="citation-ref" data-ref="${insight.reference}">see how I found this</span>]
+                                <button class="jump-btn" title="Jump to Editor" data-file-uri="${record.file_uri}" data-line-number="${record.line_number}">
+                                    <i class="fa-solid fa-file-import"></i>
+                                </button>
+                                [<span class="citation-ref" data-ref="${insight.reference}">check my work</span>]
                             </p>
                         </div>`;
                         const nodeId = this._explorationGraph.findNodeByLine(record.file_uri, record.line_number);
@@ -1302,7 +1296,7 @@ class Agent {
         const lifecycleAndInsightsContainer = `
             <div id="details-container" style="display: ${task7Output.final_decision_sufficient ? "block" : "none"};">
                 <div class="lifecycle">
-                    <h2>Highlights</h2>
+                    <h1>Target code tour</h1>
                     ${processLifecycle(code_insight)}
                 </div>
             </div>
@@ -1318,7 +1312,7 @@ class Agent {
         // Wrap the entire answer in a container div
         const processedAnswer = `
             <div class="final-answer">
-                <h1 id="final-answer-header" style="font-weight: bold;">${task7Output.final_decision_sufficient ? "Final Answer" : "Preliminary Answer"}:</h1>
+                <h1 id="final-answer-header">${task7Output.final_decision_sufficient ? "Final Answer" : "Preliminary Answer"}</h1>
                 ${processOverview(overview)}
                 ${toggleButton}
                 ${lifecycleAndInsightsContainer}

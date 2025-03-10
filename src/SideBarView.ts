@@ -164,77 +164,12 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     }
                 }
 
-                // Helper to get indents from a line
-                const getIndent = (line: string): string => {
-                    return line.match(/^\s*/)?.[0] || "";
-                };
-
-                const lineText = document.lineAt(lineNumber).text;
-                const indent = getIndent(lineText);
-
-                // Finding text decoration
-                let findingTextDecoration: vscode.TextEditorDecorationType | undefined;
-                if (finding) {
-                    const findingPosition = new vscode.Position(lineNumber + 1, 0);
-                    const findingRange = new vscode.Range(findingPosition, findingPosition);
-                    findingTextDecoration = vscode.window.createTextEditorDecorationType({
-                        after: {
-                            contentText: `${indent} Finding: ${finding}`, // Added an icon for clarity
-                            backgroundColor: "rgba(255, 255, 153, 0.9)", // Brighter yellow for visibility
-                            margin: "6px 0",
-                            border: "1px solid #ccc",
-                            fontWeight: "bold",
-                            textDecoration: "box-shadow: 2px 2px 4px rgba(0,0,0,0.2); padding: 4px; border-radius: 3px;",
-                        },
-                    });
-                    editor.setDecorations(findingTextDecoration, [findingRange]);
-                }
-
-                // Incoming message decoration
-                let incomingTextDecoration: vscode.TextEditorDecorationType | undefined;
-                if (incomingMessage) {
-                    const incomingPosition = new vscode.Position(lineNumber - 1, 0);
-                    const incomingRange = new vscode.Range(incomingPosition, incomingPosition);
-                    incomingTextDecoration = vscode.window.createTextEditorDecorationType({
-                        after: {
-                            contentText: `${indent} ${incomingMessage}`, // Added an inbox icon
-                            backgroundColor: "rgba(173, 216, 230, 0.9)", // Light blue for distinction
-                            margin: "6px 0",
-                            border: "1px solid #aaa",
-                            fontWeight: "bold",
-                            textDecoration: "box-shadow: 2px 2px 4px rgba(0,0,0,0.2); padding: 4px; border-radius: 3px;",
-                        },
-                    });
-                    editor.setDecorations(incomingTextDecoration, [incomingRange]);
-                }
-
-                // Outgoing message decoration
-                let outgoingTextDecoration: vscode.TextEditorDecorationType | undefined;
-                if (outgoingMessage) {
-                    const outgoingPosition = finding ? new vscode.Position(lineNumber + 2, 0) : new vscode.Position(lineNumber + 1, 0);
-                    const outgoingRange = new vscode.Range(outgoingPosition, outgoingPosition);
-                    outgoingTextDecoration = vscode.window.createTextEditorDecorationType({
-                        after: {
-                            contentText: `${indent} ${outgoingMessage}`, // Added an outbox icon
-                            backgroundColor: "rgba(204, 255, 204, 0.9)", // Light green for differentiation
-                            margin: "6px 0",
-                            border: "1px solid #999",
-                            fontWeight: "bold",
-                            textDecoration: "box-shadow: 2px 2px 4px rgba(0,0,0,0.2); padding: 4px; border-radius: 3px;",
-                        },
-                    });
-                    editor.setDecorations(outgoingTextDecoration, [outgoingRange]);
-                }
-
                 // Wait for 8 seconds
                 await new Promise((resolve) => setTimeout(resolve, 8000));
 
                 // Clean up all decorations
                 lineDecoration.dispose();
                 if (variableDecoration) variableDecoration.dispose();
-                if (findingTextDecoration) findingTextDecoration.dispose();
-                if (incomingTextDecoration) incomingTextDecoration.dispose();
-                if (outgoingTextDecoration) outgoingTextDecoration.dispose();
             } else {
                 // Show an input box and highlight until it is closed
                 try {
@@ -331,12 +266,11 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 <div id="header">
                     <div class="header-divs">Searching for answer to "<span id="title-question">${this._question}</span>"</div>
                     <div class="code-box header-divs">
-                        Selected code:
-                        <br>
-                        <code>${stripLineIndentation(this._selectedCode)}</code>
+                        Starting point
                         <button class="jump-btn" title="Jump to Editor" data-file-uri="${this._initialFileUri}" data-line-number="${this._initialLineNumber}">
-                            <i class="fas fa-arrow-right"></i> Go to line
+                            <i class="fa-solid fa-file-import"></i>
                         </button>
+                        <code>${stripLineIndentation(this._selectedCode)}</code>
                     </div>
                     <div id="agent-status" class="header-divs">
                         <div id="actions">
@@ -349,15 +283,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     <div id="searching-content" class="header-divs"></div>
                     <div id="answer-div"></div>
                 </div>
-                <h1>Exploration Steps 
-                    <span class="info-icon" id="info-icon">i</span>
-                </h1>
+                <h1>Code base walkthrough</h1>
                 <div id="info-box" class="info-box">
-                    This visualization shows how your AI agent explores the codebase using VSCode tools of 
-                    <strong>"Go to Definition"</strong> and <strong>"Find References"</strong>, along with AST analysis. 
-                    The agent only decides the next steps and summarizes findings to build an answer.  
-                    <br><br>
-                    This is <strong>not</strong> a call graph or dependency graph—it's a guided code exploration using standard developer tools.
+                    Below, you can see all of the things I found as I walked through the code base to answer your question. I found all of these things using code analysis (e.g., jumping to definitions or references). You might get something out of seeing what I saw.
                 </div>
                 <div id="graph-container"></div>
                 <script src="${html2pdfJS}"></script>
