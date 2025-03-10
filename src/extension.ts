@@ -1264,7 +1264,7 @@ class Agent {
                                 <button class="jump-btn" title="Jump to Editor" data-file-uri="${record.file_uri}" data-line-number="${record.line_number}">
                                     <i class="fa-solid fa-file-import"></i>
                                 </button>
-                                [<span class="citation-ref" data-ref="${insight.reference}">check my work</span>]
+                                (<span class="citation-ref" data-ref="${insight.reference}">check my work</span>)
                             </p>
                         </div>`;
                         const nodeId = this._explorationGraph.findNodeByLine(record.file_uri, record.line_number);
@@ -1296,7 +1296,7 @@ class Agent {
         const lifecycleAndInsightsContainer = `
             <div id="details-container" style="display: ${task7Output.final_decision_sufficient ? "block" : "none"};">
                 <div class="lifecycle">
-                    <h1>Target code tour</h1>
+                    <h1>Descriptive tour of code</h1>
                     ${processLifecycle(code_insight)}
                 </div>
             </div>
@@ -1305,7 +1305,7 @@ class Agent {
         // Add a button to toggle the visibility of the container
         const toggleButton = `
             <button id="toggle-details-btn" onclick="toggleDetails()">
-                ${task7Output.final_decision_sufficient ? "Hide Details" : "Show Details"}
+                ${task7Output.final_decision_sufficient ? "Hide tour" : "Toggle descriptive tour of code"}
             </button>
         `;
 

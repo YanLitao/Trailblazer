@@ -1,11 +1,12 @@
 body {
-    font-family: sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
     font-weight: 300;
     line-height: 1.2;
     margin: 0;
     padding: 0;
-    padding-left: 30px;
-    background-color: white;
+    padding-left: 15px;
+    padding-right: 15px;
+    background-color: #fafafa;
 }
 
 h1 {
@@ -29,11 +30,11 @@ h4 {
 
 button {
     cursor: pointer;
-    background-color: white;
+    /* background-color: white; */
 }
 
 #header {
-    background-color: white;
+    /* background-color: white; */
 }
 
 #header .header-divs {
@@ -44,23 +45,26 @@ button {
     border: none;
     cursor: pointer;
     font-size: 0.9em;
-    color: #007bff;
+    color: #555555;
 }
 
 .jump-btn:hover {
-    color: #0056b3;
+    /* color: #0056b3; */
+    background-color: #dddddd;
 }
 
 #answer-div {
-    margin-top: 10px;
+    margin-top: 30px;
 }
 
-.answer-div b {
-    font-weight: 300;
+#answer-div b {
+    /* font-weight: 300; */
+    font-weight: lighter;
+    font-style: italic;
 }
 
 .final-answer {
-    font-family: sans-serif;
+    /* font-family: sans-serif; */
 }
 
 .final-answer h1 {
@@ -107,12 +111,12 @@ button {
 }
 
 .final-answer #toggle-details-btn:hover {
-    background-color: #f5f5f5;
-    border-color: #aaa;
+    background-color: #dddddd;
+    /* border-color: #aaa; */
 }
 
 .final-answer #details-container {
-    margin-top: 20px;
+    margin-top: 5px;
 }
 
 html {
@@ -121,6 +125,7 @@ html {
 
 #agent-status-text {
     font-weight: 200;
+    margin-right: 1em;
 }
 
 .idle-status {
@@ -169,19 +174,24 @@ html {
 #actions {
     max-width: 200px;
     display: flex;
-    justify-content: space-between;
+    /* justify-content: space-between; */
 }
 
 button.action-btn {
-    padding: 3px 10px;
-    color: #007bff;
+    /* padding: 3px 10px; */
+    margin-right: 5px;
+    color: #555555;
+    /* color: #007bff; */
+    /* border: 0.5x solid lightgrey; */
+    /* border-radius: 2px; */
     border: none;
     cursor: pointer;
     font-size: 0.9em;
 }
 
 button.action-btn:hover {
-    color: #0056b3;
+    /* color: #0056b3; */
+    background-color: #dddddd;
 }
 
 .task-details {
@@ -216,7 +226,12 @@ button.action-btn:hover {
 
 .insight {
     border: none;
-    margin-bottom: 1.5rem;
+    margin-bottom: .5rem;
+}
+
+.insight h3 {
+    margin-top: 0;
+    margin-bottom: 0;
 }
 
 .highlight {
@@ -251,7 +266,7 @@ button.action-btn:hover {
 }
 
 .citation-ref {
-    color: #007bff;
+    color: 0056b3;
     font-weight: lighter;
     cursor: pointer;
     margin: 0;
@@ -284,6 +299,10 @@ code {
     font-family: monospace;
     white-space: pre;
     overflow-x: auto;
+}
+
+#walkthrough {
+    margin-top: 30px;
 }
 
 #graph-container {
@@ -414,7 +433,7 @@ code {
     display: flex;
     gap: 5px;
     justify-content: flex-end;
-    padding: 5px;
+    /* padding: 5px; */
     background: rgba(255, 255, 255, 0.9);
     position: relative;
 }
