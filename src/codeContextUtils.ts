@@ -494,18 +494,10 @@ export async function findCompleteStatementText(
         const ifBlockText = await extractSpecificIfElseBlock(fileUri, lineNumber);
         return ifBlockText;
     } else {
-        if (trimmedLine.includes("=")) {
-            isFunction = 0; // assignment
+        if (trimmedLine.includes("class")) {
+            isFunction = 4; // class
         } else if (trimmedLine.endsWith(",")) {
             isFunction = 0; // destructuring assignment
-        } else if (trimmedLine.includes("function ")) {
-            isFunction = 1; // function definition
-        } else if (trimmedLine.includes("=>")) {
-            isFunction = 2; // arrow function
-        } else if (trimmedLine.includes("class")) {
-            isFunction = 4; // class
-        } else if (trimmedLine.includes("(")) {
-            isFunction = 3; // function call
         } else {
             return { statementText: lineText, startLineNum: lineNumber, endLineNum: lineNumber };
         }
@@ -939,17 +931,9 @@ export async function analyze(
 
     if (trimmedLine.includes("class")) {
         isFunction = 4; // class
-    } /* else if (trimmedLine.includes("function ")) {
-        return normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber);
-    } else if (trimmedLine.includes("=>")) {
-        return normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber);
-    } */ else if (trimmedLine.endsWith(",")) {
+    } else if (trimmedLine.endsWith(",")) {
         isFunction = 0; // destructuring assignment
-    } /* else if (trimmedLine.includes("=") && !trimmedLine.includes("==") && !trimmedLine.includes("===")) {
-        isFunction = 0; // assignment
-    } else if (trimmedLine.endsWith("{")) {
-        return normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber);
-    }  */else {
+    } else {
         return normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber);
     }
 
@@ -1139,10 +1123,10 @@ async function extractSpecificIfElseBlock(
 }
 
 export async function test() {
-    /*     const fileUri = vscode.Uri.file("/Users/litaoyan/Documents/Research/dataflow/material-ui-master/packages/mui-base/src/unstable_useModal/ModalManager.ts");
-        const lineNumber = 88;
-        const inputVariable = "handleContainer";
-    
-        const results = await analyze(fileUri, lineNumber, inputVariable);
-        console.log(results); */
+    /* const fileUri = vscode.Uri.file("/Users/litaoyan/Documents/Research/dataflow/material-ui-master/packages/mui-joy/src/Autocomplete/Autocomplete.tsx");
+    const lineNumber = 639;
+    const inputVariable = "option";
+
+    const results = await analyze(fileUri, lineNumber, inputVariable);
+    console.log(results); */
 }

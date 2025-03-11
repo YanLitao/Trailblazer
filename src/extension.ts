@@ -65,6 +65,9 @@ export function activate(context: vscode.ExtensionContext) {
         }),
         vscode.commands.registerCommand('extension.followUpQuestion', (userInput, fileUri, lineNumber, variable) => {
             agent?.followUpQuestion(userInput, fileUri, lineNumber, variable);
+        }),
+        vscode.commands.registerCommand('extension.showNewInformation', () => {
+            agent?.showTree();
         })
     );
 
@@ -333,7 +336,7 @@ class Agent {
 
     async terminateAgent() {
         let task7Output = await this.runTask7();
-        this._sidebarViewProvider.addAnswer(task7Output);
+        this._sidebarViewProvider.showAnswer(task7Output);
     }
 
     followUpQuestion(userInput: string, fileUri: string, lineNumber: number, variable: string) {
@@ -346,6 +349,12 @@ class Agent {
         }
         this._followUpBranchNodeId = `${fileUri}:${lineNumber}:${variable}`;
         this.runWorkflow(this._question, vscode.Uri.parse(fileUri), lineNumber, lineNumber);
+    }
+
+    showTree() {
+        if (this._sidebarViewProvider) {
+            this._sidebarViewProvider.updateGraphVisualization(this._tree);
+        }
     }
 
     async runWorkflow(question: string, uri: vscode.Uri, startLine: number, endLine: number) {
@@ -389,8 +398,6 @@ class Agent {
                 continue;
             }
 
-            this._stepCounter++;
-
             // Task 2: Explore sub-problems
             const task2Results = await this.runTask2(refinedOutput.sub_problems);
 
@@ -410,6 +417,8 @@ class Agent {
             if (this._final_decision_sufficient || refinedOutput.sub_problems.length === 0) {
                 break;
             }
+
+            this._stepCounter++;
         }
 
         this._sidebarViewProvider.agentIsDone();
@@ -1258,7 +1267,11 @@ class Agent {
                     if (record.snippetKey == insight.reference) {
                         usedReferences.add(insight.reference);
                         processedHighlights += `
-                        <div class="insight" data-ref="${insight.reference}">
+                        <div class="insight" 
+                            data-file-uri="${record.file_uri}"
+                            data-line-number="${record.line_number}"
+                            data-ref="${insight.reference}"
+                        >
                             <h3>${insight.insightName}</h3>
                             <p>${insight.details}
                                 <button class="jump-btn" title="Open in code editor" data-file-uri="${record.file_uri}" data-line-number="${record.line_number}">
@@ -1290,7 +1303,9 @@ class Agent {
             if (renewGraph) {
                 this._tree = this._explorationGraph.findSmallestTree(this._previousParsedNodes);
                 //console.log("New tree: ", this._tree);
-                this._sidebarViewProvider.updateGraphVisualization(this._tree);
+                if (task7Output.final_decision_sufficient || this._stepCounter == 0) {
+                    this._sidebarViewProvider.updateGraphVisualization(this._tree);
+                }
             }
 
             return processedHighlights;
@@ -1351,16 +1366,13 @@ class Agent {
         }
         this._final_decision_sufficient = task7Output.final_decision_sufficient;
         this._sidebarViewProvider.updateSearchingContent(`I decided my exploration was ${this._final_decision_sufficient ? "sufficient" : "insufficient"}.`);
+        console.log("Task 7 output: ", task7Output);
         return this.processFinalAnswer(task7Output);
     }
 
     private async _updateStepResults(refinedOutput: any) {
         // Update sidebar and graph visualization with refinedOutput and important code snippets
-        if (this._updateFindings) {
-            this._sidebarViewProvider.showAnswer(refinedOutput.answer);
-        } else {
-            this._sidebarViewProvider.showAnswer(refinedOutput.answer);
-        }
+        this._sidebarViewProvider.showAnswer(refinedOutput.answer);
         this._updateFindings = false;
     }
 

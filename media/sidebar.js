@@ -74,6 +74,7 @@ window.addEventListener('message', event => {
                     });
                     const searchingContentDiv = document.getElementById('searching-content');
                     searchingContentDiv.style.display = 'none';
+                    document.getElementById('new-info').style.display = "none";
                 }
             }
             break;
@@ -87,6 +88,15 @@ window.addEventListener('message', event => {
             break;
         case 'updateSearchingContent':
             updateSearchingContent(message.content);
+            break;
+        case 'newInformationAvailable':
+            document.getElementById('new-info').style.display = "block";
+            document.getElementById('new-info-btn').addEventListener('click', function () {
+                vscode.postMessage({
+                    command: 'showNewInformation'
+                });
+            });
+            console.log("New information available:", message);
             break;
     }
 });
@@ -266,13 +276,8 @@ document.addEventListener("click", function (event) {
         }
 
         // Redraw the graph
-        renderGraph(graphData);
-
-        // Scroll to the updated node
-        const updatedNode = document.getElementById(`node-${generateNodeId(findNodeBySnippetKey(graphData, refId))}`);
-        if (updatedNode) {
-            updatedNode.scrollIntoView({ behavior: "smooth" });
-        }
+        const nodeData = findNodeBySnippetKey(graphData, refId);
+        renderGraph(graphData, nodeData.id);
 
         // Also trigger file open if possible (using the closest `.insight` container)
         let closestInsight = citationRefElement.closest(".insight");
@@ -313,7 +318,7 @@ function updateStatus(status) {
     // Update text and class based on status
     switch (status) {
         case 'Searching':
-            statusText.textContent = 'Searching';
+            statusText.textContent = 'Searching...';
             statusText.className = 'searching-status';
             break;
         case 'Paused':
@@ -427,7 +432,7 @@ function getCodeSnippetHeight(snippetKey, codeSnippet, hidden = false) {
     return height;
 }
 
-function renderGraph(data) {
+function renderGraph(data, startWalkthrough = "") {
     const container = document.getElementById("graph-container");
     container.innerHTML = ""; // Clear previous graph
 
@@ -684,21 +689,14 @@ function renderGraph(data) {
             });
 
         nodeGroup.selectAll(".replay-btn").on("click", function (event) {
-            replayMode = true;
-            const nodeId = event.target.getAttribute("data-node-id");
-
-            // Find the clicked node by its ID
-            const clickedNode = nodes.find((node) => node.data.id === nodeId);
-
-            if (!clickedNode) {
-                console.error("Node not found!");
-                return;
+            let target = event.target;
+            if (target.tagName.toLowerCase() === 'i') {
+                // Redirect the event to the parent button
+                target = target.closest('button');
             }
+            const nodeId = target.getAttribute("data-node-id");
+            replayFromANode(nodeId);
 
-            currentNodes = findParentNodes(clickedNode);
-            currentStepIndex = 0;
-            ensureControlPanelVisibility();
-            animateLines(currentNodes);
         });
 
         nodeGroup.selectAll(".jump-btn").on("click", function (event) {
@@ -712,7 +710,13 @@ function renderGraph(data) {
         });
 
         nodeGroup.selectAll(".search-btn").on("click", function (event) {
-            const nodeId = event.target.getAttribute("data-node-id");
+            let target = event.target;
+            // Check if the clicked element is an <i> tag
+            if (target.tagName.toLowerCase() === 'i') {
+                // Redirect the event to the parent button
+                target = target.closest('button');
+            }
+            const nodeId = target.getAttribute("data-node-id");
             // Find the clicked node by its ID
             const clickedNode = nodes.find((node) => node.data.id === nodeId);
             const fileUri = clickedNode.data.fileUri;
@@ -796,7 +800,7 @@ function renderGraph(data) {
                             <div 
                                 class="sticky-header-item"
                                 data-node-id="${generateNodeId(ancestor)}">
-                                ${indent}${ancestor.fileUri.split('/').pop()}, line ${ancestor.lineNumber + 1}: <span class="scroll-header-code">${highlightedLine}</span>
+                                ${indent}<span class="scroll-header-code">${highlightedLine}</span> in ${ancestor.fileUri.split('/').pop()}, line ${ancestor.lineNumber + 1} 
                             </div>`;
                     })
                     .join("");
@@ -826,16 +830,19 @@ function renderGraph(data) {
         });
     }
 
-    function findParentNodes(node) {
-        const parents = [];
-        let current = node;
-
-        while (current) {
-            parents.push(current);
-            current = current.parent || null; // Ensure `parent` is checked
+    function findParentNodes(root, targetNodeId) {
+        function traverse(node, path) {
+            if (node.id === targetNodeId) {
+                return [...path, node]; // Return full path when the node is found
+            }
+            for (const child of node.children || []) {
+                const result = traverse(child, [...path, node]);
+                if (result) return result; // Return immediately when found
+            }
+            return null;
         }
 
-        return parents.reverse(); // Reverse to get top-down order
+        return traverse(root, []) || []; // Return an empty array if node not found
     }
 
     function ensureControlPanelVisibility() {
@@ -868,6 +875,20 @@ function renderGraph(data) {
         document.getElementById("next-step").style.backgroundColor = (currentStepIndex >= currentNodes.length - 1) ? "#d3d3d3" : "#007acc";
     }
 
+    function replayFromANode(nodeId) {
+        replayMode = true;
+
+        currentNodes = findParentNodes(data, nodeId);
+        if (currentNodes.length === 0) {
+            console.warn("Node not found in the tree:", nodeId);
+            return;
+        }
+
+        currentStepIndex = 0;
+        ensureControlPanelVisibility();
+        animateLines(currentNodes);
+    }
+
     function animateLines(nodes) {
         svg.selectAll(".node, .link").style("opacity", 0.2);
         stepThroughNodes(nodes, 0);
@@ -878,19 +899,43 @@ function renderGraph(data) {
         currentStepIndex = index;
         updateButtonStates();
         const sourceNode = nodes[index];
-        d3.select(`#node-${generateNodeId(sourceNode.data)}`).style("opacity", 1);
-        // scroll to the node in the graph
-        const nodeEle = document.getElementById(`node-${generateNodeId(sourceNode.data)}`);
-        nodeEle.scrollIntoView({ behavior: "smooth", block: "center" });
+        // Reset all node-container-box elements: hide nodes and remove border highlights
+        document.querySelectorAll(".node").forEach(node => {
+            node.style.opacity = "0.2";
+            node.style.border = "none";
+        });
+        document.querySelectorAll(".link").forEach(node => {
+            node.style.opacity = "0.2";
+        });
+        document.querySelectorAll(".node-container-box").forEach(nodeContainer => {
+            nodeContainer.style.border = "1px solid #ddd";
+        });
+        document.getElementById(`node-${generateNodeId(nodes[0])}`).style.opacity = "1";
+        // Make visible all nodes from the root up to the current node
+        for (let i = 1; i <= index; i++) {
+            const nodeContainer = document.getElementById(`node-${generateNodeId(nodes[i])}`);
+            if (nodeContainer) {
+                nodeContainer.style.opacity = "1";
+            }
+            const link = d3.select(`#link-${generateNodeId(nodes[i - 1])}-${generateNodeId(nodes[i])}`);
+            link.style("opacity", 1);
+        }
 
-        if (index >= nodes.length - 1) return; // Stop if we've reached the last node
+        // Highlight the border of the current (source) node
+        const sourceNodeContainer = document.getElementById(`container-${generateNodeId(sourceNode)}`);
+        if (sourceNodeContainer) {
+            sourceNodeContainer.style.border = "2px solid #007acc";
 
-        const targetNode = nodes[index + 1];
-        d3.select(`#link-${generateNodeId(sourceNode.data)}-${generateNodeId(targetNode.data)}`).style("opacity", 1);
+            // Scroll to the current node
+            const nodeEle = document.getElementById(`node-${generateNodeId(sourceNode)}`);
+            if (nodeEle) {
+                nodeEle.scrollIntoView({ behavior: "smooth", block: "center" });
+            }
 
-        // Generate incoming and outgoing messages
-        const { incomingMessage, outgoingMessage } = generateMessages(nodes, index);
-        postReplayMessage(targetNode, incomingMessage, outgoingMessage);
+            // Generate messages for replay
+            const { incomingMessage, outgoingMessage } = generateMessages(nodes, index);
+            postReplayMessage(sourceNode, incomingMessage, outgoingMessage);
+        }
     }
 
     function generateMessages(nodes, index) {
@@ -898,17 +943,17 @@ function renderGraph(data) {
         let outgoingMessage = "";
 
         // Generate incoming message
-        if (index === 0 || nodes[index - 1].data.id === "fake-origin") {
+        if (index === 0 || nodes[index - 1].id === "fake-origin") {
             incomingMessage = "";
         } else {
             const previousNode = nodes[index - 1];
             const currentNode = nodes[index];
-            if (currentNode.data.tool === "definition") {
-                incomingMessage = `Found the definition of ${previousNode.data.variable}`;
-            } else if (currentNode.data.tool === "reference") {
-                incomingMessage = `Found another reference of ${previousNode.data.variable}`;
-            } else if (currentNode.data.tool === "assignment") {
-                incomingMessage = `${previousNode.data.variable} is assigned to ${currentNode.data.variable}.`;
+            if (currentNode.tool === "definition") {
+                incomingMessage = `Found the definition of ${previousNode.variable}`;
+            } else if (currentNode.tool === "reference") {
+                incomingMessage = `Found another reference of ${previousNode.variable}`;
+            } else if (currentNode.tool === "assignment") {
+                incomingMessage = `${previousNode.variable} is assigned to ${currentNode.variable}.`;
             }
         }
 
@@ -918,14 +963,14 @@ function renderGraph(data) {
         } else {
             const nextNode = nodes[index + 1];
             const currentNode = nodes[index];
-            if (currentNode.data.id === "fake-origin") {
-                outgoingMessage = `Next, explore ${nextNode.data.variable} from your selected code.`;
-            } else if (nextNode.data.tool === "definition") {
-                outgoingMessage = `Next, find the definition of ${currentNode.data.variable}`;
-            } else if (nextNode.data.tool === "reference") {
-                outgoingMessage = `Next, find another reference of ${currentNode.data.variable}`;
-            } else if (nextNode.data.tool === "assignment") {
-                outgoingMessage = `Next, find another variable that ${currentNode.data.variable} is assigned to.`;
+            if (currentNode.id === "fake-origin") {
+                outgoingMessage = `Next, explore ${nextNode.variable} from your selected code.`;
+            } else if (nextNode.tool === "definition") {
+                outgoingMessage = `Next, find the definition of ${currentNode.variable}`;
+            } else if (nextNode.tool === "reference") {
+                outgoingMessage = `Next, find another reference of ${currentNode.variable}`;
+            } else if (nextNode.tool === "assignment") {
+                outgoingMessage = `Next, find another variable that ${currentNode.variable} is assigned to.`;
             }
         }
 
@@ -934,51 +979,14 @@ function renderGraph(data) {
 
     document.getElementById("prev-step").addEventListener("click", function () {
         if (currentStepIndex <= 0) return; // No previous step
-
-        // Reset opacity of the current node and link
-        const currentNode = currentNodes[currentStepIndex];
-        const previousNode = currentNodes[currentStepIndex - 1];
-        d3.select(`#node-${generateNodeId(currentNode.data)}`).style("opacity", 0.2);
-        d3.select(`#link-${generateNodeId(previousNode.data)}-${generateNodeId(currentNode.data)}`).style("opacity", 0.2);
-
         currentStepIndex--; // Move back one step
-
-        // Restore opacity for the previous step
-        d3.select(`#node-${generateNodeId(previousNode.data)}`).style("opacity", 1);
-        if (currentStepIndex > 0) {
-            const secondPreviousNode = currentNodes[currentStepIndex - 1];
-            d3.select(`#link-${generateNodeId(secondPreviousNode.data)}-${generateNodeId(previousNode.data)}`).style("opacity", 1);
-        }
-
-        // Generate messages for the previous step
-        const { incomingMessage, outgoingMessage } = generateMessages(currentNodes, currentStepIndex);
-        postReplayMessage(previousNode, incomingMessage, outgoingMessage);
-
-        // Scroll to the previous node
-        document.getElementById(`node-${generateNodeId(previousNode.data)}`).scrollIntoView({ behavior: "smooth", block: "center" });
-        updateButtonStates();
+        stepThroughNodes(currentNodes, currentStepIndex);
     });
 
     document.getElementById("next-step").addEventListener("click", function () {
-        if (currentStepIndex >= currentNodes.length - 1) return; // No next step
-
-        const currentNode = currentNodes[currentStepIndex];
-        const nextNode = currentNodes[currentStepIndex + 1];
-
-        // Update opacity for the current step and next step
-        d3.select(`#node-${generateNodeId(currentNode.data)}`).style("opacity", 1);
-        d3.select(`#link-${generateNodeId(currentNode.data)}-${generateNodeId(nextNode.data)}`).style("opacity", 1);
-        d3.select(`#node-${generateNodeId(nextNode.data)}`).style("opacity", 1);
-
-        currentStepIndex++; // Move forward one step
-
-        // Generate messages for the next step
-        const { incomingMessage, outgoingMessage } = generateMessages(currentNodes, currentStepIndex);
-        postReplayMessage(nextNode, incomingMessage, outgoingMessage);
-
-        // Scroll to the next node
-        document.getElementById(`node-${generateNodeId(nextNode.data)}`).scrollIntoView({ behavior: "smooth", block: "center" });
-        updateButtonStates();
+        if (currentStepIndex < 0) return; // No previous step
+        currentStepIndex++; // Move back one step
+        stepThroughNodes(currentNodes, currentStepIndex);
     });
 
     // Define the exit-replay functionality
@@ -990,12 +998,7 @@ function renderGraph(data) {
         svg.selectAll(".node, .link").style("opacity", 1);
 
         // 3. Handle replay variables
-        isPaused = false; // Reset the pause state
         replayMode = false; // Reset the replay mode
-        if (currentTimeout) {
-            clearTimeout(currentTimeout); // Clear any ongoing timeout to stop replay
-            currentTimeout = null; // Reset the timeout reference
-        }
         currentNodes = []; // Clear the current replay nodes
         currentStepIndex = 0; // Reset the replay step index
     });
@@ -1003,10 +1006,10 @@ function renderGraph(data) {
     function postReplayMessage(node, incomingMessage, outgoingMessage) {
         vscode.postMessage({
             command: "replaySnippet",
-            fileUri: node.data.fileUri,
-            lineNumber: node.data.lineNumber,
-            variable: node.data.variable,
-            finding: node.data.statement,
+            fileUri: node.fileUri,
+            lineNumber: node.lineNumber,
+            variable: node.variable,
+            finding: node.statement,
             incomingMessage: incomingMessage,
             outgoingMessage: outgoingMessage
         });
@@ -1015,6 +1018,10 @@ function renderGraph(data) {
     // Initial render
     drawGraph();
     addStickyScroll();
+
+    if (startWalkthrough) {
+        replayFromANode(startWalkthrough);
+    }
 
     // Make the graph responsive
     window.addEventListener("resize", () => {

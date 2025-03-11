@@ -32,7 +32,8 @@
         {
           "type": "webview",
           "id": "search-copilot.sidebarView",
-          "name": "Exploration"
+          "name": "Exploration",
+          "icon": "resources/icon.svg"
         }
       ]
     }

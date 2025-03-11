@@ -37,14 +37,18 @@ button {
     margin-top: 10px;
 }
 
-.jump-btn, .replay-btn, .search-btn {
+.jump-btn,
+.replay-btn,
+.search-btn {
     border: none;
     cursor: pointer;
     font-size: 0.9em;
     color: #555555;
 }
 
-.jump-btn:hover, .replay-btn:hover, .search-btn:hover {
+.jump-btn:hover,
+.replay-btn:hover,
+.search-btn:hover {
     background-color: #dddddd;
 }
 
@@ -177,10 +181,23 @@ html {
     transition: opacity 0.5s ease-in-out;
 }
 
+#new-info {
+    display: none;
+    height: 30px;
+    background-color: rgb(217, 235, 242);
+    font-size: 1em;
+}
+
+#new-info-btn {
+    display: inline-block;
+    cursor: pointer;
+    text-decoration: underline;
+    font-style: italic;
+}
+
 #actions {
-    max-width: 200px;
+    max-width: 300px;
     display: flex;
-    /* justify-content: space-between; */
 }
 
 button.action-btn {
@@ -225,6 +242,7 @@ button.action-btn:hover {
 .scroll-header-code {
     font-family: monospace;
     font-size: 0.9em;
+    color: gray;
 }
 
 #preliminary-answer-text {
@@ -318,13 +336,13 @@ code {
     position: relative;
 }
 
-#graph-container #sticky-header {
+#sticky-header {
     display: none;
     position: sticky;
     top: 0;
-    background-color: #f9f9f9;
-    border-bottom: 1px solid #ccc;
-    padding: 5px 10px;
+    background-color: white;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    padding: 10px;
     font-size: 0.9em;
     z-index: 1000;
     white-space: nowrap;
@@ -332,11 +350,8 @@ code {
     text-overflow: ellipsis;
 }
 
-#graph-container #sticky-header .sticky-header-item {
+#sticky-header .sticky-header-item {
     cursor: pointer;
-    padding: 8px;
-    background: #f9f9f9;
-    border-bottom: 1px solid #eee;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

@@ -10,6 +10,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
     private _stepCounter: number = 1;
     private _initialFileUri: string = '';
     private _initialLineNumber: number = 0;
+    private _prelimaryAnswer: string = '';
 
     constructor(
         private readonly _context: vscode.ExtensionContext
@@ -49,6 +50,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 vscode.commands.executeCommand('extension.pauseAgent');
             } else if (message.command === 'continueAgent') {
                 vscode.commands.executeCommand('extension.continueAgent');
+            } else if (message.command === 'showNewInformation') {
+                this.addAnswer("", true);
+                vscode.commands.executeCommand('extension.showNewInformation');
             }
         });
     }
@@ -217,7 +221,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
         if (this._view) {
             this._view.webview.postMessage({ command: 'updateStatus', status: status });
         } else {
-            // Retry after 1 second if the view is not yet available, and continue retrying until it is
             console.log("Retrying to update agent status...");
             setTimeout(() => this._updateAgentStatus(status), 1000);
         }
@@ -226,7 +229,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
     // Example usage: Set agent status to "Searching"
     public agentIsRunning() {
         console.log("Agent is running");
-        this._updateAgentStatus('Searching...');
+        this._updateAgentStatus('Searching');
     }
 
     // Example usage: Set agent status to "Finished"
@@ -281,6 +284,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
                         </button>
                     </div>
                     <div id="searching-content" class="header-divs"></div>
+                    <div id="new-info" class="header-divs">
+                        I found new information. <button id="new-info-btn" title="Click to see new information">Update display below?</button>
+                    </div>
                     <div id="answer-div"></div>
                 </div>
                 <div id="walkthrough">
@@ -311,22 +317,30 @@ export class SidebarView implements vscode.WebviewViewProvider {
     }
 
     public async showAnswer(answerText: string) {
-        if (this._view) {
-
+        const isFinalAnswer = answerText.includes('<h1 id="final-answer-header">Answer</h1>');
+        console.log(`Final answer: ${isFinalAnswer}`);
+        if (isFinalAnswer) {
+            // Show the answer immediately if it's the final answer or if there's no preliminary answer yet
+            this.addAnswer(answerText, true);
+        } else if (this._prelimaryAnswer === '') {
+            this._prelimaryAnswer = answerText;
+            this.addAnswer(answerText, true);
+        } else {
+            this._prelimaryAnswer = answerText;
             this._view?.webview.postMessage({
-                command: 'updateAnswer',
-                answer: answerText
+                command: 'newInformationAvailable'
             });
-
-            this._stepCounter++;
         }
+        this._stepCounter++;
     }
 
-    public async addAnswer(answer: string) {
-        this._view?.webview.postMessage({
-            command: 'updateAnswer',
-            answer: answer
-        });
+    public async addAnswer(answer: string, updateFlag: boolean = false) {
+        if (updateFlag) {
+            this._view?.webview.postMessage({
+                command: 'updateAnswer',
+                answer: answer
+            });
+        }
     }
 
     private removeCircularReferences(node: TreeNode, seen = new Set()): any {
