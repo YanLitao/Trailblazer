@@ -421,7 +421,7 @@ class Agent {
     }
 
     async runTask1(uri: vscode.Uri, startLine: number, endLine: number) {
-        this._sidebarViewProvider.updateSearchingContent("Refining your question...");
+        this._sidebarViewProvider.updateSearchingContent("I am refining your question...");
         const fileUriString = uri.toString();
         const surroundingCode = await getLineTextFromRange(uri, startLine, endLine);
 
@@ -1261,10 +1261,13 @@ class Agent {
                         <div class="insight" data-ref="${insight.reference}">
                             <h3>${insight.insightName}</h3>
                             <p>${insight.details}
-                                <button class="jump-btn" title="Jump to Editor" data-file-uri="${record.file_uri}" data-line-number="${record.line_number}">
+                                <button class="jump-btn" title="Open in code editor" data-file-uri="${record.file_uri}" data-line-number="${record.line_number}">
                                     <i class="fa-solid fa-file-import"></i>
                                 </button>
-                                (<span class="citation-ref" data-ref="${insight.reference}">check my work</span>)
+                                <button class="follow-btn" title="Follow along with AI agent">
+                                    <i class="fa-solid fa-forward-step"></i>
+                                    <span class="citation-ref" data-ref="${insight.reference}">walk me here</span>
+                                </button>                            
                             </p>
                         </div>`;
                         const nodeId = this._explorationGraph.findNodeByLine(record.file_uri, record.line_number);
@@ -1312,7 +1315,7 @@ class Agent {
         // Wrap the entire answer in a container div
         const processedAnswer = `
             <div class="final-answer">
-                <h1 id="final-answer-header">${task7Output.final_decision_sufficient ? "Final Answer" : "Preliminary Answer"}</h1>
+                <h1 id="final-answer-header">${task7Output.final_decision_sufficient ? "Answer" : "Preliminary answer"}</h1>
                 ${processOverview(overview)}
                 ${toggleButton}
                 ${lifecycleAndInsightsContainer}
@@ -1347,7 +1350,7 @@ class Agent {
             }
         }
         this._final_decision_sufficient = task7Output.final_decision_sufficient;
-        this._sidebarViewProvider.updateSearchingContent(`Exploration is ${this._final_decision_sufficient ? "sufficient" : "insufficient"}.`);
+        this._sidebarViewProvider.updateSearchingContent(`I decided my exploration was ${this._final_decision_sufficient ? "sufficient" : "insufficient"}.`);
         return this.processFinalAnswer(task7Output);
     }
 

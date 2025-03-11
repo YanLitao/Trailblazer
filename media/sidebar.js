@@ -22,6 +22,9 @@ function reAppendInsights() {
             // Remove all .citation-ref spans inside this cloned container
             clonedInsightContainer.querySelectorAll('.citation-ref').forEach((ref) => ref.remove());
 
+            // Remove all buttons from this cloned container
+            clonedInsightContainer.querySelectorAll('button').forEach((button) => button.remove());
+
             // Append the cleaned insight container
             const codeBox = insightContainer.querySelector('.tree-node.code-box');
             if (codeBox) {
@@ -176,7 +179,7 @@ function followUpQuestionInput() {
     });
     const searchingContentDiv = document.getElementById('searching-content');
     searchingContentDiv.style.display = 'none';
-    document.getElementById('final-answer-header').innerHTML = 'Preliminary Answer';
+    document.getElementById('final-answer-header').innerHTML = 'Preliminary answer';
     document.getElementById('searching-content').style.display = 'block';
     updateStatus('Searching');
     const pauseButton = document.getElementById('pause-agent');
@@ -433,8 +436,8 @@ function renderGraph(data) {
     controlPanel.id = "control-panel";
     controlPanel.style.display = "none"; // Initially hidden
     controlPanel.innerHTML = `
-        <button id="prev-step"><i class="fa-solid fa-backward-step"></i></button>
-        <button id="next-step"><i class="fa-solid fa-forward-step"></i></button>
+        <button id="prev-step"><i class="fa-solid fa-backward-step"></i> previous step</button>
+        <button id="next-step"><i class="fa-solid fa-forward-step"></i> next step</button>
         <button id="exit-replay"><i class="fa-solid fa-times"></i></button>
     `;
     container.appendChild(controlPanel);
@@ -663,16 +666,16 @@ function renderGraph(data) {
                             <div class="tree-node-button-container">
                                 <div class="code-info">
                                     ${d.data.fileUri.split('/').pop()}, line ${d.data.lineNumber + 1}
-                                    <button class="jump-btn" title="Jump to Line" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">
+                                    <button class="jump-btn" title="Open in code editor" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">
                                         <i class="fa-solid fa-file-import"></i>
                                     </button>
-                                </div>
-                                <button class="replay-btn" title="Replay" data-node-id="${d.data.id}">
-                                    <i class="fa-solid fa-forward-step"></i></button>
-                                </button>
-                                <button class="search-btn" title="Search" data-node-id="${d.data.id}">
-                                    <i class="fas fa-search"></i>
-                                </button>
+                                    <button class="replay-btn" title="Step to here" data-node-id="${d.data.id}">
+                                        <i class="fa-solid fa-forward-step"></i></button>
+                                    </button>
+                                    <button class="search-btn" title="Continue search from here" data-node-id="${d.data.id}">
+                                        <i class="fas fa-search"></i>
+                                    </button>
+                                </div>                                
                             </div>
                         </div>
                     </div>

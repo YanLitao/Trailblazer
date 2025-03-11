@@ -1,7 +1,7 @@
 body {
     font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-    font-weight: 300;
-    line-height: 1.2;
+    font-weight: 200;
+    line-height: 1.4;
     margin: 0;
     padding: 0;
     padding-left: 15px;
@@ -37,14 +37,25 @@ button {
     margin-top: 10px;
 }
 
-.jump-btn {
+.jump-btn, .replay-btn, .search-btn {
     border: none;
     cursor: pointer;
     font-size: 0.9em;
     color: #555555;
 }
 
-.jump-btn:hover {
+.jump-btn:hover, .replay-btn:hover, .search-btn:hover {
+    background-color: #dddddd;
+}
+
+.follow-btn {
+    border: none;
+    cursor: pointer;
+    color: #555555;
+    font-size: 0.9em;
+}
+
+.follow-btn:hover {
     background-color: #dddddd;
 }
 
@@ -88,6 +99,11 @@ b {
     line-height: 1.6;
 }
 
+button {
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    font-weight: 200;
+}
+
 .final-answer #toggle-details-btn {
     cursor: pointer;
     font-size: 0.9em;
@@ -95,7 +111,7 @@ b {
     border: 1px solid #ccc;
     background-color: white;
     padding: 3px 6px;
-    font-weight: normal;
+    font-weight: 200;
     border-radius: 4px;
     transition: all 0.2s ease-in-out;
 }
@@ -202,7 +218,8 @@ button.action-btn:hover {
     font-size: 0.9em;
     padding: 0px 4px;
     border-radius: 3px;
-    border: 1px solid #ccc;
+    background-color: #eeeeee;
+    /* border: 1px solid #ccc; */
 }
 
 .scroll-header-code {
@@ -221,7 +238,7 @@ button.action-btn:hover {
 
 .insight h3 {
     margin-top: 0;
-    margin-bottom: 0;
+    margin-bottom: .2rem;
 }
 
 .highlight {
@@ -255,17 +272,16 @@ button.action-btn:hover {
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.citation-ref {
-    color: 0056b3;
-    font-weight: lighter;
+/* .citation-ref {
+    color: #0056b3;
     cursor: pointer;
     margin: 0;
-}
+} */
 
-.citation-ref:hover {
+/* .citation-ref:hover {
     color: #0056b3;
     text-decoration: underline;
-}
+} */
 
 .highlight-new {
     color: black;
@@ -389,6 +405,16 @@ code {
     overflow-x: auto;
 }
 
+.code-container .inline-code {
+    background-color: rgb(203, 235, 248);
+    font-size: unset;
+    padding: 0 1px;
+}
+
+/* .code-container:hover {
+    background-color: #eeeeee;
+} */
+
 .code-line {
     color: gray;
 }
@@ -401,6 +427,10 @@ code {
 
 .insight-copy h3 {
     margin: 0;
+}
+
+.insight-copy p {
+    margin-top: 0.3rem;
 }
 
 .node-container-box.insight-in-container .insight-copy {
@@ -422,7 +452,9 @@ code {
     display: flex;
     gap: 5px;
     justify-content: flex-end;
-    background: rgba(255, 255, 255, 0.9);
+    /* background: rgba(255, 255, 255, 0.9); */
+    background-color: #f2f2f2;
+    border-top: .05px #dddddd solid;
     position: relative;
 }
 
@@ -437,28 +469,30 @@ code {
     font-size: 0.8em;
 }
 
-.tree-node:hover {
+/* .tree-node:hover {
     background-color: #dddddd;
-}
+} */
 
 #control-panel {
     position: fixed;
-    bottom: 50px;
+    bottom: 25px;
     left: 50%;
     transform: translateX(-50%);
+    display: inline-block;
+    white-space: nowrap;
     background-color: rgba(255, 255, 255, 0.9);
     border: 1px solid #ccc;
     border-radius: 8px;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
     padding: 10px 20px;
     display: none;
-    gap: 10px;
     z-index: 10;
 }
 
 #control-panel button {
     background-color: #007acc;
     color: #fff;
+    margin-right: 10px;
     border: none;
     border-radius: 4px;
     padding: 8px 12px;
