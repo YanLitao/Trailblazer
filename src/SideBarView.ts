@@ -268,15 +268,15 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     <div id="agent-status" class="header-divs">
                         <div id="actions">
                             <div id="status">Status: <span id="agent-status-text" class="idle-status">Idle</span></div>
-                            <button id="pause-agent" class="action-btn removable"><i class="fa-solid fa-pause"></i></button>
-                            <button id="stop-agent" class="action-btn removable"><i class="fa-solid fa-stop"></i></button>
-                            <button id="save-pdf" class="action-btn removable"><i class="fa-solid fa-file-pdf"></i></button>
+                            <button id="pause-agent" title="Pause agent" class="action-btn removable"><i class="fa-solid fa-pause"></i></button>
+                            <button id="stop-agent" title="Stop agent" class="action-btn removable"><i class="fa-solid fa-stop"></i></button>
+                            <button id="save-pdf" title="Save log of agent action" class="action-btn removable"><i class="fa-solid fa-file-pdf"></i></button>
                         </div>
                     </div>
                     <div class="code-box header-divs">
                         Starting point
                         <code>${stripLineIndentation(this._selectedCode)}</code>
-                        <button class="jump-btn" title="Jump to Editor" data-file-uri="${this._initialFileUri}" data-line-number="${this._initialLineNumber}">
+                        <button class="jump-btn" title="Open in code editor" data-file-uri="${this._initialFileUri}" data-line-number="${this._initialLineNumber}">
                             <i class="fa-solid fa-file-import"></i>
                         </button>
                     </div>
