@@ -33,10 +33,6 @@ button {
     /* background-color: white; */
 }
 
-#header {
-    /* background-color: white; */
-}
-
 #header .header-divs {
     margin-top: 10px;
 }
@@ -49,7 +45,6 @@ button {
 }
 
 .jump-btn:hover {
-    /* color: #0056b3; */
     background-color: #dddddd;
 }
 
@@ -57,14 +52,9 @@ button {
     margin-top: 30px;
 }
 
-#answer-div b {
-    /* font-weight: 300; */
+b {
     font-weight: lighter;
     font-style: italic;
-}
-
-.final-answer {
-    /* font-family: sans-serif; */
 }
 
 .final-answer h1 {
@@ -424,8 +414,7 @@ code {
 }
 
 .node-container-box.insight-in-container .insight-copy p {
-    padding: 10px;
-    padding-left: 0;
+    padding-right: 20px;
     font-weight: 200;
 }
 
@@ -433,32 +422,23 @@ code {
     display: flex;
     gap: 5px;
     justify-content: flex-end;
-    /* padding: 5px; */
     background: rgba(255, 255, 255, 0.9);
     position: relative;
 }
 
 .tree-node-button-container button {
-    font-size: 12px;
-    padding: 4px 6px;
-    border-radius: 4px;
-    border: 1px solid #ccc;
-    background-color: white;
+    border: none;
     cursor: pointer;
+    font-size: 0.9em;
+    color: #555555;
 }
 
-.tree-node button i {
-    color: #333;
-    font-size: 14px;
+.tree-node-button-container button i {
+    font-size: 0.8em;
 }
 
-.tree-node button:hover i {
-    color: #0078d7;
-}
-
-.tree-node button:hover {
-    background-color: #f0f0f0;
-    border-radius: 3px;
+.tree-node:hover {
+    background-color: #dddddd;
 }
 
 #control-panel {
