@@ -51,7 +51,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
             } else if (message.command === 'continueAgent') {
                 vscode.commands.executeCommand('extension.continueAgent');
             } else if (message.command === 'showNewInformation') {
-                console.log("Showing new information");
                 this.addAnswer("", true);
                 vscode.commands.executeCommand('extension.showNewInformation');
             }
@@ -222,14 +221,14 @@ export class SidebarView implements vscode.WebviewViewProvider {
         if (this._view) {
             this._view.webview.postMessage({ command: 'updateStatus', status: status });
         } else {
-            console.log("Retrying to update agent status...");
+            console.warn("Retrying to update agent status...");
             setTimeout(() => this._updateAgentStatus(status), 1000);
         }
     }
 
     // Example usage: Set agent status to "Searching"
     public agentIsRunning() {
-        console.log("Agent is running");
+        console.warn("Agent is running");
         this._updateAgentStatus('Searching');
     }
 
@@ -376,5 +375,9 @@ export class SidebarView implements vscode.WebviewViewProvider {
             command: 'renderGraph',
             data: treeWithoutCircularReferences
         });
+    }
+
+    public disposePreliminaryAnswer() {
+        this._prelimaryAnswer = '';
     }
 }

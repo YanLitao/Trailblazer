@@ -264,6 +264,7 @@ class Agent {
         });
 
         this._sidebarViewProvider = sidebarViewProvider;
+        this._sidebarViewProvider.disposePreliminaryAnswer();
         this._explorationGraph = new ExplorationGraph();
     }
 

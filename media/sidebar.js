@@ -382,7 +382,7 @@ function generateNodeId(data) {
 }
 
 // Function to calculate the height of a code snippet rectangle
-function getCodeSnippetHeight(snippetKey, codeSnippet, hidden = false) {
+function getForeignObjectHeight(nodeDepth, snippetKey, codeSnippet, hidden = false) {
     if (hidden == 0) {
         return 0; // Return 0 height for hidden nodes
     }
@@ -391,25 +391,23 @@ function getCodeSnippetHeight(snippetKey, codeSnippet, hidden = false) {
     tempDiv.style.visibility = "hidden";
     tempDiv.style.position = "absolute";
     tempDiv.style.font = "12px monospace";
-    tempDiv.style.width = `${container.offsetWidth - 60 - 30}px`;
+    tempDiv.style.width = `${container.offsetWidth - nodeDepth * 20 - 30}px`;
 
     // Include both the code snippet and statement in the temporary div
     let htmlContent = `
-        <div class="tree-node">
-            <div class="node-description">Node description</div>
-        </div>
+        <div class="node-description">Node description</div>
+        <div class="node-container-box">
     `;
 
     if (hidden == 2) {
         const snippetKeyStr = String(snippetKey);
-        if (insightMap.has(snippetKeyStr)) {
+        if (snippetKeyStr >= 0 && insightMap.has(snippetKeyStr)) {
             htmlContent += `
             <div class="insight-copy">
                 ${insightMap.get(snippetKeyStr)}
             </div>`;
         }
         htmlContent += `
-        <div class="node-container-box">
             <div class="tree-node code-box">
                 <div class="code-container">
                     <code style="white-space: pre;">${codeSnippet}</code>
@@ -457,7 +455,6 @@ function renderGraph(data, startWalkthrough = "") {
 
     let isPaused = false;
     let replayMode = false;
-    let currentTimeout = null;
     let currentNodes = [];
     let currentStepIndex = 0;
     let nodeSize = 20;
@@ -496,7 +493,7 @@ function renderGraph(data, startWalkthrough = "") {
                 d.data.hidden = 0; // If the parent is hidden or partially visible, hide this node
             }
             if (d.data.hidden !== 0) {
-                const snippetHeight = getCodeSnippetHeight(d.data.snippetKey, d.data.codeSnippet, d.data.hidden);
+                const snippetHeight = getForeignObjectHeight(d.depth, d.data.snippetKey, d.data.codeSnippet, d.data.hidden);
                 d.yOffset = yOffset;
                 yOffset += snippetHeight + gapSpace;
             }
@@ -577,7 +574,7 @@ function renderGraph(data, startWalkthrough = "") {
                 const availableWidth = width - margin.right - margin.left; // Total available width
                 return availableWidth - xPosition; // Adjust width to align right edge
             })
-            .attr("height", d => getCodeSnippetHeight(d.data.snippetKey, d.data.codeSnippet, d.data.hidden))
+            .attr("height", d => getForeignObjectHeight(d.depth, d.data.snippetKey, d.data.codeSnippet, d.data.hidden))
             .html(d => {
                 // Description Text for Each Node
                 let descriptionHTML = "";
