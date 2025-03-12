@@ -335,8 +335,7 @@ class Agent {
     }
 
     async terminateAgent() {
-        let task7Output = await this.runTask7();
-        this._sidebarViewProvider.showAnswer(task7Output);
+        await this.runTask7();
     }
 
     followUpQuestion(userInput: string, fileUri: string, lineNumber: number, variable: string) {
@@ -363,7 +362,24 @@ class Agent {
         this._final_decision_sufficient = false;
         this._question = question;
         const MAX_STEPS = 10;
-        let refinedOutput;
+        let refinedOutput: {
+            sub_problems: {
+                sub_question: string;
+                tool: number;
+                code_context: {
+                    file_uri: string;
+                    invoke_variable: string;
+                    code_line: string;
+                    line_number: number;
+                    full_statement: string;
+                };
+                reason: string;
+            }[];
+            next_step_summary: string;
+        } = {
+            sub_problems: [],
+            next_step_summary: "",
+        };
         const pathParts = uri.fsPath.split("/");
         this._primaryFolder = pathParts.slice(0, -1).join("/");
         console.log("Primary folder: ", this._primaryFolder);
@@ -402,14 +418,13 @@ class Agent {
             const task2Results = await this.runTask2(refinedOutput.sub_problems);
 
             // Run task 5 and Task 3 concurrently
-            const [task3Output, answerHtml] = await Promise.all([
+            const [task3Output, _] = await Promise.all([
                 this.runTask3(),// Task 3: Propose next steps
                 this.runTask5(task2Results)// task 5: Decide the importance of results
             ]);
 
             refinedOutput = task3Output;
-            refinedOutput.answer = answerHtml;
-            this._updateStepResults(refinedOutput);
+            this._updateFindings = false;
 
             const endStep = new Date().getTime();
             console.log(`Step ${this._stepCounter} took ${endStep - startStep}ms`);
@@ -780,7 +795,6 @@ class Agent {
     async _prepareResults(locations: vscode.Location[] | vscode.LocationLink[], subProblem: any) {
         const results: Array<{ file_uri: string, line_number: number, code_line: string, full_statement: string, variable: string }> = [];
         if (!locations || locations.length === 0) {
-            console.warn(`No result found for ${subProblem.code_context.invoke_variable} around line ${subProblem.code_context.line_number} with ${subProblem.tool}.`);
             return results;
         }
         for (const location of locations) {
@@ -1023,11 +1037,9 @@ class Agent {
                 reason: string;
             }[];
             next_step_summary: string;
-            answer: string;
         } = {
             sub_problems: [],
             next_step_summary: "",
-            answer: ""
         };
 
         let exploredCodeLines = this._newExploredCodeLines;
@@ -1056,7 +1068,6 @@ class Agent {
                 }[];
                 final_decision_sufficient: boolean;
                 next_step_summary: string;
-                answer: string;
             };
             task3Output = task4Output;
         } else {
@@ -1238,12 +1249,9 @@ class Agent {
             }
         });
 
-        let evaluationOutput = "";
         if (this._updateFindings) {
-            evaluationOutput = await this.runTask7();
+            await this.runTask7();
         }
-
-        return evaluationOutput;
     }
 
     private processFinalAnswer(task7Output: any): string {
@@ -1367,13 +1375,8 @@ class Agent {
         this._final_decision_sufficient = task7Output.final_decision_sufficient;
         this._sidebarViewProvider.updateSearchingContent(`I decided my exploration was ${this._final_decision_sufficient ? "sufficient" : "insufficient"}.`);
         console.log("Task 7 output: ", task7Output);
-        return this.processFinalAnswer(task7Output);
-    }
-
-    private async _updateStepResults(refinedOutput: any) {
-        // Update sidebar and graph visualization with refinedOutput and important code snippets
-        this._sidebarViewProvider.showAnswer(refinedOutput.answer);
-        this._updateFindings = false;
+        const answerHtml = this.processFinalAnswer(task7Output);
+        this._sidebarViewProvider.showAnswer(answerHtml);
     }
 
     async _callAgentAPI(inputJson: any, taskNumber: number, selectedSchema: any): Promise<string> {

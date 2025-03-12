@@ -51,6 +51,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
             } else if (message.command === 'continueAgent') {
                 vscode.commands.executeCommand('extension.continueAgent');
             } else if (message.command === 'showNewInformation') {
+                console.log("Showing new information");
                 this.addAnswer("", true);
                 vscode.commands.executeCommand('extension.showNewInformation');
             }
@@ -318,13 +319,12 @@ export class SidebarView implements vscode.WebviewViewProvider {
 
     public async showAnswer(answerText: string) {
         const isFinalAnswer = answerText.includes('<h1 id="final-answer-header">Answer</h1>');
-        console.log(`Final answer: ${isFinalAnswer}`);
         if (isFinalAnswer) {
             // Show the answer immediately if it's the final answer or if there's no preliminary answer yet
-            this.addAnswer(answerText, true);
+            this.addAnswer(answerText);
         } else if (this._prelimaryAnswer === '') {
             this._prelimaryAnswer = answerText;
-            this.addAnswer(answerText, true);
+            this.addAnswer(answerText);
         } else {
             this._prelimaryAnswer = answerText;
             this._view?.webview.postMessage({
@@ -336,6 +336,11 @@ export class SidebarView implements vscode.WebviewViewProvider {
 
     public async addAnswer(answer: string, updateFlag: boolean = false) {
         if (updateFlag) {
+            this._view?.webview.postMessage({
+                command: 'updateAnswer',
+                answer: this._prelimaryAnswer
+            });
+        } else {
             this._view?.webview.postMessage({
                 command: 'updateAnswer',
                 answer: answer

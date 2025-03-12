@@ -1123,10 +1123,10 @@ async function extractSpecificIfElseBlock(
 }
 
 export async function test() {
-    /* const fileUri = vscode.Uri.file("/Users/litaoyan/Documents/Research/dataflow/material-ui-master/packages/mui-joy/src/Autocomplete/Autocomplete.tsx");
+    const fileUri = vscode.Uri.file("/Users/litaoyan/Documents/Research/dataflow/material-ui-master/packages/mui-joy/src/Autocomplete/Autocomplete.tsx");
     const lineNumber = 639;
     const inputVariable = "option";
 
     const results = await analyze(fileUri, lineNumber, inputVariable);
-    console.log(results); */
+    console.log(results);
 }

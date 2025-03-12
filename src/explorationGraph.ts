@@ -336,8 +336,8 @@ export class ExplorationGraph {
                 } else {
                     if (currentNodeId !== this.fakeOriginId) {
                         const res = this.extractConnectedEdgesAndNodes(currentNodeId);
-                        res.nodeIds.forEach((childId) => {
-                            console.warn(`Child not found for node ${currentNodeId}: ${childId}.`);
+                        res.nodeIds.forEach((parentId) => {
+                            console.warn(`Parent not found for node ${currentNodeId}: ${parentId}.`);
                         });
                         res.edges.forEach((edge) => {
                             console.warn(`Edge not found for node ${currentNodeId}: ${edge.from} -> ${edge.to}.`);
@@ -374,14 +374,6 @@ export class ExplorationGraph {
     extractConnectedEdgesAndNodes(currentNodeId: string): { edges: Edge[], nodeIds: string[] } {
         const connectedEdges: Edge[] = [];
         const connectedNodeIds: Set<string> = new Set();
-
-        // Find all edges where the current node is the source
-        this.edges.forEach(edge => {
-            if (edge.from === currentNodeId) {
-                connectedEdges.push(edge);
-                connectedNodeIds.add(edge.to);
-            }
-        });
 
         // Find all edges where the current node is the target
         this.edges.forEach(edge => {

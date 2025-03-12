@@ -95,6 +95,7 @@ window.addEventListener('message', event => {
                 vscode.postMessage({
                     command: 'showNewInformation'
                 });
+                document.getElementById('new-info').style.display = "none";
             });
             console.log("New information available:", message);
             break;
@@ -997,7 +998,12 @@ function renderGraph(data, startWalkthrough = "") {
         // 2. Reset the opacity of all nodes and links
         svg.selectAll(".node, .link").style("opacity", 1);
 
-        // 3. Handle replay variables
+        // 3. Reset the border of all node-container-box elements
+        document.querySelectorAll(".node-container-box").forEach(nodeContainer => {
+            nodeContainer.style.border = "1px solid #ddd";
+        });
+
+        // 4. Handle replay variables
         replayMode = false; // Reset the replay mode
         currentNodes = []; // Clear the current replay nodes
         currentStepIndex = 0; // Reset the replay step index
