@@ -25,7 +25,12 @@ export function activate(context: vscode.ExtensionContext) {
     sidebarViewProvider = new SidebarView(context);
     sidebarDisposable = vscode.window.registerWebviewViewProvider(
         SidebarView.viewType,
-        sidebarViewProvider
+        sidebarViewProvider,
+        {
+            webviewOptions: {
+                retainContextWhenHidden: true // Set this option here
+            }
+        }
     );
     context.subscriptions.push(sidebarDisposable);
 
