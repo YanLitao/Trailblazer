@@ -528,7 +528,7 @@ async function extractVariables(
     if (extractedNode) {
         let results;
         if (isFunction == 1) {
-            results = extractFunctionDefineAndParameters(extractedNode, inputVariable, fileUri.toString());
+            results = await extractFunctionDefineAndParameters(fileUri, lineNumber, inputVariable, 0);
         } else if (isFunction == 0) {
             const { variables, functions } = extractVariablesAndFunctions(extractedNode);
             if (inputVariable === "") {
@@ -645,49 +645,105 @@ function extractVariablesAndFunctions(node: ts.Node): {
     return { variables, functions };
 }
 
-function extractFunctionDefineAndParameters(
-    node: ts.Node,
-    inputVariable: string,
-    fileUri: string
-): { fileUri: string; lineNumber: number; variable: string }[] {
-    const currentLayer = 0;
-    const results: { fileUri: string; lineNumber: number; variable: string }[] = [];
+async function extractFunctionDefineAndParameters(
+    fileUri: vscode.Uri,
+    lineNumber: number,
+    inputVariable: string = "",
+    depth: number = 0 // Pass depth to control recursion
+): Promise<any[]> {
+    const document = await vscode.workspace.openTextDocument(fileUri);
+    const fileContent = document.getText();
+    const sourceFile = ts.createSourceFile(
+        fileUri.toString(),
+        fileContent,
+        ts.ScriptTarget.ESNext,
+        true
+    );
 
-    // Helper function to traverse nodes
-    function visit(node: ts.Node, layer: number) {
-        if (layer >= 15) return; // Stop for deeply nested nodes
+    function visit(node: ts.Node): ts.FunctionDeclaration | ts.MethodDeclaration | ts.FunctionExpression | ts.ArrowFunction | null {
+        if (
+            ts.isFunctionDeclaration(node) ||
+            ts.isMethodDeclaration(node) ||
+            ts.isFunctionExpression(node) ||
+            ts.isArrowFunction(node)
+        ) {
+            const startPos = node.getStart(sourceFile);
+            const startLine = document.positionAt(startPos).line;
 
-        // Skip irrelevant nodes
-        if (ts.SyntaxKind.BreakKeyword <= node.kind && node.kind <= ts.SyntaxKind.OfKeyword ||
-            ts.SyntaxKind.TypePredicate <= node.kind && node.kind <= ts.SyntaxKind.ImportType ||
-            ts.SyntaxKind.Block == node.kind || ts.SyntaxKind.JSDoc == node.kind) {
-            return;
+            if (startLine === lineNumber) {
+                return node;
+            }
         }
 
-        // Check for identifiers
-        if (node.kind === ts.SyntaxKind.Identifier) {
-            // get line number of the node
-            const start = node.getStart();
-            const lineAndCharacter = ts.getLineAndCharacterOfPosition(node.getSourceFile(), start);
-            const line = lineAndCharacter.line;
-            const extractedText = node.getText();
-
-            if (extractedText === inputVariable) return;
-
-            results.push({
-                fileUri: fileUri,
-                lineNumber: line,
-                variable: extractedText
-            });
+        for (const child of node.getChildren(sourceFile)) {
+            const result = visit(child);
+            if (result) {
+                return result;
+            }
         }
 
-        // Traverse child nodes
-        node.getChildren().forEach((child) => visit(child, layer + 1));
+        return null;
     }
 
-    visit(node, currentLayer);
+    const functionNode = visit(sourceFile);
+    if (!functionNode) return [];
 
-    return results;
+    let allResults: Promise<any[]>[] = [];
+    let results: { fileUri: string; lineNumber: number; variable: string }[] = [];
+
+    // Extract function name (default to "anonymous" if none found)
+    let functionName = "anonymous";
+    if (ts.isFunctionDeclaration(functionNode) || ts.isMethodDeclaration(functionNode)) {
+        functionName = functionNode.name?.getText() || "anonymous";
+    } else if (ts.isFunctionExpression(functionNode) || ts.isArrowFunction(functionNode)) {
+        const parent = functionNode.parent;
+        if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) {
+            functionName = parent.name.getText();
+        }
+    }
+
+    // Get function start line
+    const funcStartPos = functionNode.getStart(sourceFile);
+    const funcLine = document.positionAt(funcStartPos).line;
+
+    // **Ensure function name is first in the results**
+    results.push({
+        fileUri: fileUri.toString(),
+        lineNumber: funcLine,
+        variable: functionName,
+    });
+
+    // Extract function parameters
+    functionNode.parameters.forEach((param) => {
+        const paramName = param.name.getText();
+        const paramStartPos = param.getStart(sourceFile);
+        const paramLine = document.positionAt(paramStartPos).line;
+        results.push({
+            fileUri: fileUri.toString(),
+            lineNumber: paramLine,
+            variable: paramName,
+        });
+    });
+
+    function collectDirectStatements(block: ts.Block) {
+        for (const statement of block.statements) {
+            const startPos = statement.getStart(sourceFile);
+            const statementLine = document.positionAt(startPos).line;
+
+            // Pass each direct statement to analyze function
+            allResults.push(analyze(fileUri, statementLine, inputVariable, depth + 1));
+        }
+    }
+
+    if (functionNode.body && ts.isBlock(functionNode.body)) {
+        collectDirectStatements(functionNode.body);
+    }
+
+    // Collect all async results
+    const bodyResults = await Promise.all(allResults).then(results => results.flat());
+
+    // **Ensure function name is always the first element**
+    return [...results, ...bodyResults];
 }
 
 function extractArrowFunctionAndParameters(node: ts.Node,
@@ -929,10 +985,18 @@ export async function analyze(
         return findIfElseDirectStatementsWithLines(fileUri, lineNumber, inputVariable, 0);
     }
 
-    if (trimmedLine.includes("class")) {
-        isFunction = 4; // class
+    if (/^\s*(export\s+)?class\s+\w+/.test(trimmedLine)) {
+        isFunction = 4; // Class declaration
+    } else if (/^\s*(export\s+)?(async\s+)?function\s+\w+\s*\(/.test(trimmedLine)) {
+        isFunction = 1; // Function declaration
     } else if (trimmedLine.endsWith(",")) {
         isFunction = 0; // destructuring assignment
+        if (inputVariable === "") {
+            const lineVariables = normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber);
+            if (lineVariables.length === 1) {
+                inputVariable = lineVariables[0].variable;
+            }
+        }
     } else {
         return normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber);
     }
@@ -959,7 +1023,7 @@ export function normalProcess(
         "interface", "is", "keyof", "let", "module", "namespace", "never", "new", "null", "number", "object", "of",
         "package", "private", "protected", "public", "readonly", "require", "return", "set", "static", "string",
         "super", "switch", "symbol", "this", "throw", "true", "try", "type", "typeof", "undefined", "unique", "unknown",
-        "var", "void", "while", "with", "yield"
+        "var", "void", "while", "with", "yield", "React", "useRef", "useEffect", "document", "window", "console", "log", "error", "warn"
     ]);
 
     // Extract potential identifiers
@@ -1123,10 +1187,10 @@ async function extractSpecificIfElseBlock(
 }
 
 export async function test() {
-    const fileUri = vscode.Uri.file("/Users/litaoyan/Documents/Research/dataflow/material-ui-master/packages/mui-joy/src/Autocomplete/Autocomplete.tsx");
-    const lineNumber = 644;
-    const inputVariable = "renderOption";
+    const fileUri = vscode.Uri.file("/Users/litaoyan/Documents/Research/dataflow/material-ui-master/packages/mui-base/src/FocusTrap/FocusTrap.tsx");
+    const lineNumber = 135;
+    const inputVariable = "";
 
     const results = await analyze(fileUri, lineNumber, inputVariable);
-    console.log(results);
+    console.log("results: ", results);
 }

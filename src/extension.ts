@@ -531,7 +531,9 @@ class Agent {
                         edges: new Set(),
                     });
 
-                    if (!fromID) fromID = `${fileUriString}:${variableInfo.lineNumber}:${variableInfo.variable}`;
+                    if (!fromID) {
+                        fromID = `${fileUriString}:${variableInfo.lineNumber}:${variableInfo.variable}`;
+                    }
                 }
             });
 
@@ -571,9 +573,10 @@ class Agent {
 
         this._sidebarViewProvider.updateSearchingContent("Refined your question into: " + task1Output.refined_question);
 
-        if (totalVariables <= this._numberOfVariablesThreshold) {
+        /* if (totalVariables <= this._numberOfVariablesThreshold) {
             task1Output.sub_problems = sub_problems;
-        }
+        } */
+        task1Output.sub_problems = sub_problems;
 
         for (const subProblem of task1Output.sub_problems) {
             const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, subProblem.code_context.line_number);
@@ -611,7 +614,6 @@ class Agent {
         /* if (this._sidebarViewProvider) {
             this._sidebarViewProvider.addTask1Results(task1Output);  // Add the Task 1 results to the sidebar
         } */
-
         return task1Output;
     }
 
