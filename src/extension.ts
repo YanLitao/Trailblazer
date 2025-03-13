@@ -459,6 +459,11 @@ class Agent {
                 const codeLine = await getLineText(uri, variableInfo.lineNumber);
 
                 sub_problems.push(
+                    // XXX(andrewhead): It feels like we should have *some* way to
+                    // follow function definitions on the RHS of an assignment, and
+                    // *some* way to follow a "return" statement to its calling sites.
+                    // Info(andrewhead): if you choose "Go to definition" on a return statement,
+                    // it will take you to the function signature!
                     {
                         sub_question: `Find references to "${variableInfo.variable}"`,
                         tool: 1, // Find References
@@ -469,7 +474,7 @@ class Agent {
                             line_number: variableInfo.lineNumber,
                             full_statement: statementText,
                         },
-                        reason: `Determine where the variable "${variableInfo.variable}" is being used in the codebase.`,
+                        reason: `See where else "${variableInfo.variable}" is used or called.`,
                     },
                     {
                         sub_question: `Go to the definition of "${variableInfo.variable}"`,
@@ -481,7 +486,7 @@ class Agent {
                             line_number: variableInfo.lineNumber,
                             full_statement: statementText,
                         },
-                        reason: `Locate the definition of the variable "${variableInfo.variable}" to understand its origin.`,
+                        reason: `Look at the definition of "${variableInfo.variable}".`,
                     },
                 );
 
