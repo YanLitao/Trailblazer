@@ -299,13 +299,21 @@ export function alignCodeLeft(code: string): string {
     return alignedLines.join('\n');
 }
 
+export type Result = {
+    fileUri: string;
+    lineNumber: number;
+    variable: string;
+    tool: string;
+    children: Result[];
+};
+
 function processOtherSide(
     variables: { name: string; layer: number; side: 'left' | 'right'; line: number }[],
     functions: { name: string; side: 'left' | 'right'; line: number } | null,
     inputVariable: string,
     fileUri: string
-): { fileUri: string; lineNumber: number; variable: string }[] {
-    const results: { fileUri: string; lineNumber: number; variable: string }[] = [];
+): Result[] {
+    const results: Result[] = [];
     let side: "left" | "right" | "none" = "none";
 
     // decide the side of inputVariable
@@ -322,6 +330,8 @@ function processOtherSide(
             fileUri,
             lineNumber: functions.line,
             variable: functions.name,
+            tool: "assignment",
+            children: [],
         });
         return results; // Return early since we've handled the function case
     }
@@ -332,7 +342,9 @@ function processOtherSide(
             results.push({
                 fileUri,
                 lineNumber: variable.line,
-                variable: variable.name
+                variable: variable.name,
+                tool: "assignment",
+                children: [],
             });
         }
     });
@@ -493,14 +505,14 @@ export async function findCompleteStatementText(
     if (trimmedLine.startsWith("if ") || trimmedLine.startsWith("else if ") || trimmedLine.startsWith("else {")) {
         const ifBlockText = await extractSpecificIfElseBlock(fileUri, lineNumber);
         return ifBlockText;
+    } else if (/^\s*(export\s+)?class\s+\w+/.test(trimmedLine)) {
+        isFunction = 4; // Class declaration
+    } else if (/^\s*(export\s+)?(async\s+)?function\s+\w+\s*\(/.test(trimmedLine)) {
+        isFunction = 1; // Function declaration
+    } else if (trimmedLine.endsWith(",")) {
+        isFunction = 0; // destructuring assignment
     } else {
-        if (trimmedLine.includes("class")) {
-            isFunction = 4; // class
-        } else if (trimmedLine.endsWith(",")) {
-            isFunction = 0; // destructuring assignment
-        } else {
-            return { statementText: lineText, startLineNum: lineNumber, endLineNum: lineNumber };
-        }
+        return { statementText: lineText, startLineNum: lineNumber, endLineNum: lineNumber };
     }
 
     const completeLineNode = await findNode(fileUri, lineNumber, isFunction);
@@ -523,10 +535,10 @@ async function extractVariables(
     lineNumber: number,
     inputVariable: string,
     isFunction: number = 0
-): Promise<{ fileUri: string; lineNumber: number; variable: string }[]> {
+): Promise<Result[]> {
     const extractedNode = await findNode(fileUri, lineNumber, isFunction);
     if (extractedNode) {
-        let results;
+        let results: Result[] = [];
         if (isFunction == 1) {
             results = await extractFunctionDefineAndParameters(fileUri, lineNumber, inputVariable, 0);
         } else if (isFunction == 0) {
@@ -537,14 +549,18 @@ async function extractVariables(
                     return {
                         fileUri: fileUri.toString(),
                         lineNumber: variable.line,
-                        variable: variable.name
+                        variable: variable.name,
+                        tool: "assignment",
+                        children: [],
                     };
                 });
                 if (functions) {
                     results.push({
                         fileUri: fileUri.toString(),
                         lineNumber: functions.line,
-                        variable: functions.name
+                        variable: functions.name,
+                        tool: "function",
+                        children: [],
                     });
                 }
             } else {
@@ -566,7 +582,9 @@ async function extractVariables(
                     newResults.push({
                         fileUri: result.fileUri,
                         lineNumber: result.lineNumber,
-                        variable: variable
+                        variable: variable,
+                        tool: result.tool,
+                        children: result.children,
                     });
                 }
             } else {
@@ -689,7 +707,7 @@ async function extractFunctionDefineAndParameters(
     if (!functionNode) return [];
 
     let allResults: Promise<any[]>[] = [];
-    let results: { fileUri: string; lineNumber: number; variable: string }[] = [];
+    let results: Result[] = [];
 
     // Extract function name (default to "anonymous" if none found)
     let functionName = "anonymous";
@@ -711,6 +729,8 @@ async function extractFunctionDefineAndParameters(
         fileUri: fileUri.toString(),
         lineNumber: funcLine,
         variable: functionName,
+        tool: "function",
+        children: [],
     });
 
     // Extract function parameters
@@ -718,20 +738,22 @@ async function extractFunctionDefineAndParameters(
         const paramName = param.name.getText();
         const paramStartPos = param.getStart(sourceFile);
         const paramLine = document.positionAt(paramStartPos).line;
-        results.push({
+        results[0].children.push({
             fileUri: fileUri.toString(),
             lineNumber: paramLine,
             variable: paramName,
+            tool: "parameter",
+            children: [],
         });
     });
 
-    function collectDirectStatements(block: ts.Block) {
+    async function collectDirectStatements(block: ts.Block) {
         for (const statement of block.statements) {
             const startPos = statement.getStart(sourceFile);
             const statementLine = document.positionAt(startPos).line;
 
             // Pass each direct statement to analyze function
-            allResults.push(analyze(fileUri, statementLine, inputVariable, depth + 1));
+            results[0].children.push(...await analyze(fileUri, statementLine, inputVariable));
         }
     }
 
@@ -749,10 +771,10 @@ async function extractFunctionDefineAndParameters(
 function extractArrowFunctionAndParameters(node: ts.Node,
     inputVariable: string,
     fileUri: string
-): { fileUri: string; lineNumber: number; variable: string }[] {
+): Result[] {
     const currentLayer = 0;
-    const functionResult: { fileUri: string; lineNumber: number; variable: string }[] = [];
-    const parameterResult: { fileUri: string; lineNumber: number; variable: string }[] = [];
+    const functionResult: Result[] = [];
+    const parameterResult: Result[] = [];
 
     for (const child of node.getChildren()) {
         // the function is on the right side of the equal sign with ts.SyntaxKind.Identifier
@@ -766,7 +788,9 @@ function extractArrowFunctionAndParameters(node: ts.Node,
             functionResult.push({
                 fileUri: fileUri,
                 lineNumber: line,
-                variable: extractedText
+                variable: extractedText,
+                tool: "function",
+                children: [],
             });
         } else {
             visit(child, currentLayer);
@@ -797,7 +821,9 @@ function extractArrowFunctionAndParameters(node: ts.Node,
             parameterResult.push({
                 fileUri: fileUri,
                 lineNumber: line,
-                variable: extractedText
+                variable: extractedText,
+                tool: "parameter",
+                children: [],
             });
         }
 
@@ -825,10 +851,10 @@ function extractFunctionCallAndParameters(
     node: ts.Node,
     inputVariable: string,
     fileUri: string
-): { fileUri: string; lineNumber: number; variable: string }[] {
+): Result[] {
     const currentLayer = 0;
-    const results: { fileUri: string; lineNumber: number; variable: string }[] = [];
-    const functions: { fileUri: string; lineNumber: number; variable: string }[] = [];
+    const results: Result[] = [];
+    const functions: Result[] = [];
 
     let functionSide = true; // we assume the nodes before SyntaxList are all function names
 
@@ -859,13 +885,17 @@ function extractFunctionCallAndParameters(
                 functions.push({
                     fileUri: fileUri,
                     lineNumber: line,
-                    variable: extractedText
+                    variable: extractedText,
+                    tool: "function",
+                    children: [],
                 });
             } else {
                 results.push({
                     fileUri: fileUri,
                     lineNumber: line,
-                    variable: extractedText
+                    variable: extractedText,
+                    tool: "parameter",
+                    children: [],
                 });
             }
         }
@@ -892,60 +922,62 @@ function extractFunctionCallAndParameters(
     return functions;
 }
 
-function extractClass(node: ts.Node,
-    inputVariable: string,
-    fileUri: string
-): { fileUri: string; lineNumber: number; variable: string }[] {
+function extractClass(node: ts.Node, inputVariable: string, fileUri: string): Result[] {
     const currentLayer = 0;
-    const properties: { fileUri: string; lineNumber: number; variable: string }[] = [];
-    const methods: { fileUri: string; lineNumber: number; variable: string }[] = [];
-    const results: { fileUri: string; lineNumber: number; variable: string }[] = [];
-
-    let propertySide = true;
-    let methodSide = false;
+    let className: string | null = null;
+    const properties: Result[] = [];
+    const methods: Result[] = [];
+    const results: Result[] = [];
 
     // Helper function to traverse nodes
     function visit(node: ts.Node, layer: number) {
         if (layer >= 15) return; // Stop for deeply nested nodes
 
         // Skip irrelevant nodes
-        if (ts.SyntaxKind.BreakKeyword <= node.kind && node.kind <= ts.SyntaxKind.OfKeyword ||
+        if (
+            ts.SyntaxKind.BreakKeyword <= node.kind && node.kind <= ts.SyntaxKind.OfKeyword ||
             ts.SyntaxKind.TypePredicate <= node.kind && node.kind <= ts.SyntaxKind.ImportType ||
-            ts.SyntaxKind.Block == node.kind || ts.SyntaxKind.JSDoc == node.kind) {
+            ts.SyntaxKind.Block == node.kind || ts.SyntaxKind.JSDoc == node.kind
+        ) {
             return;
         }
 
-        if (ts.SyntaxKind.PropertyDeclaration == node.kind) {
-            propertySide = true;
-            methodSide = false;
-        } else if (ts.SyntaxKind.MethodDeclaration == node.kind) {
-            propertySide = false;
-            methodSide = true;
+        // Check for class name
+        if (ts.isClassDeclaration(node) && node.name) {
+            className = node.name.getText();
         }
 
-        // Check for identifiers
-        if (node.kind === ts.SyntaxKind.Identifier) {
-            // get line number of the node
+        // Check for properties
+        if (ts.isPropertyDeclaration(node)) {
             const start = node.getStart();
             const lineAndCharacter = ts.getLineAndCharacterOfPosition(node.getSourceFile(), start);
             const line = lineAndCharacter.line;
-            const extractedText = node.getText();
+            const propertyName = node.name.getText();
 
-            if (extractedText === inputVariable) return;
-
-            if (propertySide) {
-                properties.push({
-                    fileUri: fileUri,
-                    lineNumber: line,
-                    variable: extractedText
-                });
-            } else if (methodSide) {
-                methods.push({
-                    fileUri: fileUri,
-                    lineNumber: line,
-                    variable: extractedText
-                });
+            if (propertyName === inputVariable) {
+                return;
             }
+            properties.push({
+                fileUri: fileUri,
+                lineNumber: line,
+                variable: propertyName,
+                tool: "property",
+                children: [],
+            });
+        }
+
+        // Check for methods
+        if (ts.isMethodDeclaration(node) && node.name) {
+            const start = node.getStart();
+            const lineAndCharacter = ts.getLineAndCharacterOfPosition(node.getSourceFile(), start);
+            const line = lineAndCharacter.line;
+            methods.push({
+                fileUri: fileUri,
+                lineNumber: line,
+                variable: node.name.getText(),
+                tool: "method",
+                children: [],
+            });
         }
 
         // Traverse child nodes
@@ -954,9 +986,16 @@ function extractClass(node: ts.Node,
 
     visit(node, currentLayer);
 
-    // combine properties and methods into results
-    results.push(...properties);
-    results.push(...methods);
+    if (className) {
+        const classResult: Result = {
+            fileUri: fileUri,
+            lineNumber: node.getStart(),
+            variable: className,
+            tool: "class",
+            children: [...properties, ...methods],
+        };
+        results.push(classResult);
+    }
 
     return results;
 }
@@ -966,8 +1005,7 @@ function extractClass(node: ts.Node,
 export async function analyze(
     fileUri: vscode.Uri,
     lineNumber: number,
-    inputVariable: string = "",
-    depth: number = 0 // Add depth control
+    inputVariable: string = ""
 ) {
     const lineText = await getLineText(fileUri, lineNumber);
     const trimmedLine = lineText.trim();
@@ -980,9 +1018,9 @@ export async function analyze(
     let isFunction = 0;
 
     // Handle if-else conditions
-    if (depth == 0 && (trimmedLine.startsWith("if ") || trimmedLine.startsWith("else if ") || trimmedLine.startsWith("else {"))) {
+    if (trimmedLine.startsWith("if ") || trimmedLine.startsWith("else if ") || trimmedLine.startsWith("else {")) {
         // If depth > 0, only return statements without further analysis
-        return findIfElseDirectStatementsWithLines(fileUri, lineNumber, inputVariable, 0);
+        return await findIfElseDirectStatementsWithLines(fileUri, lineNumber, inputVariable, 0);
     }
 
     if (/^\s*(export\s+)?class\s+\w+/.test(trimmedLine)) {
@@ -1013,8 +1051,9 @@ export function normalProcess(
     line: string,
     inputVariable: string,
     fileUri: string,
-    lineNumber: number
-): { fileUri: string; lineNumber: number; variable: string }[] {
+    lineNumber: number,
+    tool: string = "assignment"
+): Result[] {
 
     const keywords = new Set([
         "abstract", "as", "any", "async", "await", "boolean", "break", "case", "catch", "class", "const", "continue",
@@ -1023,7 +1062,8 @@ export function normalProcess(
         "interface", "is", "keyof", "let", "module", "namespace", "never", "new", "null", "number", "object", "of",
         "package", "private", "protected", "public", "readonly", "require", "return", "set", "static", "string",
         "super", "switch", "symbol", "this", "throw", "true", "try", "type", "typeof", "undefined", "unique", "unknown",
-        "var", "void", "while", "with", "yield", "React", "useRef", "useEffect", "document", "window", "console", "log", "error", "warn"
+        "var", "void", "while", "with", "yield", "React", "useRef", "useEffect", "document", "window", "console", "log", "error", "warn",
+        "HTMLDivElement", "EventTarget", "KeyboardEvent"
     ]);
 
     // Extract potential identifiers
@@ -1033,7 +1073,7 @@ export function normalProcess(
     return matches
         ? matches
             .filter(identifier => !keywords.has(identifier) && identifier !== inputVariable)
-            .map(variable => ({ fileUri, lineNumber, variable }))
+            .map(variable => ({ fileUri, lineNumber, variable, tool, children: [] }))
         : [];
 }
 
@@ -1042,7 +1082,7 @@ async function findIfElseDirectStatementsWithLines(
     lineNumber: number,
     inputVariable: string = "",
     depth: number = 0 // Pass depth to control recursion
-): Promise<any[]> {
+): Promise<Result[]> {
     const document = await vscode.workspace.openTextDocument(fileUri);
     const fileContent = document.getText();
     const sourceFile = ts.createSourceFile(
@@ -1075,15 +1115,21 @@ async function findIfElseDirectStatementsWithLines(
     const ifNode = visit(sourceFile);
     if (!ifNode) return [];
 
-    let allResults: Promise<any[]>[] = [];
+    let allResults: Result[] = [];
 
-    function collectDirectStatements(block: ts.Block) {
+    const condition = ifNode.expression.getText(sourceFile);
+    const conditionResults = normalProcess(condition, inputVariable, fileUri.toString(), lineNumber);
+    allResults.push(...conditionResults);
+
+    async function collectDirectStatements(block: ts.Block) {
         for (const statement of block.statements) {
             const startPos = statement.getStart(sourceFile);
             const statementLine = document.positionAt(startPos).line;
-
-            // Recursively analyze each statement, preventing deeper if-analysis
-            allResults.push(analyze(fileUri, statementLine, inputVariable, depth + 1));
+            const analyzedResults = await analyze(fileUri, statementLine, inputVariable);
+            // Recursively analyze each statement, preventing deeper if-analysis, adding them into each result's children in allResults
+            allResults.forEach(result => {
+                result.children.push(...analyzedResults);
+            });
         }
     }
 
@@ -1094,7 +1140,7 @@ async function findIfElseDirectStatementsWithLines(
         collectDirectStatements(ifNode.elseStatement);
     }
 
-    return Promise.all(allResults).then(results => results.flat());
+    return allResults;
 }
 
 async function extractSpecificIfElseBlock(
@@ -1187,10 +1233,10 @@ async function extractSpecificIfElseBlock(
 }
 
 export async function test() {
-    const fileUri = vscode.Uri.file("/Users/litaoyan/Documents/Research/dataflow/material-ui-master/packages/mui-base/src/FocusTrap/FocusTrap.tsx");
-    const lineNumber = 135;
+    /* const fileUri = vscode.Uri.file("/Users/litaoyan/Documents/Research/dataflow/material-ui-master/packages/mui-base/src/unstable_useModal/ModalManager.ts");
+    const lineNumber = 205;
     const inputVariable = "";
 
     const results = await analyze(fileUri, lineNumber, inputVariable);
-    console.log("results: ", results);
+    console.log("results: ", results); */
 }

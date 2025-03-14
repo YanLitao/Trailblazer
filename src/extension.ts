@@ -4,7 +4,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
 import { SidebarView } from './SideBarView';
-import { test, getLineText, getSurroundingCode, getLineNumber, normalProcess, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, processMarkdown, analyze, findCompleteStatementText } from './codeContextUtils';
+import { test, getLineText, getSurroundingCode, getLineNumber, Result, getLineTextFromRange, getAccurateLineNumber, searchVariableOffset, processMarkdown, analyze, findCompleteStatementText } from './codeContextUtils';
 import { ExplorationGraph, Node, TreeNode } from './explorationGraph';
 
 // API key for OpenAI
@@ -450,6 +450,94 @@ class Agent {
         }
     }
 
+    async processVariableTree(
+        uri: vscode.Uri,
+        statementText: string,
+        variableInfo: Result,
+        sub_problems: any,
+        startLine: number,
+        endLine: number,
+        parentID: string | null = null,
+        lineVariablesMap: Map<string, Set<string>> = new Map()
+    ) {
+        const codeLine = await getLineText(uri, variableInfo.lineNumber);
+        let codeSnippet = statementText;
+
+        if (statementText.split("\n").length === 1 || statementText.split("\n").length > 6) {
+            const { contextText } = await getSurroundingCode(uri, variableInfo.lineNumber, variableInfo.lineNumber);
+            codeSnippet = contextText;
+        }
+
+        const nodeId = `${variableInfo.fileUri}:${variableInfo.lineNumber}:${variableInfo.variable}`;
+        const newNode: Node = {
+            id: nodeId,
+            fileUri: variableInfo.fileUri,
+            lineNumber: variableInfo.lineNumber,
+            variable: variableInfo.variable,
+            codeLine: codeLine,
+            codeSnippet: codeSnippet,
+            edges: new Set(),
+        };
+
+        if (startLine <= variableInfo.lineNumber && variableInfo.lineNumber <= endLine && !this._followUpBranchNodeId) {
+            this._explorationGraph.addOrigin(newNode);
+        } else if (parentID) {
+            this._explorationGraph.upsertNode(parentID, variableInfo.fileUri, variableInfo.lineNumber, variableInfo.variable, "assignment");
+        }
+
+        // Track variables per line
+        const lineKey = variableInfo.lineNumber.toString();
+        if (!lineVariablesMap.has(lineKey)) {
+            lineVariablesMap.set(lineKey, new Set());
+        }
+        lineVariablesMap.get(lineKey)?.add(variableInfo.variable);
+
+        // Add sub-questions for analysis
+        sub_problems.push(
+            {
+                sub_question: `Find references to "${variableInfo.variable}"`,
+                tool: 1, // Find References
+                code_context: {
+                    file_uri: variableInfo.fileUri,
+                    invoke_variable: variableInfo.variable,
+                    code_line: codeLine,
+                    line_number: variableInfo.lineNumber,
+                    full_statement: statementText,
+                },
+                reason: `Determine where the variable "${variableInfo.variable}" is being used in the codebase.`,
+            },
+            {
+                sub_question: `Go to the definition of "${variableInfo.variable}"`,
+                tool: 0, // Go to Definition
+                code_context: {
+                    file_uri: variableInfo.fileUri,
+                    invoke_variable: variableInfo.variable,
+                    code_line: codeLine,
+                    line_number: variableInfo.lineNumber,
+                    full_statement: statementText,
+                },
+                reason: `Locate the definition of the variable "${variableInfo.variable}" to understand its origin.`,
+            }
+        );
+
+        // Recursively process children
+        for (const child of variableInfo.children) {
+            await this.processVariableTree(uri, statementText, child, sub_problems, startLine, endLine, nodeId, lineVariablesMap);
+        }
+    }
+
+    _extractVariables(variableInfos: Result[]): string[] {
+        let variables: string[] = [];
+
+        function traverse(variableInfo: Result) {
+            variables.push(variableInfo.variable);
+            variableInfo.children.forEach(traverse);
+        }
+
+        variableInfos.forEach(traverse);
+        return variables;
+    }
+
     async runTask1(uri: vscode.Uri, startLine: number, endLine: number) {
         this._sidebarViewProvider.updateSearchingContent("I am refining your question...");
         const fileUriString = uri.toString();
@@ -460,7 +548,6 @@ class Agent {
             this._explorationGraph.updateFakeOrigin(fileUriString, startLine, surroundingCode);
         }
 
-        const codeContext: { file_uri: string, line_number: number, code_line: string, variables: Set<string> }[] = [];
         let totalVariables = 0;
         let sub_problems: {
             sub_question: string;
@@ -474,82 +561,31 @@ class Agent {
             };
             reason: string;
         }[] = [];
-        let fromID = "";
 
         let sentenceStartLineNum = startLine;
+        const newVariables = [];
         // Split the surrounding code into lines
         const codeSentences = surroundingCode.split("\n");
         for (const [index, sentence] of codeSentences.entries()) {
             const extractedVariables = await analyze(uri, sentenceStartLineNum + index);
             const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, sentenceStartLineNum + index);
-            const codeLines = sentence.trim();
-            const variables = extractedVariables.map((variableInfo: any) => variableInfo.variable);
+            const variables = this._extractVariables(extractedVariables);
+            const lineVariablesMap = new Map<string, Set<string>>();
+            for (const variableInfo of extractedVariables) {
+                await this.processVariableTree(uri, statementText, variableInfo, sub_problems, startLine, endLine, null, lineVariablesMap);
+            }
 
-            extractedVariables.forEach(async (variableInfo: any) => {
-                const codeLine = await getLineText(uri, variableInfo.lineNumber);
+            for (const [lineKey, variablesSet] of lineVariablesMap.entries()) {
+                newVariables.push({
+                    file_uri: fileUriString,
+                    line_number: parseInt(lineKey),
+                    code_line: await getLineText(uri, parseInt(lineKey)),
+                    variables: Array.from(variablesSet)
+                });
+            }
 
-                sub_problems.push(
-                    {
-                        sub_question: `Find references to "${variableInfo.variable}"`,
-                        tool: 1, // Find References
-                        code_context: {
-                            file_uri: fileUriString,
-                            invoke_variable: variableInfo.variable,
-                            code_line: codeLine,
-                            line_number: variableInfo.lineNumber,
-                            full_statement: statementText,
-                        },
-                        reason: `Determine where the variable "${variableInfo.variable}" is being used in the codebase.`,
-                    },
-                    {
-                        sub_question: `Go to the definition of "${variableInfo.variable}"`,
-                        tool: 0, // Go to Definition
-                        code_context: {
-                            file_uri: fileUriString,
-                            invoke_variable: variableInfo.variable,
-                            code_line: codeLine,
-                            line_number: variableInfo.lineNumber,
-                            full_statement: statementText,
-                        },
-                        reason: `Locate the definition of the variable "${variableInfo.variable}" to understand its origin.`,
-                    },
-                );
-
-                if (startLine <= variableInfo.lineNumber && variableInfo.lineNumber <= endLine && !this._followUpBranchNodeId) {
-                    let codeSnippet = statementText;
-                    if (statementText.split("\n").length == 1) {
-                        const { contextText, startContextLine } = await getSurroundingCode(uri, variableInfo.lineNumber, variableInfo.lineNumber);
-                        codeSnippet = contextText;
-                    }
-                    this._explorationGraph.addOrigin({
-                        id: `${fileUriString}:${variableInfo.lineNumber}:${variableInfo.variable}`,
-                        fileUri: fileUriString,
-                        lineNumber: variableInfo.lineNumber,
-                        variable: variableInfo.variable,
-                        codeLine: codeLine,
-                        codeSnippet: codeSnippet,
-                        edges: new Set(),
-                    });
-
-                    if (!fromID) {
-                        fromID = `${fileUriString}:${variableInfo.lineNumber}:${variableInfo.variable}`;
-                    }
-                }
-            });
-
-
-            const lineNum = sentenceStartLineNum + index;
-            // get the variables with the same line number
-            // const variables = extractedVariables.filter((variableInfo: any) => variableInfo.lineNumber === lineNum).map((variableInfo: any) => variableInfo.variable);
-            codeContext.push({
-                file_uri: fileUriString,
-                line_number: lineNum,
-                code_line: codeLines,
-                variables: new Set(variables)
-            });
             this._addOrUpdateExploredCodeLines(fileUriString, startLineNum, endLineNum, statementText, variables);
-            //sentenceStartLineNum += codeLines.length;
-            totalVariables += extractedVariables.length;
+            totalVariables += variables.length;
         };
 
         let task1Output: any = {
@@ -562,7 +598,7 @@ class Agent {
             question: this._question,
             surrounding_code: surroundingCode,
             allowed_tools: allowedTools,
-            code_context: codeContext,
+            variables_wait_for_exploring: newVariables,
         };
 
         console.log("Task 1 input: ", inputJson);
@@ -573,47 +609,12 @@ class Agent {
 
         this._sidebarViewProvider.updateSearchingContent("Refined your question into: " + task1Output.refined_question);
 
+        console.log("Task 1 output: ", task1Output);
         /* if (totalVariables <= this._numberOfVariablesThreshold) {
             task1Output.sub_problems = sub_problems;
         } */
         task1Output.sub_problems = sub_problems;
 
-        for (const subProblem of task1Output.sub_problems) {
-            const { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, subProblem.code_context.line_number);
-            subProblem.code_context.file_uri = fileUriString; // when running the agent, sometimes the file_uri is not included in the input
-
-            if (!this._followUpBranchNodeId) {
-                // Create a node for each sub-problem and mark it as an invoking place
-                const nodeId = `${fileUriString}:${subProblem.code_context.line_number}:${subProblem.code_context.invoke_variable}`;
-                const codeLine = await getLineText(uri, subProblem.code_context.line_number);
-                let codeSnippet = statementText;
-                // const accurateLineNumber = getLineNumber(statementText, subProblem.code_context.invoke_variable, startLineNum);
-                if (statementText.split("\n").length == 1) {
-                    const { contextText, startContextLine } = await getSurroundingCode(uri, subProblem.code_context.line_number, subProblem.code_context.line_number);
-                    codeSnippet = contextText;
-                }
-                const newNode: Node = {
-                    id: nodeId,
-                    fileUri: fileUriString,
-                    lineNumber: subProblem.code_context.line_number,
-                    variable: subProblem.code_context.invoke_variable,
-                    codeLine: codeLine,
-                    codeSnippet: codeSnippet,
-                    edges: new Set(),
-                };
-                if (!fromID || startLine <= subProblem.code_context.line_number && subProblem.code_context.line_number <= endLine) {
-                    this._explorationGraph.addOrigin(newNode);
-                    if (!fromID) fromID = nodeId;
-                } else {
-                    this._explorationGraph.upsertNode(fromID, fileUriString, subProblem.code_context.line_number, subProblem.code_context.invoke_variable, "assignment");
-                }
-            }
-        }
-
-        // Update the sidebar view with Task 1 results after processing
-        /* if (this._sidebarViewProvider) {
-            this._sidebarViewProvider.addTask1Results(task1Output);  // Add the Task 1 results to the sidebar
-        } */
         return task1Output;
     }
 
@@ -800,6 +801,32 @@ class Agent {
         }
     }
 
+    async processRelevantVariable(variableInfo: Result, parentID: string, resultNodeId: string, statementText: string, document: vscode.TextDocument, results: any[]) {
+        const relevantResultNodeId = `${variableInfo.fileUri}:${variableInfo.lineNumber}:${variableInfo.variable}`;
+
+        if (relevantResultNodeId === resultNodeId) {
+            return; // Skip if it's the same as the base result
+        }
+
+        const lineText = document.lineAt(variableInfo.lineNumber).text.trim();
+
+        results.push({
+            file_uri: variableInfo.fileUri,
+            line_number: variableInfo.lineNumber,
+            code_line: lineText,
+            full_statement: (lineText.includes(variableInfo.variable) && lineText.includes(";")) ? lineText : statementText,
+            variable: variableInfo.variable // Include the relevant variable
+        });
+
+        // Use upsertNode to link it to the correct parent node
+        await this._explorationGraph.upsertNode(parentID, variableInfo.fileUri, variableInfo.lineNumber, variableInfo.variable, "assignment");
+
+        // Recursively process children, setting this node as their parent
+        for (const child of variableInfo.children) {
+            await this.processRelevantVariable(child, relevantResultNodeId, resultNodeId, statementText, document, results);
+        }
+    }
+
     async _prepareResults(locations: vscode.Location[] | vscode.LocationLink[], subProblem: any) {
         const results: Array<{ file_uri: string, line_number: number, code_line: string, full_statement: string, variable: string }> = [];
         if (!locations || locations.length === 0) {
@@ -851,25 +878,12 @@ class Agent {
 
             // Analyze the code context for relevant variables
             const relevantVariables = await analyze(uri, lineNumber, variable); // after supporting class/function definitions, the full statement text could be different here.
-            // Add each relevant variable as a separate result
             for (const variableInfo of relevantVariables) {
-                const relevantResultNodeId = `${variableInfo.fileUri}:${variableInfo.lineNumber}:${variableInfo.variable}`;
-                if (relevantResultNodeId === resultNodeId) {
-                    continue;
-                }
-                const lineText = document.lineAt(variableInfo.lineNumber).text.trim();
-
-                results.push({
-                    file_uri: variableInfo.fileUri,
-                    line_number: variableInfo.lineNumber,
-                    code_line: lineText,
-                    full_statement: (lineText.includes(variableInfo.variable) && lineText.includes(";")) ? lineText : statementText,
-                    variable: variableInfo.variable // Include the relevant variable
-                });
-                await this._explorationGraph.upsertNode(resultNodeId, variableInfo.fileUri, variableInfo.lineNumber, variableInfo.variable, "assignment");
+                await this.processRelevantVariable(variableInfo, resultNodeId, resultNodeId, statementText, document, results);
             }
             // Add both the base result variable and the relevant variables to the variable name list
-            const variables = [variable, ...relevantVariables.map((variableInfo: any) => variableInfo.variable)];
+
+            const variables = [variable, ...this._extractVariables(relevantVariables)];
             this._addOrUpdateExploredCodeLines(fileUri, startLineNum, endLineNum, statementText, variables);
             this._addToExploredFiles(vscode.Uri.parse(fileUri), document);
         }
@@ -1410,10 +1424,12 @@ class Agent {
                     - If the question involves an algorithm, refine it to focus on key computation steps.
 
                     4. Identify valuable variables for further investigation.
-                    - Evaluate which variables/functions are crucial for answering the question.
-                    - Select the appropriate VSCode tool:
-                        - 0: Go to Definition: To find where a function, variable, or class is implemented.
-                        - 1: Find References: To track how a function or variable is used throughout the codebase.
+                    - You are given a list of variables_wait_for_exploring.
+                    - For each item in variables_wait_for_exploring contains a code_line and an array of unexplored variables. 
+                    - Assess what variables are worth exploring next based on the refined question. Select the most relevant variables to explore further based on the question.
+                    - If a line has more than one valuable variables, add multiple entries for that line.
+                    - Do not include any other variables not from the variables array, even they are in the code_line.
+                    - Only output if it is valuable for further exploration. 
 
                     5. Validate that the refined question encourages meaningful code exploration.
                     - The question should not stop at a high level (e.g., "Where is this function used?") but instead guide AI to find concrete evidence (e.g., "What function ultimately calls this and what does it return?").
@@ -1422,8 +1438,7 @@ class Agent {
                     Output Format:
                     The output must strictly follow the JSON schema, ensuring that:
                     - The refined question is clear, specific, and actionable.
-                    - The code snippets included are directly relevant.
-                    - The tool selection is justified based on the variable's importance.
+                    - Collect the valuable variables for further exploration in sub_problems.
                 `;
                 break;
             case 3:
