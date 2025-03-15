@@ -388,7 +388,6 @@ class Agent {
         };
         const pathParts = uri.fsPath.split("/");
         this._primaryFolder = pathParts.slice(0, -1).join("/");
-        console.log("Primary folder: ", this._primaryFolder);
         // Fetch the file content and add it to _exploredFiles if not already present
         const document = await vscode.workspace.openTextDocument(uri);
         const fileUriString = uri.toString();
@@ -482,7 +481,9 @@ class Agent {
         if (startLine <= variableInfo.lineNumber && variableInfo.lineNumber <= endLine && !this._followUpBranchNodeId) {
             this._explorationGraph.addOrigin(newNode);
         } else if (parentID) {
-            this._explorationGraph.upsertNode(parentID, variableInfo.fileUri, variableInfo.lineNumber, variableInfo.variable, "assignment");
+            this._explorationGraph.upsertNode(parentID, variableInfo.fileUri, variableInfo.lineNumber, variableInfo.variable, variableInfo.tool);
+        } else {
+            console.warn("Parent ID is missing: ", variableInfo.variable, variableInfo.lineNumber);
         }
 
         // Track variables per line
@@ -804,23 +805,21 @@ class Agent {
     async processRelevantVariable(variableInfo: Result, parentID: string, resultNodeId: string, statementText: string, document: vscode.TextDocument, results: any[]) {
         const relevantResultNodeId = `${variableInfo.fileUri}:${variableInfo.lineNumber}:${variableInfo.variable}`;
 
-        if (relevantResultNodeId === resultNodeId) {
-            return; // Skip if it's the same as the base result
+        if (relevantResultNodeId !== resultNodeId) {
+
+            const lineText = document.lineAt(variableInfo.lineNumber).text.trim();
+
+            results.push({
+                file_uri: variableInfo.fileUri,
+                line_number: variableInfo.lineNumber,
+                code_line: lineText,
+                full_statement: (lineText.includes(variableInfo.variable) && lineText.includes(";")) ? lineText : statementText,
+                variable: variableInfo.variable // Include the relevant variable
+            });
+
+            // Use upsertNode to link it to the correct parent node
+            await this._explorationGraph.upsertNode(parentID, variableInfo.fileUri, variableInfo.lineNumber, variableInfo.variable, variableInfo.tool);
         }
-
-        const lineText = document.lineAt(variableInfo.lineNumber).text.trim();
-
-        results.push({
-            file_uri: variableInfo.fileUri,
-            line_number: variableInfo.lineNumber,
-            code_line: lineText,
-            full_statement: (lineText.includes(variableInfo.variable) && lineText.includes(";")) ? lineText : statementText,
-            variable: variableInfo.variable // Include the relevant variable
-        });
-
-        // Use upsertNode to link it to the correct parent node
-        await this._explorationGraph.upsertNode(parentID, variableInfo.fileUri, variableInfo.lineNumber, variableInfo.variable, "assignment");
-
         // Recursively process children, setting this node as their parent
         for (const child of variableInfo.children) {
             await this.processRelevantVariable(child, relevantResultNodeId, resultNodeId, statementText, document, results);
@@ -1528,17 +1527,17 @@ class Agent {
                     1. Generate Answer  
                     If the findings are sufficient, return:
                     - Overview: A concise summary explaining how the identified code answers the question.
-                    - code_insight: Key execution steps supported by relevant code snippets, each with:
-                    - insightName: A short label describing the insight (e.g., "Execution Flow," "Final Output").
-                    - details: A clear explanation of what the code does.
-                    - reference: The snippetKey of the supporting code.
+                    - code_insight: Most relevant code snippets to answer the question, each with:
+                        - insightName: A short label describing the insight (e.g., "Execution Flow," "Final Output").
+                        - details: A clear explanation of what the code does.
+                        - reference: The snippetKey of the supporting code.
 
                     Formatting Rules:
                     - Use bold formatting (inside of two asterisk signs) for function names and key variables.
                     - Use inline code formatting (\`backtick\`) for small code snippets.
 
                     2. Guidelines for "code_insight"  
-                    Each insight must provide concrete, verifiable evidence, covering:
+                    Each insight must provide concrete, verifiable evidence to answer the question, covering:
                     - Functions: What they do, how they transform data, and what they return.
                     - Variables: How they are initialized, modified, and used.
                     - Objects and Classes: Key properties, methods, and interactions.

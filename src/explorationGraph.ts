@@ -15,7 +15,7 @@ export interface Node {
 export interface Edge {
     from: string; // Source node ID
     to: string; // Target node ID
-    tool: "definition" | "reference" | "assignment"; // Edge type
+    tool: string;
     variable: string;
 }
 
@@ -28,7 +28,7 @@ export type TreeNode = {
     codeLine: string;
     codeSnippet: string;
     statement: string;
-    tool: "definition" | "reference" | "assignment";
+    tool: string;
     children: TreeNode[]; // Recursive definition
 };
 
@@ -138,7 +138,7 @@ export class ExplorationGraph {
                 const newEdge: Edge = {
                     from: fromId,
                     to: newNodeId,
-                    tool: tool as "definition" | "reference" | "assignment",
+                    tool: tool,
                     variable: variables[i],
                 };
 

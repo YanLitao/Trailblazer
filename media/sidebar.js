@@ -280,8 +280,19 @@ document.addEventListener("click", function (event) {
         const nodeData = findNodeBySnippetKey(graphData, refId);
         renderGraph(graphData, nodeData.id);
 
+        // get root node's fileUri and lineNumber
+        const fileUri = graphData.fileUri;
+        const lineNumber = graphData.lineNumber;
+
         // Also trigger file open if possible (using the closest `.insight` container)
-        let closestInsight = citationRefElement.closest(".insight");
+        if (fileUri && lineNumber) {
+            vscode.postMessage({
+                command: 'openFileAtLine',
+                fileUri: fileUri,
+                lineNumber: parseInt(lineNumber, 10)
+            });
+        }
+        /* let closestInsight = citationRefElement.closest(".insight");
         if (closestInsight) {
             const fileUri = closestInsight.getAttribute("data-file-uri");
             const lineNumber = closestInsight.getAttribute("data-line-number");
@@ -293,7 +304,7 @@ document.addEventListener("click", function (event) {
                     lineNumber: parseInt(lineNumber, 10)
                 });
             }
-        }
+        } */
     }
 });
 
@@ -429,6 +440,12 @@ function getForeignObjectHeight(nodeDepth, snippetKey, codeSnippet, hidden = fal
         return 50; // Minimum height
     }
     return height;
+}
+
+function escapeHTML(str) {
+    return str.replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
 }
 
 function renderGraph(data, startWalkthrough = "") {
@@ -577,39 +594,45 @@ function renderGraph(data, startWalkthrough = "") {
             .attr("height", d => getForeignObjectHeight(d.depth, d.data.snippetKey, d.data.codeSnippet, d.data.hidden))
             .html(d => {
                 // Description Text for Each Node
-                let descriptionHTML = "";
+                let descriptionText = "";
                 if (d.data.id === "fake-origin") {
-                    descriptionHTML = `<div class="node-description">I started here. Then I started to look for information.</div>
-                    `;
+                    descriptionText = "I started here. Then I started to look for information";
                 } else if (d.parent && d.parent.data.id === "fake-origin") {
-                    // Node with fake-origin as parent
-                    descriptionHTML = `
-                        <div class="node-description">
-                            I decided to look for more information about <span class="inline-code">${d.data.variable}.
-                        </div>
-                    `;
+                    descriptionText = `I decided to look for more information about <span class="inline-code">${d.data.variable}.`;
                 } else if (d.data.tool === "reference") {
-                    // Reference Node
-                    descriptionHTML = `
-                        <div class="node-description">
-                            This led me to this reference of <span class="inline-code">${d.data.variable}</span>.
-                        </div>
-                    `;
+                    descriptionText = `This led me to this reference of <span class="inline-code">${d.data.variable}</span>.`;
                 } else if (d.data.tool === "assignment") {
                     const parentInfo = d.parent.data.variable;
-                    descriptionHTML = `
-                        <div class="node-description">
-                            I found <span class="inline-code">${d.data.variable}</span>, which looked important and is based on ${parentInfo}.
-                        </div>
-                    `;
-                } else {
-                    // Default Case
-                    descriptionHTML = `
-                        <div class="node-description">
-                            This led me to this definition of <span class="inline-code">${d.data.variable}</span>.
-                        </div>
-                    `;
+                    descriptionText = `I found <span class="inline-code">${d.data.variable}</span>, which looked important and is based on ${parentInfo}.`;
+                } else if (d.data.tool === "definition") {
+                    descriptionText = `This led me to this definition of <span class="inline-code">${d.data.variable}</span>.`;
+                } else if (d.data.tool === "if") {
+                    const parentInfo = d.parent.data.variable;
+                    descriptionText = `I found this line, that looks relevent. It depends on ${parentInfo} to execute.`;
+                } else if (d.data.tool === "function") {
+                    const parentInfo = d.parent.data.variable;
+                    descriptionText = `I found this line, that looks relevent. It is a statement in ${parentInfo}.`;
+                } else if (d.data.tool === "parameter") {
+                    const parentInfo = d.parent.data.variable;
+                    descriptionText = `I found span class="inline-code">${d.data.variable}</span>, which is a parameter in ${parentInfo}.`;
+                } else if (d.data.tool === "property") {
+                    const parentInfo = d.parent.data.variable;
+                    descriptionText = `I found a property <span class="inline-code">${d.data.variable}</span> in ${parentInfo} class.`;
+                } else if (d.data.tool === "method") {
+                    const parentInfo = d.parent.data.variable;
+                    descriptionText = `I found a method in ${parentInfo} class.`;
+                } else if (d.data.tool === "call") {
+                    const parentInfo = d.parent.data.variable;
+                    descriptionText = `I found <span class="inline-code">${d.data.variable}</span>, which was used to compute ${parentInfo}.`;
+                } else if (d.data.tool === "variable") {
+                    const parentInfo = d.parent.data.variable;
+                    descriptionText = `I found <span class="inline-code">${d.data.variable}</span>, which was computed using ${parentInfo}.`;
                 }
+
+                let descriptionHTML = `
+                <div class="node-description">
+                    ${descriptionText}
+                </div>`;
 
                 let borderStyle = "1px solid #aaa";
                 let displayment = (d.data.hidden !== 2) ? "display: none" : "";
@@ -664,7 +687,7 @@ function renderGraph(data, startWalkthrough = "") {
                     <div class="node-container-box" id="container-${generateNodeId(d.data)}" data-snippet-key="${d.data.snippetKey}" style="border: ${borderStyle}; ${displayment};">
                         <div id="code-box-${generateNodeId(d.data)}" class="tree-node code-box" data-ref="${d.data.snippetKey}">
                             <div class="code-container">
-                                <code style="white-space: pre;" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">${snippetLines}</code>
+                                <code style="white-space: pre;" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">${escapeHTML(snippetLines)}</code>
                             </div>
                             <div class="tree-node-button-container">
                                 <div class="code-info">
@@ -929,50 +952,8 @@ function renderGraph(data, startWalkthrough = "") {
             if (nodeEle) {
                 nodeEle.scrollIntoView({ behavior: "smooth", block: "center" });
             }
-
-            // Generate messages for replay
-            const { incomingMessage, outgoingMessage } = generateMessages(nodes, index);
-            postReplayMessage(sourceNode, incomingMessage, outgoingMessage);
+            postReplayMessage(sourceNode);
         }
-    }
-
-    function generateMessages(nodes, index) {
-        let incomingMessage = "";
-        let outgoingMessage = "";
-
-        // Generate incoming message
-        if (index === 0 || nodes[index - 1].id === "fake-origin") {
-            incomingMessage = "";
-        } else {
-            const previousNode = nodes[index - 1];
-            const currentNode = nodes[index];
-            if (currentNode.tool === "definition") {
-                incomingMessage = `Found the definition of ${previousNode.variable}`;
-            } else if (currentNode.tool === "reference") {
-                incomingMessage = `Found another reference of ${previousNode.variable}`;
-            } else if (currentNode.tool === "assignment") {
-                incomingMessage = `${previousNode.variable} is assigned to ${currentNode.variable}.`;
-            }
-        }
-
-        // Generate outgoing message
-        if (index + 1 >= nodes.length) {
-            outgoingMessage = "";
-        } else {
-            const nextNode = nodes[index + 1];
-            const currentNode = nodes[index];
-            if (currentNode.id === "fake-origin") {
-                outgoingMessage = `Next, explore ${nextNode.variable} from your selected code.`;
-            } else if (nextNode.tool === "definition") {
-                outgoingMessage = `Next, find the definition of ${currentNode.variable}`;
-            } else if (nextNode.tool === "reference") {
-                outgoingMessage = `Next, find another reference of ${currentNode.variable}`;
-            } else if (nextNode.tool === "assignment") {
-                outgoingMessage = `Next, find another variable that ${currentNode.variable} is assigned to.`;
-            }
-        }
-
-        return { incomingMessage, outgoingMessage };
     }
 
     document.getElementById("prev-step").addEventListener("click", function () {
@@ -1006,15 +987,12 @@ function renderGraph(data, startWalkthrough = "") {
         currentStepIndex = 0; // Reset the replay step index
     });
 
-    function postReplayMessage(node, incomingMessage, outgoingMessage) {
+    function postReplayMessage(node) {
         vscode.postMessage({
             command: "replaySnippet",
             fileUri: node.fileUri,
             lineNumber: node.lineNumber,
-            variable: node.variable,
-            finding: node.statement,
-            incomingMessage: incomingMessage,
-            outgoingMessage: outgoingMessage
+            variable: node.variable
         });
     }
 

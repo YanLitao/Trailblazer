@@ -320,17 +320,28 @@ function processOtherSide(
     for (const variable of variables) {
         if (variable.name === inputVariable) {
             side = variable.side;
+            results.push({
+                fileUri,
+                lineNumber: variable.line,
+                variable: variable.name,
+                tool: "assignment",
+                children: [],
+            });
             break;
         }
     }
 
+    if (results.length === 0) {
+        return results;
+    }
+
     // First, check if the inputVariable is inside a function call
     if (functions && side === functions.side) {
-        results.push({
+        results[0].children.push({
             fileUri,
             lineNumber: functions.line,
             variable: functions.name,
-            tool: "assignment",
+            tool: "call",
             children: [],
         });
         return results; // Return early since we've handled the function case
@@ -339,11 +350,11 @@ function processOtherSide(
     // Extract variables from the other side
     variables.forEach((variable) => {
         if (variable.side !== side) {
-            results.push({
+            results[0].children.push({
                 fileUri,
                 lineNumber: variable.line,
                 variable: variable.name,
-                tool: "assignment",
+                tool: "parameter",
                 children: [],
             });
         }
@@ -534,7 +545,8 @@ async function extractVariables(
     fileUri: vscode.Uri,
     lineNumber: number,
     inputVariable: string,
-    isFunction: number = 0
+    isFunction: number = 0,
+    tool: string = "assignment"
 ): Promise<Result[]> {
     const extractedNode = await findNode(fileUri, lineNumber, isFunction);
     if (extractedNode) {
@@ -550,7 +562,7 @@ async function extractVariables(
                         fileUri: fileUri.toString(),
                         lineNumber: variable.line,
                         variable: variable.name,
-                        tool: "assignment",
+                        tool: tool,
                         children: [],
                     };
                 });
@@ -753,7 +765,7 @@ async function extractFunctionDefineAndParameters(
             const statementLine = document.positionAt(startPos).line;
 
             // Pass each direct statement to analyze function
-            results[0].children.push(...await analyze(fileUri, statementLine, inputVariable));
+            results[0].children.push(...await analyze(fileUri, statementLine, inputVariable, "function"));
         }
     }
 
@@ -894,7 +906,7 @@ function extractFunctionCallAndParameters(
                     fileUri: fileUri,
                     lineNumber: line,
                     variable: extractedText,
-                    tool: "parameter",
+                    tool: "variable",
                     children: [],
                 });
             }
@@ -1005,7 +1017,8 @@ function extractClass(node: ts.Node, inputVariable: string, fileUri: string): Re
 export async function analyze(
     fileUri: vscode.Uri,
     lineNumber: number,
-    inputVariable: string = ""
+    inputVariable: string = "",
+    tool: string = "assignment"
 ) {
     const lineText = await getLineText(fileUri, lineNumber);
     const trimmedLine = lineText.trim();
@@ -1020,13 +1033,16 @@ export async function analyze(
     // Handle if-else conditions
     if (trimmedLine.startsWith("if ") || trimmedLine.startsWith("else if ") || trimmedLine.startsWith("else {")) {
         // If depth > 0, only return statements without further analysis
+        tool = "if";
         return await findIfElseDirectStatementsWithLines(fileUri, lineNumber, inputVariable, 0);
     }
 
     if (/^\s*(export\s+)?class\s+\w+/.test(trimmedLine)) {
         isFunction = 4; // Class declaration
+        tool = "class";
     } else if (/^\s*(export\s+)?(async\s+)?function\s+\w+\s*\(/.test(trimmedLine)) {
         isFunction = 1; // Function declaration
+        tool = "function";
     } else if (trimmedLine.endsWith(",")) {
         isFunction = 0; // destructuring assignment
         if (inputVariable === "") {
@@ -1036,15 +1052,15 @@ export async function analyze(
             }
         }
     } else {
-        return normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber);
+        return normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber, tool);
     }
 
-    const results = await extractVariables(fileUri, lineNumber, inputVariable, isFunction);
+    const results = await extractVariables(fileUri, lineNumber, inputVariable, isFunction, tool);
 
     if (results.length > 0) {
         return results
     }
-    return normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber);
+    return normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber, tool);
 }
 
 export function normalProcess(
@@ -1063,7 +1079,7 @@ export function normalProcess(
         "package", "private", "protected", "public", "readonly", "require", "return", "set", "static", "string",
         "super", "switch", "symbol", "this", "throw", "true", "try", "type", "typeof", "undefined", "unique", "unknown",
         "var", "void", "while", "with", "yield", "React", "useRef", "useEffect", "document", "window", "console", "log", "error", "warn",
-        "HTMLDivElement", "EventTarget", "KeyboardEvent"
+        "HTMLDivElement", "EventTarget", "KeyboardEvent", "ManagedModalProps"
     ]);
 
     // Extract potential identifiers
@@ -1233,10 +1249,10 @@ async function extractSpecificIfElseBlock(
 }
 
 export async function test() {
-    /* const fileUri = vscode.Uri.file("/Users/litaoyan/Documents/Research/dataflow/material-ui-master/packages/mui-base/src/unstable_useModal/ModalManager.ts");
-    const lineNumber = 205;
-    const inputVariable = "";
+    const fileUri = vscode.Uri.file("/Users/litaoyan/Documents/Research/dataflow/material-ui-master/packages/mui-joy/src/Autocomplete/Autocomplete.tsx");
+    const lineNumber = 529;
+    const inputVariable = "inProps";
 
     const results = await analyze(fileUri, lineNumber, inputVariable);
-    console.log("results: ", results); */
+    console.log("results: ", results);
 }

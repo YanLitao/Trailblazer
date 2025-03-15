@@ -41,8 +41,8 @@ export class SidebarView implements vscode.WebviewViewProvider {
                 const { fileUri, lineNumber, variable } = message;
                 this.createZoneWidget(fileUri, lineNumber, true, variable);
             } else if (message.command === 'replaySnippet') {
-                const { fileUri, lineNumber, variable, finding, incomingMessage, outgoingMessage } = message;
-                this.createZoneWidget(fileUri, lineNumber, false, variable, finding, incomingMessage, outgoingMessage);
+                const { fileUri, lineNumber, variable } = message;
+                this.createZoneWidget(fileUri, lineNumber, false, variable);
             } else if (message.command === 'stopAgent') {
                 this.agentIsDone();
                 vscode.commands.executeCommand('extension.stopAgent');
@@ -117,10 +117,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
         fileUri: string,
         lineNumber: number,
         questionFlag: boolean = false,
-        variable: string = "",
-        finding: string = "",
-        incomingMessage: string = "",
-        outgoingMessage: string = ""
+        variable: string = ""
     ) {
         if (fileUri === "" || lineNumber === -1) {
             return;
@@ -183,7 +180,6 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     });
 
                     if (userInput !== undefined) {
-                        vscode.window.showInformationMessage(`You entered: ${userInput}`);
                         vscode.commands.executeCommand(
                             "extension.followUpQuestion",
                             userInput,
