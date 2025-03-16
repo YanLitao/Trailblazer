@@ -552,7 +552,7 @@ async function extractVariables(
     if (extractedNode) {
         let results: Result[] = [];
         if (isFunction == 1) {
-            results = await extractFunctionDefineAndParameters(fileUri, lineNumber, inputVariable, 0);
+            results = await extractFunctionDefineAndParameters(fileUri, lineNumber, inputVariable);
         } else if (isFunction == 0) {
             const { variables, functions } = extractVariablesAndFunctions(extractedNode);
             if (inputVariable === "") {
@@ -579,7 +579,7 @@ async function extractVariables(
                 results = processOtherSide(variables, functions, inputVariable, fileUri.toString());
             }
         } else if (isFunction == 2) {
-            results = extractArrowFunctionAndParameters(extractedNode, inputVariable, fileUri.toString());
+            results = await extractFunctionDefineAndParameters(fileUri, lineNumber, inputVariable); //extractArrowFunctionAndParameters(extractedNode, inputVariable, fileUri.toString());
         } else if (isFunction == 4) {
             results = extractClass(extractedNode, inputVariable, fileUri.toString());
         } else {
@@ -678,8 +678,7 @@ function extractVariablesAndFunctions(node: ts.Node): {
 async function extractFunctionDefineAndParameters(
     fileUri: vscode.Uri,
     lineNumber: number,
-    inputVariable: string = "",
-    depth: number = 0 // Pass depth to control recursion
+    inputVariable: string = ""
 ): Promise<any[]> {
     const document = await vscode.workspace.openTextDocument(fileUri);
     const fileContent = document.getText();
@@ -720,16 +719,33 @@ async function extractFunctionDefineAndParameters(
 
     let allResults: Promise<any[]>[] = [];
     let results: Result[] = [];
-
-    // Extract function name (default to "anonymous" if none found)
     let functionName = "anonymous";
+
     if (ts.isFunctionDeclaration(functionNode) || ts.isMethodDeclaration(functionNode)) {
         functionName = functionNode.name?.getText() || "anonymous";
     } else if (ts.isFunctionExpression(functionNode) || ts.isArrowFunction(functionNode)) {
-        const parent = functionNode.parent;
+        let parent = functionNode.parent;
+
+        // Case 1: Arrow function assigned to a variable
         if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) {
             functionName = parent.name.getText();
         }
+        // Case 2: Arrow function assigned to an object property
+        else if (ts.isPropertyAssignment(parent) && ts.isIdentifier(parent.name)) {
+            functionName = parent.name.getText();
+        }
+        // Case 3: Arrow function inside an array (anonymous function in array)
+        else if (ts.isArrayLiteralExpression(parent)) {
+            functionName = "array_function";
+        }
+        // Case 4: Arrow function passed as a callback
+        else if (ts.isCallExpression(parent) && ts.isIdentifier(parent.expression)) {
+            functionName = `callback_of_${parent.expression.getText()}`;
+        }
+    }
+
+    if (functionName === "anonymous") {
+        return [];
     }
 
     // Get function start line
@@ -763,9 +779,21 @@ async function extractFunctionDefineAndParameters(
         for (const statement of block.statements) {
             const startPos = statement.getStart(sourceFile);
             const statementLine = document.positionAt(startPos).line;
-
-            // Pass each direct statement to analyze function
-            results[0].children.push(...await analyze(fileUri, statementLine, inputVariable, "function"));
+            const statementLength = statement.getText(sourceFile).length;
+            if (statementLength > 1) {
+                if (ts.isReturnStatement(statement)) {
+                    const endPos = statement.getEnd();
+                    const startLine = document.positionAt(startPos).line;
+                    const endLine = document.positionAt(endPos).line;
+                    for (let line = startLine; line <= endLine; line++) {
+                        results[0].children.push(...await analyze(fileUri, line, inputVariable, "function"));
+                    }
+                } else {
+                    results[0].children.push(...await analyze(fileUri, statementLine, inputVariable, "function"));
+                }
+            } else {
+                results[0].children.push(...await analyze(fileUri, statementLine, inputVariable, "function"));
+            }
         }
     }
 
@@ -778,85 +806,6 @@ async function extractFunctionDefineAndParameters(
 
     // **Ensure function name is always the first element**
     return [...results, ...bodyResults];
-}
-
-function extractArrowFunctionAndParameters(node: ts.Node,
-    inputVariable: string,
-    fileUri: string
-): Result[] {
-    const currentLayer = 0;
-    const functionResult: Result[] = [];
-    const parameterResult: Result[] = [];
-
-    for (const child of node.getChildren()) {
-        // the function is on the right side of the equal sign with ts.SyntaxKind.Identifier
-        // the parameters are on the left side of the equal sign with ts.SyntaxKind.Identifier
-        if (ts.isIdentifier(child)) {
-            const start = child.getStart();
-            const lineAndCharacter = ts.getLineAndCharacterOfPosition(child.getSourceFile(), start);
-            const line = lineAndCharacter.line;
-            const extractedText = child.getText();
-
-            functionResult.push({
-                fileUri: fileUri,
-                lineNumber: line,
-                variable: extractedText,
-                tool: "function",
-                children: [],
-            });
-        } else {
-            visit(child, currentLayer);
-        }
-    }
-
-    // Helper function to traverse nodes
-    function visit(node: ts.Node, layer: number) {
-        if (layer >= 15) return; // Stop for deeply nested nodes
-
-        // Skip irrelevant nodes
-        if (ts.SyntaxKind.BreakKeyword <= node.kind && node.kind <= ts.SyntaxKind.OfKeyword ||
-            ts.SyntaxKind.TypePredicate <= node.kind && node.kind <= ts.SyntaxKind.ImportType ||
-            ts.SyntaxKind.Block == node.kind || ts.SyntaxKind.JSDoc == node.kind) {
-            return;
-        }
-
-        // Check for identifiers
-        if (node.kind === ts.SyntaxKind.Identifier) {
-            // get line number of the node
-            const start = node.getStart();
-            const lineAndCharacter = ts.getLineAndCharacterOfPosition(node.getSourceFile(), start);
-            const line = lineAndCharacter.line;
-            const extractedText = node.getText();
-
-            if (extractedText === inputVariable) return;
-
-            parameterResult.push({
-                fileUri: fileUri,
-                lineNumber: line,
-                variable: extractedText,
-                tool: "parameter",
-                children: [],
-            });
-        }
-
-        // Traverse child nodes
-        node.getChildren().forEach((child) => visit(child, layer + 1));
-    }
-
-    // check if the inputVariable is in the function
-    for (const variable of functionResult) {
-        if (variable.variable === inputVariable) {
-            return parameterResult;
-        }
-    }
-
-    if (inputVariable === "") {
-        // combine functionResult and parameterResult into results
-        functionResult.push(...parameterResult);
-        return functionResult;
-    }
-
-    return functionResult;
 }
 
 function extractFunctionCallAndParameters(
@@ -1024,7 +973,6 @@ export async function analyze(
     const trimmedLine = lineText.trim();
 
     if (!trimmedLine) {
-        console.error(`Line ${lineNumber} not found in file ${fileUri}`);
         return [];
     }
 
@@ -1042,6 +990,9 @@ export async function analyze(
         tool = "class";
     } else if (/^\s*(export\s+)?(async\s+)?function\s+\w+\s*\(/.test(trimmedLine)) {
         isFunction = 1; // Function declaration
+        tool = "function";
+    } else if (trimmedLine.includes("=>")) {
+        isFunction = 2; // Arrow function
         tool = "function";
     } else if (trimmedLine.endsWith(",")) {
         isFunction = 0; // destructuring assignment
@@ -1249,9 +1200,9 @@ async function extractSpecificIfElseBlock(
 }
 
 export async function test() {
-    const fileUri = vscode.Uri.file("/Users/litaoyan/Documents/Research/dataflow/material-ui-master/packages/mui-joy/src/Autocomplete/Autocomplete.tsx");
-    const lineNumber = 529;
-    const inputVariable = "inProps";
+    const fileUri = vscode.Uri.file("/Users/litaoyan/Documents/Research/dataflow/material-ui-master/packages/mui-base/src/FocusTrap/FocusTrap.tsx");
+    const lineNumber = 135;
+    const inputVariable = "";
 
     const results = await analyze(fileUri, lineNumber, inputVariable);
     console.log("results: ", results);
