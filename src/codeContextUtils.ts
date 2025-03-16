@@ -722,7 +722,11 @@ async function extractFunctionDefineAndParameters(
     let functionName = "anonymous";
 
     if (ts.isFunctionDeclaration(functionNode) || ts.isMethodDeclaration(functionNode)) {
-        functionName = functionNode.name?.getText() || "anonymous";
+        if (functionNode.name) {
+            functionName = functionNode.name.getText();
+        } else {
+            return [];
+        }
     } else if (ts.isFunctionExpression(functionNode) || ts.isArrowFunction(functionNode)) {
         let parent = functionNode.parent;
 
@@ -733,14 +737,8 @@ async function extractFunctionDefineAndParameters(
         // Case 2: Arrow function assigned to an object property
         else if (ts.isPropertyAssignment(parent) && ts.isIdentifier(parent.name)) {
             functionName = parent.name.getText();
-        }
-        // Case 3: Arrow function inside an array (anonymous function in array)
-        else if (ts.isArrayLiteralExpression(parent)) {
-            functionName = "array_function";
-        }
-        // Case 4: Arrow function passed as a callback
-        else if (ts.isCallExpression(parent) && ts.isIdentifier(parent.expression)) {
-            functionName = `callback_of_${parent.expression.getText()}`;
+        } else {
+            return [];
         }
     }
 
@@ -982,7 +980,7 @@ export async function analyze(
     if (trimmedLine.startsWith("if ") || trimmedLine.startsWith("else if ") || trimmedLine.startsWith("else {")) {
         // If depth > 0, only return statements without further analysis
         tool = "if";
-        return await findIfElseDirectStatementsWithLines(fileUri, lineNumber, inputVariable, 0);
+        return await findIfElseDirectStatementsWithLines(fileUri, lineNumber, inputVariable);
     }
 
     if (/^\s*(export\s+)?class\s+\w+/.test(trimmedLine)) {
@@ -997,7 +995,7 @@ export async function analyze(
     } else if (trimmedLine.endsWith(",")) {
         isFunction = 0; // destructuring assignment
         if (inputVariable === "") {
-            const lineVariables = normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber);
+            const lineVariables = normalProcess(trimmedLine, inputVariable, fileUri.toString(), lineNumber, tool);
             if (lineVariables.length === 1) {
                 inputVariable = lineVariables[0].variable;
             }
@@ -1047,8 +1045,7 @@ export function normalProcess(
 async function findIfElseDirectStatementsWithLines(
     fileUri: vscode.Uri,
     lineNumber: number,
-    inputVariable: string = "",
-    depth: number = 0 // Pass depth to control recursion
+    inputVariable: string = ""
 ): Promise<Result[]> {
     const document = await vscode.workspace.openTextDocument(fileUri);
     const fileContent = document.getText();
@@ -1092,7 +1089,7 @@ async function findIfElseDirectStatementsWithLines(
         for (const statement of block.statements) {
             const startPos = statement.getStart(sourceFile);
             const statementLine = document.positionAt(startPos).line;
-            const analyzedResults = await analyze(fileUri, statementLine, inputVariable);
+            const analyzedResults = await analyze(fileUri, statementLine, inputVariable, "if");
             // Recursively analyze each statement, preventing deeper if-analysis, adding them into each result's children in allResults
             allResults.forEach(result => {
                 result.children.push(...analyzedResults);
