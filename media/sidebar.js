@@ -135,7 +135,7 @@ function updateSearchingContent(content) {
             setTimeout(() => {
                 newMessage.remove();
                 messageQueue.shift(); // Ensure it's removed from queue only after it's gone
-            }, 500); // Allow fade-out animation to complete
+            }, 1000); // Allow fade-out animation to complete
         }
     }, fadeOutTime);
 
@@ -143,7 +143,7 @@ function updateSearchingContent(content) {
     if (messageQueue.length > maxMessages) {
         const oldMessage = messageQueue.shift();
         oldMessage.classList.add('fade-out');
-        setTimeout(() => oldMessage.remove(), 500);
+        setTimeout(() => oldMessage.remove(), 1000);
     }
 }
 
