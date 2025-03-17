@@ -1493,13 +1493,19 @@ class Agent {
                 break;
             case 7:
                 taskInstructions = `
-                    Task 7: Assess sufficiency and generate an answer.
+                    Task 7: Decide if your search is done.
+                    You are provided findings from the search and your search question.
+                    Decide if the search provides a sufficient answer to the question.
+                    If it does, write up the answer for the programmer to read.
+                    If it doesn't, steer the next step of search.
 
-                    Goals:
-                    1. Determine if the current findings sufficiently answer the refined question.
-                    2. Provide a structured, evidence-based answer with relevant code insights.
-                    3. If the answer is insufficient, suggest follow-up questions.
+                    First, decide if the findings are sufficient to answer the question.
+                    They are sufficiet only if they:
+                    1. Are backed up by collected code.
+                    2. Trace the relevant execution fully (with no gaps in data or control flow).
+                    3. Show the required details related to data transformation, output generation, UI updating, etc.
 
+                    TODO(andrewhead): continue from here.
                     1. Generate Answer  
                     If the findings are sufficient, return:
                     - Overview: A concise summary explaining how the identified code answers the question.
