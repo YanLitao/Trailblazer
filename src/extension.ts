@@ -1488,63 +1488,39 @@ class Agent {
                 Whenever findings together describe one concept, combine them together.
                 Do this by creating a new finding statement (clear, crisp, a single clause, easily-readable).
                 It should adhere to the grammar of the original findings when possible.
-                For example, three findings "'sm' sets width to 24px.",  "'md' sets width to 48px.", and "'lg' sets width to 72px." are combined into "'sm', 'md', 'lg' set width to 24, 48, 72px.".
+                For example, findings "'fast' runs the fast algorithm." and "'slow' runs the slow algorithm." are combined into "'fast' and 'slow' run the fast and slow algorithms.".
                 `;
                 break;
             case 7:
                 taskInstructions = `
-                    Task 7: Decide if your search is done.
-                    You are provided findings from the search and your search question.
-                    Decide if the search provides a sufficient answer to the question.
-                    If it does, write up the answer for the programmer to read.
-                    If it doesn't, steer the next step of search.
+                    Task 7: Convey progress.
+                    I have given you findings from your search for your search question.
+                    Decide if you have enough evidence that you can answer the question.
+                    If you do, write the answer.
+                    If you don't, adjust your search.
 
                     First, decide if the findings are sufficient to answer the question.
-                    They are sufficiet only if they:
-                    1. Are backed up by collected code.
+                    They are sufficient only if they:
+                    1. Answer the question.
                     2. Trace the relevant execution fully (with no gaps in data or control flow).
-                    3. Show the required details related to data transformation, output generation, UI updating, etc.
 
-                    TODO(andrewhead): continue from here.
-                    1. Generate Answer  
-                    If the findings are sufficient, return:
-                    - Overview: A concise summary explaining how the identified code answers the question.
-                    - code_insight: Most relevant code snippets to answer the question, each with:
-                        - insightName: A short label describing the insight (e.g., "Execution Flow," "Final Output").
-                        - details: A clear explanation of what the code does.
-                        - reference: The snippetKey of the supporting code.
+                    If the findings are sufficient, generate an answer.
+                    The answer contains:
+                    1. Overview: A concise, basic answer to the question. Keep it extremely concise.
+                    2. Context (code_insight): A small but comprehensive set of citations to code snippets. Together, they answer the question. Each citation includes:
+                    - reference: the snippetKey of the relevant code snippet, verbatim.
+                    - details: a concise description of what can be found at the code snippet. Don't be redundant with the overview answer. Omit snippet keys. Keep it extremely concise.
+                    - insightName: a 2-3 word descriptive title that appearns next to the snippet.
+                    "-1" is not valid a valid snippetKey to cite.
+                    A snippet key cannot be used in more than one citation.
 
-                    Formatting Rules:
-                    - Use bold formatting (inside of two asterisk signs) for function names and key variables.
-                    - Use inline code formatting (\`backtick\`) for small code snippets.
+                    In the text you generate, use a bit of formatting.
+                    Bold (with two asterisk signs) function names and answer and important variable names.
+                    For short inline code snippets, use inline code formatting with backticks (\`...\`).
 
-                    2. Guidelines for "code_insight"  
-                    Each insight must provide concrete, verifiable evidence to answer the question, covering:
-                    - Functions: What they do, how they transform data, and what they return.
-                    - Variables: How they are initialized, modified, and used.
-                    - Objects and Classes: Key properties, methods, and interactions.
-                    - UI Components: Data binding, event handling, and rendering logic.
-
-                    Reference Guidelines:
-                    - Each code_insight must include a snippetKey in the reference field, linking to the relevant code. Do not include snippetKey in the details.
-                    - Each snippetKey should only be used once per insight.
-                    - Do not reference snippetKey: -1 (it represents the root node).
-
-                    3. Decide Sufficiency  
-                    Findings are sufficient only if they:
-                    1. Include direct code evidence (function calls, assignments, return values, or rendering logic).
-                    2. Trace execution fully, following function calls and dependencies step by step.
-                    3. Identify the final impact, such as where data is transformed, UI is updated, or output is generated.
-                    4. Provide a clear, logical explanation, showing how the code leads to the final behavior.
-
-                    Stopping at an intermediate function or a partial transformation is not sufficient unless it directly produces the final result.
-
-                    4. Suggest New Questions  
-                    If findings are insufficient, generate follow-up questions to explore missing parts:
-                    - What function or process applies the final transformation?
-                    - Where is this value modified before being used?
-                    - What is the last step in execution affecting the result?
-                    - How does this function contribute to the final behavior?
+                    If the findings are insufficient, help steer the next step of the search.
+                    Generate a refined question (as before, it should be precise and actionable with VSCode tools).
+                    You will use this question to continue search.
                     `;
                 break;
             default:
@@ -1553,14 +1529,14 @@ class Agent {
 
         const systemMessage = `
             You are a programming assistant that helps users understand code bases.
-            You do this by drawing on context you know about code, and by applying VSCode tools to look up information. 
-            Your will be performing several tasks to think about how to search the code, and then search it.
-            For each task, you carefully follow task-specific instructions.
+            You do this by drawing on context you know about code, and applying VSCode tools iteratively to look up information. 
+            You follow task-specific instructions carefully.
             
-            General Guidance:
-            - Explore Thoroughly: It may be tempting to stop searching early. Though the programmer expects thorough and well-informed answers. So explore functions, classes, or files that can lend additional useful context, even if you think you have found an answer. 
-            - Explore Efficiently: Don't repeat your work. If you've searched part of the code before, don't do it again.
-            - Clarity: Be clear in your responses. Be as concise as possible. Assume the programmer won't read more than a sentence in any answer you give.
+            In addition, you are:
+            - Thorough: You give the programmer thorough and well-researched answers. You explore parts of the code that might give additional useful context, even when you think you have found an answer. 
+            - Efficient: You don't repeat your work. If you searched part of the code before, don't do it again.
+            - Clear: You convey findings with simple language and short sentences.
+            - Concise: You keep your responses to 1 sentence, 2 sentence max.
     
             ${taskInstructions}
             
