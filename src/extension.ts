@@ -608,7 +608,7 @@ class Agent {
         task1Output = JSON.parse(response);
         this._refined_question = task1Output.refined_question;
 
-        this._sidebarViewProvider.updateSearchingContent("Refined your question into: " + task1Output.refined_question);
+        this._sidebarViewProvider.updateSearchingContent("I refined your question to: '" + task1Output.refined_question +"'");
 
         console.log("Task 1 output: ", task1Output);
         /* if (totalVariables <= this._numberOfVariablesThreshold) {
@@ -620,7 +620,7 @@ class Agent {
     }
 
     async runTask2(subProblems: any[]) {
-        this._sidebarViewProvider.updateSearchingContent(`Exploring ${subProblems.length} sub-problems...`);
+        this._sidebarViewProvider.updateSearchingContent(`Looking for answers to ${subProblems.length} sub-questions...`);
 
         const task2Results: any[] = []; // Stores final results to display in the sidebar
         const newExploredLines: Array<{ file_uri: string, line_number: number, code_line: string, full_statement: string, variables: Set<string> }> = [];
@@ -1069,7 +1069,7 @@ class Agent {
         }
         const { newVariables, variableCount, nextExploreVariables } = await this.filterInput(exploredCodeLines);
         console.warn("Running Task 3, processing ", variableCount, " new code lines.");
-        this._sidebarViewProvider.updateSearchingContent(`Deciding next exploration variables from ${variableCount} new code lines...`);
+        this._sidebarViewProvider.updateSearchingContent(`Picking variables to explore from ${variableCount} relevant lines of code...`);
 
         // If there are no new code lines to explore, directly run Task 4
         if (variableCount === 0) {
@@ -1183,7 +1183,7 @@ class Agent {
         );
 
         console.warn("Running task 5, processing ", filteredResults.length, " results.");
-        this._sidebarViewProvider.updateSearchingContent(`Evaluating the importance of ${filteredResults.length} results gained in this exploration...`);
+        this._sidebarViewProvider.updateSearchingContent(`Reviewing ${filteredResults.length} discovered snippets...`);
 
         const batchSize = 10;
         const batches = [];
@@ -1371,7 +1371,7 @@ class Agent {
 
     async runTask7() {
         console.warn("Running Task 7.");
-        this._sidebarViewProvider.updateSearchingContent(`Deciding whether the exploration is sufficient based on ${this._importantCodeSnippets.length} code snippets...`);
+        this._sidebarViewProvider.updateSearchingContent(`Reviewing ${this._importantCodeSnippets.length} snippets for an answer...`);
         const inputJson = {
             task: 7,
             user_question: this._question,
@@ -1394,7 +1394,7 @@ class Agent {
             }
         }
         this._final_decision_sufficient = task7Output.final_decision_sufficient;
-        this._sidebarViewProvider.updateSearchingContent(`I decided my exploration was ${this._final_decision_sufficient ? "sufficient" : "insufficient"}.`);
+        this._sidebarViewProvider.updateSearchingContent(`I decided my exploration so far has been ${this._final_decision_sufficient ? "sufficient" : "insufficient"}.`);
         console.log("Task 7 output: ", task7Output);
         const answerHtml = this.processFinalAnswer(task7Output);
         this._sidebarViewProvider.showAnswer(answerHtml);
