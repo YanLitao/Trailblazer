@@ -1418,8 +1418,6 @@ class Agent {
                     You will use the refined question to search the code with VSCode tooling.
                     So the question should be answerable using VSCode tooling.
                     For instance, the refined question may ask to find where a variable is assigned, trace function execution, or understand a data structure.
-
-                    The output must follow the provided JSON schema.
                 `;
                 break;
             case 3:
@@ -1537,14 +1535,11 @@ class Agent {
             - Efficient: You don't repeat your work. If you searched part of the code before, don't do it again.
             - Clear: You convey findings with simple language and short sentences.
             - Concise: You keep your responses to 1 sentence, 2 sentence max.
-    
-            ${taskInstructions}
-            
-            Your output must match the provided schema.
-        `;
+            `;
 
-
-        const prompt = JSON.stringify(inputJson);
+        const prompt = (taskInstructions + "\n\n" +
+            "Your output must match the provided schema." +
+            JSON.stringify(inputJson));
 
         let result: any;
         let valid = false;
