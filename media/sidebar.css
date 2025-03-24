@@ -186,13 +186,16 @@ html {
     height: 30px;
     background-color: rgb(217, 235, 242);
     font-size: 1em;
+    text-align: center;
+    line-height: 30px;
 }
 
 #new-info-btn {
-    display: inline-block;
+    display: inline;
     cursor: pointer;
     text-decoration: underline;
     font-style: italic;
+    color: #0074aa;
 }
 
 #actions {

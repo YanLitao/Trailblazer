@@ -76,7 +76,7 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    console.log('Search Copilot extension is now active, waiting for user input.');
+    //console.log('Search Copilot extension is now active, waiting for user input.');
 }
 
 // Dispose only the agent, keeping the sidebarViewProvider intact
@@ -597,9 +597,7 @@ class Agent {
         const inputJson = {
             task: 1,
             question: this._question,
-            surrounding_code: surroundingCode,
-            allowed_tools: allowedTools,
-            variables_wait_for_exploring: newVariables,
+            surrounding_code: surroundingCode
         };
 
         console.log("Task 1 input: ", inputJson);
@@ -676,10 +674,8 @@ class Agent {
             if (existingVariable && existingVariable.results.length > 0) {
                 continue;
             }
-
             // Perform the selected tool action (Go to Definition or Find References)
             const results = await this._runTool(fileUri, lineNumber, offset, subProblem);
-
             if (results.length === 0) {
                 continue;
             }
@@ -843,7 +839,6 @@ class Agent {
             if (this._fileExtensionsToExclude.some(ext => fileUri.includes(ext)) || this._primaryFolder !== includedFolder) {
                 continue;
             }
-
             // Open document to retrieve code content and statements
             const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(fileUri));
             let { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, lineNumber);
@@ -1422,15 +1417,7 @@ class Agent {
                     - If the question involves UI rendering, refine it to focus on where JSX is generated.
                     - If the question involves an algorithm, refine it to focus on key computation steps.
 
-                    4. Identify valuable variables for further investigation.
-                    - You are given a list of variables_wait_for_exploring.
-                    - For each item in variables_wait_for_exploring contains a code_line and an array of unexplored variables. 
-                    - Assess what variables are worth exploring next based on the refined question. Select the most relevant variables to explore further based on the question.
-                    - If a line has more than one valuable variables, add multiple entries for that line.
-                    - Do not include any other variables not from the variables array, even they are in the code_line.
-                    - Only output if it is valuable for further exploration. 
-
-                    5. Validate that the refined question encourages meaningful code exploration.
+                    4. Validate that the refined question encourages meaningful code exploration.
                     - The question should not stop at a high level (e.g., "Where is this function used?") but instead guide AI to find concrete evidence (e.g., "What function ultimately calls this and what does it return?").
                     - The refined question should focus on actionable steps to answer the user's intent.
 
@@ -1481,38 +1468,6 @@ class Agent {
 
                     Important:
                     - Do not modify the values of "file_uri", "code_line", "line_number", "full_statement", or "variables" for each exploration result in the input.
-                `;
-                break;
-            case 6:
-                taskInstructions = taskInstructions = `
-                Task 6: Filter, consolidate, and refine findings based on the exploration results.
-
-                Input:
-                - A collection of findings where each finding contains:
-                    - snippetKey: Array of reference keys
-                    - statement: The finding statement
-                    - outOfDate: Boolean flag for relevance
-                    - codeSnippet: Array of corresponding code lines with their keys
-                - The refined question to be answered
-                
-                Instructions:
-                
-                1. Filter Findings:
-                - Review all input findings.
-                - Mark any finding as outOfDate: true if it is irrelevant to the refined question, redundant, or does not contribute meaningful insight.
-                - Retain all findings in the output, even those marked as outOfDate.
-                
-                2. Consolidate Findings:
-                - Combine findings that describe similar or related concepts only if they follow the same structure.
-                - Consolidate findings by combining their snippet keys and creating a concise statement adhering to the original structure.
-                - Do not introduce new grammatical patterns or combine findings with differing structures.
-                - Example:
-                    - Input:
-                    - 'sm' sets width to 24px.
-                    - 'md' sets width to 48px.
-                    - 'lg' sets width to 72px.
-                    - Consolidated Output:
-                    - 'sm', 'md', 'lg' set width to 24, 48, 72px.
                 `;
                 break;
             case 7:
