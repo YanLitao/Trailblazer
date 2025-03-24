@@ -958,12 +958,14 @@ function renderGraph(data, startWalkthrough = "") {
     document.getElementById("prev-step").addEventListener("click", function () {
         if (currentStepIndex <= 0) return; // No previous step
         currentStepIndex--; // Move back one step
+        updateClickLog("rePlay");
         stepThroughNodes(currentNodes, currentStepIndex);
     });
 
     document.getElementById("next-step").addEventListener("click", function () {
         if (currentStepIndex < 0) return; // No previous step
         currentStepIndex++; // Move back one step
+        updateClickLog("rePlay");
         stepThroughNodes(currentNodes, currentStepIndex);
     });
 
@@ -987,6 +989,7 @@ function renderGraph(data, startWalkthrough = "") {
     });
 
     function postReplayMessage(node) {
+        updateClickLog("jumpToCode");
         vscode.postMessage({
             command: "replaySnippet",
             fileUri: node.fileUri,

@@ -606,7 +606,7 @@ class Agent {
         task1Output = JSON.parse(response);
         this._refined_question = task1Output.refined_question;
 
-        this._sidebarViewProvider.updateSearchingContent("I refined your question to: '" + task1Output.refined_question +"'");
+        this._sidebarViewProvider.updateSearchingContent("I refined your question to: '" + task1Output.refined_question + "'");
 
         console.log("Task 1 output: ", task1Output);
         /* if (totalVariables <= this._numberOfVariablesThreshold) {
@@ -644,7 +644,7 @@ class Agent {
                 } else {
                     subProblem.code_context.line_number = accurateLineNumber;
                     lineNumber = accurateLineNumber;
-                }  
+                }
             }
             // Find the variable's offset in the document
             const offsetResult = searchVariableOffset(document, variableName, lineNumber);
