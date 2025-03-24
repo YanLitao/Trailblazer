@@ -606,7 +606,7 @@ class Agent {
         task1Output = JSON.parse(response);
         this._refined_question = task1Output.refined_question;
 
-        this._sidebarViewProvider.updateSearchingContent("Refined your question into: " + task1Output.refined_question);
+        this._sidebarViewProvider.updateSearchingContent("I refined your question to: '" + task1Output.refined_question +"'");
 
         console.log("Task 1 output: ", task1Output);
         /* if (totalVariables <= this._numberOfVariablesThreshold) {
@@ -618,7 +618,7 @@ class Agent {
     }
 
     async runTask2(subProblems: any[]) {
-        this._sidebarViewProvider.updateSearchingContent(`Exploring ${subProblems.length} sub-problems...`);
+        this._sidebarViewProvider.updateSearchingContent(`Looking for answers to ${subProblems.length} sub-questions...`);
 
         const task2Results: any[] = []; // Stores final results to display in the sidebar
         const newExploredLines: Array<{ file_uri: string, line_number: number, code_line: string, full_statement: string, variables: Set<string> }> = [];
@@ -644,7 +644,7 @@ class Agent {
                 } else {
                     subProblem.code_context.line_number = accurateLineNumber;
                     lineNumber = accurateLineNumber;
-                }
+                }  
             }
             // Find the variable's offset in the document
             const offsetResult = searchVariableOffset(document, variableName, lineNumber);
@@ -1064,7 +1064,7 @@ class Agent {
         }
         const { newVariables, variableCount, nextExploreVariables } = await this.filterInput(exploredCodeLines);
         console.warn("Running Task 3, processing ", variableCount, " new code lines.");
-        this._sidebarViewProvider.updateSearchingContent(`Deciding next exploration variables from ${variableCount} new code lines...`);
+        this._sidebarViewProvider.updateSearchingContent(`Picking variables to explore from ${variableCount} relevant lines of code...`);
 
         // If there are no new code lines to explore, directly run Task 4
         if (variableCount === 0) {
@@ -1178,7 +1178,7 @@ class Agent {
         );
 
         console.warn("Running task 5, processing ", filteredResults.length, " results.");
-        this._sidebarViewProvider.updateSearchingContent(`Evaluating the importance of ${filteredResults.length} results gained in this exploration...`);
+        this._sidebarViewProvider.updateSearchingContent(`Reviewing ${filteredResults.length} discovered snippets...`);
 
         const batchSize = 10;
         const batches = [];
@@ -1366,7 +1366,7 @@ class Agent {
 
     async runTask7() {
         console.warn("Running Task 7.");
-        this._sidebarViewProvider.updateSearchingContent(`Deciding whether the exploration is sufficient based on ${this._importantCodeSnippets.length} code snippets...`);
+        this._sidebarViewProvider.updateSearchingContent(`Reviewing ${this._importantCodeSnippets.length} snippets for an answer...`);
         const inputJson = {
             task: 7,
             user_question: this._question,
@@ -1389,7 +1389,7 @@ class Agent {
             }
         }
         this._final_decision_sufficient = task7Output.final_decision_sufficient;
-        this._sidebarViewProvider.updateSearchingContent(`I decided my exploration was ${this._final_decision_sufficient ? "sufficient" : "insufficient"}.`);
+        this._sidebarViewProvider.updateSearchingContent(`I decided my exploration so far has been ${this._final_decision_sufficient ? "sufficient" : "insufficient"}.`);
         console.log("Task 7 output: ", task7Output);
         const answerHtml = this.processFinalAnswer(task7Output);
         this._sidebarViewProvider.showAnswer(answerHtml);
@@ -1401,123 +1401,98 @@ class Agent {
         switch (taskNumber) {
             case 1:
                 taskInstructions = `
-                    Task 1: Refine the user's question to enhance clarity, specificity, and effectiveness in guiding code exploration.
+                    Task 1: Refine the user's question.
+                    The user has asked a potentially broad question.
+                    You need to refine it into one that can guide the next step in searching the code.
+                    Here is some guidance:
 
-                    1. Ensure the refined question is precise and actionable.
-                    - Remove ambiguity by specifying the goal of the exploration (e.g., finding where a variable is assigned, tracing function execution, understanding a data structure).
-                    - Ensure that the refined question is answerable using code analysis tools like "Go to Definition" or "Find References."
-
-                    2. Include only the necessary surrounding code.
-                    - Extract only the most relevant code snippets that directly contribute to answering the question.
-                    - Avoid excessive code that does not provide insight into the question.
-
-                    3. Guide deeper exploration when required.
-                    - If answering the question requires tracing execution flow, ensure the refined question explicitly asks for function calls, dependencies, or data transformations.
-                    - Example: If the question involves how data is processed, refine it to track how the variable is initialized, modified, and used.
-                    - If the question involves UI rendering, refine it to focus on where JSX is generated.
-                    - If the question involves an algorithm, refine it to focus on key computation steps.
-
-                    4. Validate that the refined question encourages meaningful code exploration.
-                    - The question should not stop at a high level (e.g., "Where is this function used?") but instead guide AI to find concrete evidence (e.g., "What function ultimately calls this and what does it return?").
-                    - The refined question should focus on actionable steps to answer the user's intent.
-
-                    Output Format:
-                    The output must strictly follow the JSON schema, ensuring that:
-                    - The refined question is clear, specific, and actionable.
-                    - Collect the valuable variables for further exploration in sub_problems.
+                    1. Make the question precise.
+                    Restate the goal of the question by removing as much ambiguity as possible.
+                    
+                    2. State the question in terms of code search actions.
+                    You will use the refined question to search the code with VSCode tooling.
+                    So the question should be answerable using VSCode tooling.
+                    For instance, the refined question may ask to find where a variable is assigned, trace function execution, or understand a data structure.
                 `;
                 break;
             case 3:
                 taskInstructions = `
-                    Task 3: Evaluate the variables_wait_for_exploring based on the refined question and determine the next steps for further exploration.
+                    Task 3: Decide what code actions to take next.
+                    You have been given:
+                    * a question to ask in the code base
+                    * a list of sites where you could take an exploration action to answer the question (in "variables_wait_for_exploring"). Each item in this list includes a code line and list of variables that you previously decided might be useful to explore from that line.
 
-                    Instructions:
+                    Select which variables to explore.
+                    These variables should be variables that you think, when explored, might be able to help you answer the question.
+                    Indirectness if okay---you can explore a variable thinking it might eventually lead to something useful, even if you don't know for sure.
+                    (Variables must come from the input list).
+                    For each variable, select which tool from VSCode to use to explore it.
+                    Two tools are available:
+                    - 0: Go to Definition
+                    - 1: Find References
+                    Write out a reason for why you chose each variable and tool.
 
-                    1. Input Evaluation:
-                    - You are given a refined question and a list of variables_wait_for_exploring.
-                    - For each item in variables_wait_for_exploring contains a code_line and an array of unexplored variables. 
-                    - Assess what variables are worth exploring next based on the refined question. Select the most relevant variables to explore further based on the question.
-
-                    2. Output Requirements:
-                    - Some code_lines may not be valuable for further exploration immediately. But as an intermeditate node, it could help us to reach to other relevant code. 
-                    - If valuable, identify the valuable variable to explore next from variables array.
-                        - Select the appropriate tool:
-                            - 0: Go to Definition
-                            - 1: Find References
-                        - Provide a reason for choosing the variable and tool.
-                    - If a line has more than one valuable variables, add multiple entries for that line.
-                    - Do not include any other variables not from the variables array, even they are in the code_line.
-                    - Only output if it is valuable for further exploration. 
+                    You can choose more than one variable per line.
+                    Each variable needs its own entry in the output.
                 `;
                 break;
             case 5:
                 taskInstructions = `
-                    task 5: Rank the exploration results based on relevance to the refined question and summarize findings.
+                    Task 5: Steer upcoming search based on current findings.
 
-                    Assign a "relevance_score" of 0 or 1 to each result, where:
-                    - 0: Not relevant - The result is not useful or does not contribute to the understanding of the refined question. Exclude this result.
-                    - 1: Relevant - The result's code can directly answer the question.
+                    You have been provided a set of findings ("results"), indicating what was found when VSCode was used to explore a variable you asked to explore.
+                    Each of these findings may or may not work towards answering the input question.
 
-                    For each result in the "results" array:
-                    - Provide an "explanation" of why it is helpful or how it contributes to understanding the question.
-                    - Summarize the finding in one sentence under the "finding" field. Use the structure: 
-                        "Function/Field/Variable ... + Verb + Function/Field/Variable ...", e.g., ".innerHTML sets the content of HTML as 'ABC'".
-                        Ensure the sentence is concise, informative, and clear. Do not include a clause.
-                    - Add the specific variable being tracked for this result under the "variable" field. Only select one variable. 
-                        Important: The variable must be selected only from the "variables" array provided in the result. Do not use or infer any other variables.
+                    For each finding, assign "relevance_score". It must be one of:
+                    - 0: Irrelevant - The finding does not answer the question.
+                    - 1: Relevant - The finding answers the question. (This can include useful steps towards the answer.)
 
-                    Important:
-                    - Do not modify the values of "file_uri", "code_line", "line_number", "full_statement", or "variables" for each exploration result in the input.
+                    For each finding, output the answer to the question ("explanation").
+                    If there isn't a clear answer, provide a partial answer based on what was found.
+                    (If the finding is irrelevant, no explanation is needed.)
+
+                    Then summarize the finding in one sentence ("finding").
+                    Use the structure: "Function/Field/Variable ... + Verb + Function/Field/Variable ...", e.g., ".innerHTML sets the content of HTML as 'ABC'".
+                    The summary must be concise.
+                    It must be a single clause.
+                    It must be clear and crisp---it will be shown to the programmer.
+                    Relay which variable was most used to answer the question in the "variable" field.
+                    Only include one variable.
+                    It must have come from the "variables" input.
+
+                    In your ouptut, values of "file_uri", "code_line", "line_number", "full_statement", or "variables" must be copied verbatim from input.
                 `;
                 break;
             case 7:
                 taskInstructions = `
-                    Task 7: Assess sufficiency and generate an answer.
+                    Task 7: Convey progress.
+                    I have given you findings from your search for your search question.
+                    Decide if you have enough evidence that you can answer the question.
+                    If you do, write the answer.
+                    If you don't, adjust your search.
 
-                    Goals:
-                    1. Determine if the current findings sufficiently answer the refined question.
-                    2. Provide a structured, evidence-based answer with relevant code insights.
-                    3. If the answer is insufficient, suggest follow-up questions.
+                    First, decide if the findings are sufficient to answer the question.
+                    They are sufficient only if they:
+                    1. Answer the question.
+                    2. Trace the relevant execution fully (with no gaps in data or control flow).
 
-                    1. Generate Answer  
-                    If the findings are sufficient, return:
-                    - Overview: A concise summary explaining how the identified code answers the question.
-                    - code_insight: Most relevant code snippets to answer the question, each with:
-                        - insightName: A short label describing the insight (e.g., "Execution Flow," "Final Output").
-                        - details: A clear explanation of what the code does.
-                        - reference: The snippetKey of the supporting code.
+                    If the findings are sufficient, generate an answer.
+                    The answer contains:
+                    1. Overview: A concise, basic answer to the question. Keep it extremely concise.
+                    2. Context (code_insight): A small but comprehensive set of citations to code snippets. Together, they answer the question. Each citation includes:
+                    - reference: the snippetKey of the relevant code snippet, verbatim.
+                    - details: a concise description of what can be found at the code snippet. Don't be redundant with the overview answer. Omit snippet keys. Keep it extremely concise.
+                    - insightName: a 2-3 word descriptive title that appearns next to the snippet.
+                    "-1" is not valid a valid snippetKey to cite.
+                    A snippet key cannot be used in more than one citation.
 
-                    Formatting Rules:
-                    - Use bold formatting (inside of two asterisk signs) for function names and key variables.
-                    - Use inline code formatting (\`backtick\`) for small code snippets.
+                    In the text you generate, use a bit of formatting.
+                    Bold (with two asterisk signs) function names and answer and important variable names.
+                    For short inline code snippets, use inline code formatting with backticks (\`...\`).
 
-                    2. Guidelines for "code_insight"  
-                    Each insight must provide concrete, verifiable evidence to answer the question, covering:
-                    - Functions: What they do, how they transform data, and what they return.
-                    - Variables: How they are initialized, modified, and used.
-                    - Objects and Classes: Key properties, methods, and interactions.
-                    - UI Components: Data binding, event handling, and rendering logic.
-
-                    Reference Guidelines:
-                    - Each code_insight must include a snippetKey in the reference field, linking to the relevant code. Do not include snippetKey in the details.
-                    - Each snippetKey should only be used once per insight.
-                    - Do not reference snippetKey: -1 (it represents the root node).
-
-                    3. Decide Sufficiency  
-                    Findings are sufficient only if they:
-                    1. Include direct code evidence (function calls, assignments, return values, or rendering logic).
-                    2. Trace execution fully, following function calls and dependencies step by step.
-                    3. Identify the final impact, such as where data is transformed, UI is updated, or output is generated.
-                    4. Provide a clear, logical explanation, showing how the code leads to the final behavior.
-
-                    Stopping at an intermediate function or a partial transformation is not sufficient unless it directly produces the final result.
-
-                    4. Suggest New Questions  
-                    If findings are insufficient, generate follow-up questions to explore missing parts:
-                    - What function or process applies the final transformation?
-                    - Where is this value modified before being used?
-                    - What is the last step in execution affecting the result?
-                    - How does this function contribute to the final behavior?
+                    If the findings are insufficient, help steer the next step of the search.
+                    Generate a refined question (as before, it should be precise and actionable with VSCode tools).
+                    You will use this question to continue search.
                     `;
                 break;
             default:
@@ -1525,22 +1500,20 @@ class Agent {
         }
 
         const systemMessage = `
-            You are an assistant designed to help users explore and understand codebases by performing tasks using VSCode tools. 
-            Your role depends on the task in the input, and you must carefully follow task-specific instructions and formats.
+            You are a programming assistant that helps users understand code bases.
+            You do this by drawing on context you know about code, and applying VSCode tools iteratively to look up information. 
+            You follow task-specific instructions carefully.
             
-            General Instructions:
-            - Understand the Input: Read the input carefully.
-            - Ensure Thorough Exploration: Explore the codebase deeply enough to fully answer the refined question. Consider related functions, classes, or files that may be necessary to examine. 
-            - Avoid Redundancy: Always consider the explored refined questions to prevent redundant efforts.
-            - Professionalism: Use clear, concise, and professional language in your responses.
-    
-            ${taskInstructions}
-            
-            Ensure that your output matches the provided schema.
-        `;
+            In addition, you are:
+            - Thorough: You give the programmer thorough and well-researched answers. You explore parts of the code that might give additional useful context, even when you think you have found an answer. 
+            - Efficient: You don't repeat your work. If you searched part of the code before, don't do it again.
+            - Clear: You convey findings with simple language and short sentences.
+            - Concise: You keep your responses to 1 sentence, 2 sentence max.
+            `;
 
-
-        const prompt = JSON.stringify(inputJson);
+        const prompt = (taskInstructions + "\n\n" +
+            "Your output must match the provided schema." +
+            JSON.stringify(inputJson));
 
         let result: any;
         let valid = false;
