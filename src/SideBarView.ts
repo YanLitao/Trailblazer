@@ -281,7 +281,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
                     </div>
                     <div id="searching-content" class="header-divs"></div>
                     <div id="new-info" class="header-divs">
-                        I found new information. <button id="new-info-btn" title="Click to see new information">Update display below?</button>
+                        I found new information. <span id="new-info-btn" title="Click to see new information">Update display below?</span>
                     </div>
                     <div id="answer-div"></div>
                 </div>
@@ -313,11 +313,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
     }
 
     public async showAnswer(answerText: string) {
-        const isFinalAnswer = answerText.includes('<h1 id="final-answer-header">Answer</h1>');
-        if (isFinalAnswer) {
-            // Show the answer immediately if it's the final answer or if there's no preliminary answer yet
-            this.addAnswer(answerText);
-        } else if (this._prelimaryAnswer === '') {
+        if (this._prelimaryAnswer === '') {
             this._prelimaryAnswer = answerText;
             this.addAnswer(answerText);
         } else {

@@ -1,4 +1,13 @@
 const vscode = acquireVsCodeApi(); // This gives us access to the VSCode API
+const clickLog = {
+    "jumpToCode": 0,
+    "rePlay": 0,
+    "followUp": 0
+};
+function updateClickLog(clickType) {
+    clickLog[clickType] += 1;
+    console.log(clickLog);
+};
 let messageQueue = [];
 let graphData;
 // Persistent storage for insights
@@ -111,6 +120,7 @@ document.querySelectorAll(".jump-btn").forEach((element) => {
             fileUri: fileUri,
             lineNumber: parseInt(lineNumber, 10)
         });
+        updateClickLog("jumpToCode");
     });
 });
 
@@ -146,11 +156,6 @@ function updateSearchingContent(content) {
         setTimeout(() => oldMessage.remove(), 1000);
     }
 }
-
-document.getElementById('save-pdf').addEventListener('click', function () {
-    var element = document.body;
-    html2pdf().from(element).save('search-copilot.pdf');
-});
 
 document.getElementById('pause-agent').addEventListener('click', function () {
     const pauseButton = this; // Get the button element
@@ -262,6 +267,8 @@ document.addEventListener("click", function (event) {
                 lineNumber: parseInt(lineNumber, 10)
             });
         }
+
+        updateClickLog("jumpToCode");
     }
 
     // If the clicked element is a `.citation-ref`, trigger the graph update AND file open event
@@ -292,19 +299,8 @@ document.addEventListener("click", function (event) {
                 lineNumber: parseInt(lineNumber, 10)
             });
         }
-        /* let closestInsight = citationRefElement.closest(".insight");
-        if (closestInsight) {
-            const fileUri = closestInsight.getAttribute("data-file-uri");
-            const lineNumber = closestInsight.getAttribute("data-line-number");
 
-            if (fileUri && lineNumber) {
-                vscode.postMessage({
-                    command: 'openFileAtLine',
-                    fileUri: fileUri,
-                    lineNumber: parseInt(lineNumber, 10)
-                });
-            }
-        } */
+        updateClickLog("rePlay");
     }
 });
 
@@ -603,30 +599,30 @@ function renderGraph(data, startWalkthrough = "") {
                     descriptionText = `This led me to this reference of <span class="inline-code">${d.data.variable}</span>.`;
                 } else if (d.data.tool === "assignment") {
                     const parentInfo = d.parent.data.variable;
-                    descriptionText = `I found <span class="inline-code">${d.data.variable}</span>, which looked important and is based on ${parentInfo}.`;
+                    descriptionText = `I found <span class="inline-code">${d.data.variable}</span>, which looked important and is related to <span class="inline-code">${parentInfo}</span>.`;
                 } else if (d.data.tool === "definition") {
                     descriptionText = `This led me to this definition of <span class="inline-code">${d.data.variable}</span>.`;
                 } else if (d.data.tool === "if") {
                     const parentInfo = d.parent.data.variable;
-                    descriptionText = `I found this line, that looks relevent. It depends on ${parentInfo} to execute.`;
+                    descriptionText = `I found this line, which looks relevant. It depends on <span class="inline-code">${parentInfo}</span> to execute.`;
                 } else if (d.data.tool === "function") {
                     const parentInfo = d.parent.data.variable;
-                    descriptionText = `I found this line, that looks relevent. It is a statement in ${parentInfo}.`;
+                    descriptionText = `I found this line, which looks relevent. It is a statement in <span class="inline-code">${parentInfo}</span>.`;
                 } else if (d.data.tool === "parameter") {
                     const parentInfo = d.parent.data.variable;
-                    descriptionText = `I found span class="inline-code">${d.data.variable}</span>, which is a parameter in ${parentInfo}.`;
+                    descriptionText = `I found <span class="inline-code">${d.data.variable}</span>, which is a parameter in <span class="inline-code">${parentInfo}</span>.`;
                 } else if (d.data.tool === "property") {
                     const parentInfo = d.parent.data.variable;
-                    descriptionText = `I found a property <span class="inline-code">${d.data.variable}</span> in ${parentInfo} class.`;
+                    descriptionText = `I found a property <span class="inline-code">${d.data.variable}</span> in <span class="inline-code">${parentInfo}</span> class.`;
                 } else if (d.data.tool === "method") {
                     const parentInfo = d.parent.data.variable;
-                    descriptionText = `I found a method in ${parentInfo} class.`;
+                    descriptionText = `I found a method in <span class="inline-code">${parentInfo}</span> class.`;
                 } else if (d.data.tool === "call") {
                     const parentInfo = d.parent.data.variable;
-                    descriptionText = `I found <span class="inline-code">${d.data.variable}</span>, which was used to compute ${parentInfo}.`;
+                    descriptionText = `I found <span class="inline-code">${d.data.variable}</span>, which was used to compute <span class="inline-code">${parentInfo}</span>.`;
                 } else if (d.data.tool === "variable") {
                     const parentInfo = d.parent.data.variable;
-                    descriptionText = `I found <span class="inline-code">${d.data.variable}</span>, which was computed using ${parentInfo}.`;
+                    descriptionText = `I found <span class="inline-code">${d.data.variable}</span>, which was computed using <span class="inline-code">${parentInfo}</span>.`;
                 }
 
                 let descriptionHTML = `
@@ -667,6 +663,7 @@ function renderGraph(data, startWalkthrough = "") {
 
                     // Highlight the variable and the code line
                     snippetLines = snippetLines.map((line, index) => {
+                        line = escapeHTML(line);
                         if (line.trim() === d.data.codeLine.trim()) {
                             // Highlight the variable within the line
                             const highlightedVariable = `<span class="inline-code">${d.data.variable}</span>`;
@@ -687,7 +684,7 @@ function renderGraph(data, startWalkthrough = "") {
                     <div class="node-container-box" id="container-${generateNodeId(d.data)}" data-snippet-key="${d.data.snippetKey}" style="border: ${borderStyle}; ${displayment};">
                         <div id="code-box-${generateNodeId(d.data)}" class="tree-node code-box" data-ref="${d.data.snippetKey}">
                             <div class="code-container">
-                                <code style="white-space: pre;" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">${escapeHTML(snippetLines)}</code>
+                                <code style="white-space: pre;" data-file-uri="${d.data.fileUri}" data-line-number="${d.data.lineNumber}">${snippetLines}</code>
                             </div>
                             <div class="tree-node-button-container">
                                 <div class="code-info">
@@ -717,7 +714,7 @@ function renderGraph(data, startWalkthrough = "") {
             }
             const nodeId = target.getAttribute("data-node-id");
             replayFromANode(nodeId);
-
+            updateClickLog("rePlay");
         });
 
         nodeGroup.selectAll(".jump-btn").on("click", function (event) {
@@ -728,6 +725,7 @@ function renderGraph(data, startWalkthrough = "") {
                 fileUri: fileUri,
                 lineNumber: parseInt(lineNumber, 10)
             });
+            updateClickLog("jumpToCode");
         });
 
         nodeGroup.selectAll(".search-btn").on("click", function (event) {
@@ -749,6 +747,7 @@ function renderGraph(data, startWalkthrough = "") {
                 lineNumber: parseInt(lineNumber, 10),
                 variable: variable
             });
+            updateClickLog("followUp");
         });
 
         reAppendInsights();

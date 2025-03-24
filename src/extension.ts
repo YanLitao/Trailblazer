@@ -76,7 +76,7 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    console.log('Search Copilot extension is now active, waiting for user input.');
+    //console.log('Search Copilot extension is now active, waiting for user input.');
 }
 
 // Dispose only the agent, keeping the sidebarViewProvider intact
@@ -597,9 +597,7 @@ class Agent {
         const inputJson = {
             task: 1,
             question: this._question,
-            surrounding_code: surroundingCode,
-            allowed_tools: allowedTools,
-            variables_wait_for_exploring: newVariables,
+            surrounding_code: surroundingCode
         };
 
         console.log("Task 1 input: ", inputJson);
@@ -676,10 +674,8 @@ class Agent {
             if (existingVariable && existingVariable.results.length > 0) {
                 continue;
             }
-
             // Perform the selected tool action (Go to Definition or Find References)
             const results = await this._runTool(fileUri, lineNumber, offset, subProblem);
-
             if (results.length === 0) {
                 continue;
             }
@@ -843,7 +839,6 @@ class Agent {
             if (this._fileExtensionsToExclude.some(ext => fileUri.includes(ext)) || this._primaryFolder !== includedFolder) {
                 continue;
             }
-
             // Open document to retrieve code content and statements
             const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(fileUri));
             let { statementText, startLineNum, endLineNum } = await findCompleteStatementText(uri, lineNumber);
@@ -1466,27 +1461,6 @@ class Agent {
                     It must have come from the "variables" input.
 
                     In your ouptut, values of "file_uri", "code_line", "line_number", "full_statement", or "variables" must be copied verbatim from input.
-                `;
-                break;
-            case 6:
-                taskInstructions = taskInstructions = `
-                Task 6: Consolidate findings from all past search activity.
-                You have been given a collection of your past findings.
-                Each finding contains:
-                - the question that is meant to be answered by search
-                - snippetKey: an array of keys that refer to distinct code snippets
-                - codeSnippet: an array of lines of code with their snippet keys
-                - statement: a statement of what has been "found"
-                - outOfDate: a Boolean flag indicating if the finding is still relevant (false) or not (true)
-
-                For each finding, update the "outOfDate" flag to "true" if the finding is now irrelevant or redundant.
-                (Do not remove any out-of-date findings).
-
-                Then, consolidate the findings.
-                Whenever findings together describe one concept, combine them together.
-                Do this by creating a new finding statement (clear, crisp, a single clause, easily-readable).
-                It should adhere to the grammar of the original findings when possible.
-                For example, findings "'fast' runs the fast algorithm." and "'slow' runs the slow algorithm." are combined into "'fast' and 'slow' run the fast and slow algorithms.".
                 `;
                 break;
             case 7:
