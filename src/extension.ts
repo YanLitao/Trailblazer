@@ -1401,7 +1401,7 @@ class Agent {
         switch (taskNumber) {
             case 1:
                 taskInstructions = `
-                    Task 1: Refine the user's question.
+                    Task A: Refine the user's question.
                     The user has asked a potentially broad question.
                     You need to refine it into one that can guide the next step in searching the code.
                     Here is some guidance:
@@ -1417,7 +1417,7 @@ class Agent {
                 break;
             case 3:
                 taskInstructions = `
-                    Task 3: Decide what code actions to take next.
+                    Task B: Decide what code actions to take next.
                     You have been given:
                     * a question to ask in the code base
                     * a list of sites where you could take an exploration action to answer the question (in "variables_wait_for_exploring"). Each item in this list includes a code line and list of variables that you previously decided might be useful to explore from that line.
@@ -1438,8 +1438,7 @@ class Agent {
                 break;
             case 5:
                 taskInstructions = `
-                    Task 5: Steer upcoming search based on current findings.
-
+                    Task C: Steer upcoming search based on current findings.
                     You have been provided a set of findings ("results"), indicating what was found when VSCode was used to explore a variable you asked to explore.
                     Each of these findings may or may not work towards answering the input question.
 
@@ -1460,12 +1459,12 @@ class Agent {
                     Only include one variable.
                     It must have come from the "variables" input.
 
-                    In your ouptut, values of "file_uri", "code_line", "line_number", "full_statement", or "variables" must be copied verbatim from input.
+                    In your output, values of "file_uri", "code_line", "line_number", "full_statement", or "variables" must be copied verbatim from input.
                 `;
                 break;
             case 7:
                 taskInstructions = `
-                    Task 7: Convey progress.
+                    Task D: Convey progress.
                     I have given you findings from your search for your search question.
                     Decide if you have enough evidence that you can answer the question.
                     If you do, write the answer.
@@ -1482,8 +1481,9 @@ class Agent {
                     2. Context (code_insight): A small but comprehensive set of citations to code snippets. Together, they answer the question. Each citation includes:
                     - reference: the snippetKey of the relevant code snippet, verbatim.
                     - details: a concise description of what can be found at the code snippet. Don't be redundant with the overview answer. Omit snippet keys. Keep it extremely concise.
-                    - insightName: a 2-3 word descriptive title that appearns next to the snippet.
-                    "-1" is not valid a valid snippetKey to cite.
+                    - insightName: a 2-3 word descriptive title that appears next to the snippet.
+                    "-1" is not a valid snippetKey to cite.
+
                     A snippet key cannot be used in more than one citation.
 
                     In the text you generate, use a bit of formatting.
@@ -1492,7 +1492,7 @@ class Agent {
 
                     If the findings are insufficient, help steer the next step of the search.
                     Generate a refined question (as before, it should be precise and actionable with VSCode tools).
-                    You will use this question to continue search.
+                    You will use this question to continue searching.
                     `;
                 break;
             default:

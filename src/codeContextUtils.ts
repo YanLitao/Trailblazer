@@ -946,9 +946,11 @@ function extractClass(node: ts.Node, inputVariable: string, fileUri: string): Re
     visit(node, currentLayer);
 
     if (className) {
+        const startPosition = node.getStart();
+        const { line } = ts.getLineAndCharacterOfPosition(node.getSourceFile(), startPosition);
         const classResult: Result = {
             fileUri: fileUri,
-            lineNumber: node.getStart(),
+            lineNumber: line,
             variable: className,
             tool: "class",
             children: [...properties, ...methods],
