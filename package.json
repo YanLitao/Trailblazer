@@ -1,6 +1,6 @@
 {
-  "name": "search-copilot",
-  "displayName": "search-copilot",
+  "name": "trailblazer",
+  "displayName": "Trailblazer",
   "description": "",
   "version": "0.0.1",
   "engines": {
@@ -14,24 +14,24 @@
   "contributes": {
     "commands": [
       {
-        "command": "search-copilot.askQuestion",
-        "title": "Ask search copilot a question"
+        "command": "trailblazer.askQuestion",
+        "title": "Ask Trailblazer a question"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "search-copilot-sidebar",
-          "title": "Search Copilot",
+          "id": "trailblazer-sidebar",
+          "title": "Trailblazer",
           "icon": "resources/icon.svg"
         }
       ]
     },
     "views": {
-      "search-copilot-sidebar": [
+      "trailblazer-sidebar": [
         {
           "type": "webview",
-          "id": "search-copilot.sidebarView",
+          "id": "trailblazer.sidebarView",
           "name": "Exploration",
           "icon": "resources/icon.svg"
         }

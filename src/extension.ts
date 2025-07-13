@@ -36,7 +36,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Register the command to ask a question about code
     context.subscriptions.push(
-        vscode.commands.registerCommand('search-copilot.askQuestion', async () => {
+        vscode.commands.registerCommand('trailblazer.askQuestion', async () => {
             // Dispose the agent, but keep the sidebar view
             disposeAgentOnly();
 
@@ -76,7 +76,7 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    //console.log('Search Copilot extension is now active, waiting for user input.');
+    //console.log('Trailblazer extension is now active, waiting for user input.');
 }
 
 // Dispose only the agent, keeping the sidebarViewProvider intact
@@ -124,7 +124,7 @@ async function askQuestionAboutCode(context: vscode.ExtensionContext, sidebarVie
     sidebarViewProvider.updateWebviewContent(query, selectedText, editor.document.uri.toString(), startLine);
 
     // Show the sidebar automatically once the question is received
-    vscode.commands.executeCommand('workbench.view.extension.search-copilot-sidebar').then(() => {
+    vscode.commands.executeCommand('workbench.view.extension.trailblazer-sidebar').then(() => {
         // Run the workflow using the persistent Agent instance
         agent.runWorkflow(query, editor.document.uri, startLine, endLine);
     });
@@ -210,7 +210,7 @@ class Agent {
     private _question: string = "";
     private _refined_question: string | null = null;
     private _numberOfVariablesThreshold: number = 25; // If the collection of variables is less than this threshold, explore them directly without using LLMs to choose the next steps
-    private _batchSize: number = 10; // Number of variables to process in a single batch
+    private _batchSize: number = 100; // Number of variables to process in a single batch
     private _sidebarViewProvider: SidebarView;
     private _exploredVariables: any[] = [];
     private _exploredFiles: { file_uri: string, file_content: string }[] = []; // Simplified _exploredFiles
@@ -1180,7 +1180,7 @@ class Agent {
         console.warn("Running task 5, processing ", filteredResults.length, " results.");
         this._sidebarViewProvider.updateSearchingContent(`Reviewing ${filteredResults.length} discovered snippets...`);
 
-        const batchSize = 10;
+        const batchSize = this._batchSize;
         const batches = [];
 
         // Split filteredResults into chunks of batchSize

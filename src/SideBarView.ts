@@ -3,7 +3,7 @@ import { stripLineIndentation } from './codeContextUtils';
 import { TreeNode } from './explorationGraph';
 
 export class SidebarView implements vscode.WebviewViewProvider {
-    public static readonly viewType = 'search-copilot.sidebarView';
+    public static readonly viewType = 'trailblazer.sidebarView';
     private _view?: vscode.WebviewView;
     private _question: string = '';
     private _selectedCode: string = '';
@@ -253,7 +253,7 @@ export class SidebarView implements vscode.WebviewViewProvider {
             <head>
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Search Copilot</title>
+                <title>Trailblazer</title>
                 <link href="${styleUri}" rel="stylesheet">
                 <link rel="preconnect" href="https://fonts.googleapis.com">
                 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
